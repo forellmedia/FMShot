@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["forellmedia.ch"]
+license = "LicenseRef-Proprietary"
+publish = false
+repository = "https://github.com/forellmedia/FMShot"
+
+[workspace.dependencies]
+fmshot-core = { path = "crates/fmshot-core" }
+fmshot-render = { path = "crates/fmshot-render" }
+fmshot-capture = { path = "crates/fmshot-capture" }
+fmshot-stitch = { path = "crates/fmshot-stitch" }
+fmshot-ocr = { path = "crates/fmshot-ocr" }
+fmshot-library = { path = "crates/fmshot-library" }
+fmshot-hotkeys = { path = "crates/fmshot-hotkeys" }
+fmshot-overlay = { path = "crates/fmshot-overlay" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+# Grösse und Tempo des Release-Builds, siehe https://tauri.app/concept/size/
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,0 +1,55 @@
+# Entwicklung
+
+## Voraussetzungen
+- Rust (stable, über [rustup](https://rustup.rs)) – `rust-toolchain.toml` legt den Rest fest.
+- Node.js 22+ und npm.
+- macOS: Xcode Command Line Tools.
+- Linux: Pakete aus [`scripts/ci-linux-deps.sh`](../scripts/ci-linux-deps.sh).
+- Windows: Visual Studio Build Tools (C++), WebView2 (bei Windows 11 dabei).
+
+## Häufige Befehle
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check
+cd apps/desktop && npm install && npm run tauri dev
+```
+
+Release-Build lokal (macOS, mit eigenem Zertifikat):
+
+```bash
+cd apps/desktop
+APPLE_SIGNING_IDENTITY="FMShot Local Signing" npm run tauri build -- --bundles app
+```
+
+## Einmalige Einrichtung: Mac-Signatur
+
+Damit macOS die Freigabe „Bildschirmaufnahme“ über Updates hinweg behält, wird
+mit einem dauerhaften, selbst erstellten Zertifikat signiert (ADR 0008).
+
+1. `./scripts/make-signing-cert.sh` ausführen (fragt nach dem Mac-Passwort).
+2. Die zwei `gh secret set …`-Befehle ausführen, die das Skript am Ende ausgibt.
+3. `~/.fmshot-signing/` sicher aufbewahren (z. B. Passwort-Manager).
+
+Ohne Secrets signiert die CI ad-hoc – die App läuft, aber macOS fragt nach
+jedem Update neu nach der Bildschirmaufnahme-Freigabe.
+
+## Release erstellen
+
+1. Version in `Cargo.toml` (workspace), `apps/desktop/package.json` und
+   `apps/desktop/src-tauri/tauri.conf.json` erhöhen.
+2. `git tag v0.1.0 && git push origin v0.1.0`
+3. Die Release-Pipeline baut macOS (Universal), Windows (x64, ARM64) und Linux
+   (x86_64, aarch64) und legt einen **Release-Entwurf** an.
+4. Entwurf auf GitHub prüfen und veröffentlichen.
+
+## CI
+- **Prüfungen** (Linux): fmt, clippy, Lizenzen/Advisories (`cargo deny`),
+  WASM-Build des Renderers, Frontend-Typprüfung und -Build.
+- **Tests** auf macOS arm64, Windows x64/ARM64, Linux x86_64/aarch64.
+
+## Manuelle Tests
+- macOS nativ, Windows und Linux in den UTM-VMs (ARM64).
+- In VMs ohne echte Grafikkarte verhalten sich manche Aufnahme-Schnittstellen
+  anders (z. B. Desktop Duplication) – Stichproben auf echter Hardware.

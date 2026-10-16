@@ -1,0 +1,46 @@
+name: Fehler melden
+description: Etwas funktioniert nicht wie erwartet.
+labels: [fehler]
+body:
+  - type: textarea
+    id: was
+    attributes:
+      label: Was ist passiert?
+      description: Bitte keine Screenshots mit privaten Inhalten anhängen.
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was hättest du erwartet?
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Schritte zum Nachstellen
+      placeholder: "1. Ctrl+Shift+2 drücken\n2. …"
+  - type: input
+    id: version
+    attributes:
+      label: FMShot-Version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: Betriebssystem
+      options:
+        - macOS
+        - Windows
+        - Linux (GNOME, Wayland)
+        - Linux (KDE, Wayland)
+        - Linux (X11)
+        - Linux (andere)
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Wird von „Fehler melden“ in der App automatisch ausgefüllt.
+      render: text

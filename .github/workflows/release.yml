@@ -1,0 +1,79 @@
+name: Release
+
+# Ein Tag `v*` (z. B. v0.1.0) baut alle Plattformen und legt einen
+# Release-Entwurf an. Veröffentlicht wird von Hand auf GitHub.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Universal
+            os: macos-latest
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
+          - name: Windows x64
+            os: windows-latest
+            args: ""
+          - name: Windows ARM64
+            os: windows-11-arm
+            args: ""
+          # Ubuntu 22.04 als Basis, damit das AppImage auch auf älteren
+          # Distributionen läuft (glibc).
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            args: ""
+          - name: Linux aarch64
+            os: ubuntu-22.04-arm
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux-Abhängigkeiten für Tauri
+        if: runner.os == 'Linux'
+        run: ./scripts/ci-linux-deps.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Frontend-Abhängigkeiten
+        working-directory: apps/desktop
+        run: npm ci
+
+      # Selbst erstelltes Zertifikat „FMShot Local Signing“ (ADR 0008).
+      # Fehlen die Secrets, wird der Mac-Build ad-hoc signiert.
+      - name: Mac-Signatur vorbereiten
+        if: runner.os == 'macOS'
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: ./scripts/ci-import-mac-cert.sh
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: FMShot ${{ github.ref_name }}
+          releaseBody: Siehe CHANGELOG. Mac-Hinweis – beim ersten Start unter Systemeinstellungen → Datenschutz & Sicherheit auf „Dennoch öffnen“ klicken.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

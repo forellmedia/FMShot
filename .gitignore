@@ -1,0 +1,7 @@
+/target/
+.DS_Store
+node_modules/
+*.p12
+*.key
+.env
+/apps/desktop/src-tauri/gen/schemas/

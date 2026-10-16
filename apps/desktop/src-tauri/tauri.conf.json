@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FMShot",
+  "version": "0.1.0",
+  "identifier": "ch.forellmedia.fmshot",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FMShot",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 420
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "appimage",
+      "deb"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Schnelles Screenshot-Tool",
+    "copyright": "© forellmedia.ch",
+    "publisher": "forellmedia.ch",
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    },
+    "linux": {
+      "deb": {
+        "recommends": [
+          "tesseract-ocr",
+          "tesseract-ocr-deu"
+        ]
+      }
+    }
+  }
+}

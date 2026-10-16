@@ -1,0 +1,52 @@
+# Lizenz- und Sicherheitsprüfung der Abhängigkeiten (ADR 0008).
+# Copyleft-Lizenzen (GPL/AGPL/LGPL) sind bewusst NICHT erlaubt, damit FMShot
+# später proprietär verkauft werden kann.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # Nur „unmaintained“, keine Sicherheitslücke. Kommt über glib-macros 0.18
+  # aus Tauris GTK-Abhängigkeiten unter Linux; nicht von uns behebbar.
+  { id = "RUSTSEC-2024-0370", reason = "transitiv über Tauri/GTK, kein Fix verfügbar" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CDLA-Permissive-2.0",
+  # MPL-2.0 ist dateibezogenes Copyleft: Nutzung in proprietärer Software ist
+  # erlaubt, nur Änderungen an MPL-Dateien selbst müssen offengelegt werden.
+  # Wird von Tauri-Abhängigkeiten (z. B. cssparser) benötigt.
+  "MPL-2.0",
+]
+
+[licenses.private]
+# Eigene Crates (publish = false) nicht prüfen.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
