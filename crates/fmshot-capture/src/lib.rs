@@ -27,6 +27,15 @@ pub struct Display {
     pub is_primary: bool,
 }
 
+/// Rechteck in physischen Pixeln relativ zu einem Monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Ein sichtbares Fenster (für die Fenster-Aufnahme).
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowInfo {
@@ -88,6 +97,27 @@ pub trait ScreenCapturer: Send + Sync {
     /// Nimmt ein einzelnes Fenster auf (mit durchsichtigen Ecken).
     fn capture_window(&self, _window_id: u32) -> Result<Frame> {
         Err(CaptureError::NotImplemented("Fenster aufnehmen"))
+    }
+
+    /// Nimmt einen Ausschnitt eines Monitors auf (physische Pixel relativ zum
+    /// Monitor) – für die Scroll-Aufnahme, die das viele Male pro Sekunde tut.
+    fn capture_region(&self, _display_id: u32, _rect: PixelRect) -> Result<Frame> {
+        Err(CaptureError::NotImplemented("Ausschnitt aufnehmen"))
+    }
+
+    /// Darf FMShot Eingaben simulieren (automatisches Scrollen)?
+    fn has_input_permission(&self) -> bool {
+        false
+    }
+
+    /// Fragt die Berechtigung für simulierte Eingaben an.
+    fn request_input_permission(&self) -> bool {
+        false
+    }
+
+    /// Scrollt an `at` (globale Punkte) um `delta` Punkte nach unten.
+    fn scroll_at(&self, _at: (f32, f32), _delta: i32) -> Result<()> {
+        Err(CaptureError::NotImplemented("automatisch scrollen"))
     }
 
     /// Nimmt einen ganzen Monitor in voller physischer Auflösung auf.

@@ -39,7 +39,7 @@ use objc2_quartz_core::{
 };
 
 use crate::{
-    DoneCallback, OverlayError, OverlayMode, OverlayResult, Selection, WindowTarget,
+    DoneCallback, OverlayError, OverlayMode, OverlayResult, ScrollAction, Selection, WindowTarget,
     points_to_pixels, rect_from_points, window_at,
 };
 
@@ -702,6 +702,278 @@ impl OverlayView {
         let v = self.convertPoint_fromView(in_window, None);
         (v.x, v.y)
     }
+}
+
+// --- Scroll-Leiste ------------------------------------------------------------
+
+const BAR_WIDTH: f64 = 340.0;
+const BAR_HEIGHT: f64 = 44.0;
+/// x-Bereiche der Knöpfe in der Leiste (Punkte).
+const FINISH_X: (f64, f64) = (190.0, 262.0);
+const CANCEL_X: (f64, f64) = (268.0, 334.0);
+
+pub(crate) struct ScrollUi {
+    border: Retained<OverlayPanel>,
+    bar: Retained<OverlayPanel>,
+    status: Retained<CATextLayer>,
+}
+
+impl ScrollUi {
+    pub fn set_status(&self, text: &str) {
+        let s = NSString::from_str(text);
+        without_animation(|| unsafe { self.status.setString(Some(as_any(&s))) });
+    }
+
+    pub fn close(&self) {
+        self.border.orderOut(None);
+        self.bar.orderOut(None);
+    }
+}
+
+struct BarIvars {
+    on_action: Box<dyn Fn(ScrollAction)>,
+}
+
+define_class!(
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FMShotScrollBarView"]
+    #[ivars = BarIvars]
+    struct ScrollBarView;
+
+    impl ScrollBarView {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let p = self.convertPoint_fromView(event.locationInWindow(), None);
+            let action = if p.x >= FINISH_X.0 && p.x <= FINISH_X.1 {
+                Some(ScrollAction::Finish)
+            } else if p.x >= CANCEL_X.0 && p.x <= CANCEL_X.1 {
+                Some(ScrollAction::Cancel)
+            } else {
+                None
+            };
+            if let Some(a) = action {
+                (self.ivars().on_action)(a);
+            }
+        }
+    }
+);
+
+pub(crate) fn open_scroll_ui(
+    display_id: u32,
+    rect: (u32, u32, u32, u32),
+    labels: (&str, &str, &str),
+    on_action: Box<dyn Fn(ScrollAction)>,
+) -> Result<ScrollUi, OverlayError> {
+    let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
+    let screens = NSScreen::screens(mtm);
+    let screen = screens
+        .iter()
+        .find(|s| screen_number(s) == Some(display_id))
+        .ok_or(OverlayError::NoScreens)?;
+    let sf = screen.frame();
+    let scale = screen.backingScaleFactor().max(1.0);
+    // Pixel (oben links im Monitor) → Cocoa-Koordinaten (unten links global)
+    let (x, y, w, h) = (
+        rect.0 as f64 / scale,
+        rect.1 as f64 / scale,
+        rect.2 as f64 / scale,
+        rect.3 as f64 / scale,
+    );
+    let cocoa = NSRect::new(
+        CGPoint::new(sf.origin.x + x, sf.origin.y + sf.size.height - y - h),
+        CGSize::new(w, h),
+    );
+
+    // Rahmen: durchlässig für Maus und Scrollen.
+    let margin = 3.0;
+    let border_frame = NSRect::new(
+        CGPoint::new(cocoa.origin.x - margin, cocoa.origin.y - margin),
+        CGSize::new(w + 2.0 * margin, h + 2.0 * margin),
+    );
+    let border = OverlayPanel::new(mtm, border_frame);
+    border.setIgnoresMouseEvents(true);
+    let bview = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size),
+    );
+    bview.setWantsLayer(true);
+    let shape = shape_layer(NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size));
+    shape.setPath(Some(&rect_path(CGRect::new(
+        CGPoint::new(1.0, 1.0),
+        CGSize::new(
+            border_frame.size.width - 2.0,
+            border_frame.size.height - 2.0,
+        ),
+    ))));
+    shape.setStrokeColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
+    shape.setLineWidth(2.0);
+    bview.layer().expect("Ebene").addSublayer(&shape);
+    border.setContentView(Some(&bview));
+
+    // Leiste unter dem Bereich, sonst darüber, sonst innen unten.
+    let vf = screen.visibleFrame();
+    let bx = (cocoa.origin.x + (w - BAR_WIDTH) / 2.0).clamp(
+        vf.origin.x + 4.0,
+        vf.origin.x + vf.size.width - BAR_WIDTH - 4.0,
+    );
+    let below = cocoa.origin.y - margin - 10.0 - BAR_HEIGHT;
+    let above = cocoa.origin.y + h + margin + 10.0;
+    let by = if below >= vf.origin.y {
+        below
+    } else if above + BAR_HEIGHT <= vf.origin.y + vf.size.height {
+        above
+    } else {
+        cocoa.origin.y + 12.0
+    };
+    let bar_frame = NSRect::new(CGPoint::new(bx, by), CGSize::new(BAR_WIDTH, BAR_HEIGHT));
+    let bar = OverlayPanel::new(mtm, bar_frame);
+    bar.setHasShadow(true);
+    let view = ScrollBarView::alloc(mtm).set_ivars(BarIvars { on_action });
+    let view: Retained<ScrollBarView> = unsafe {
+        msg_send![super(view), initWithFrame: NSRect::new(CGPoint::new(0.0, 0.0), bar_frame.size)]
+    };
+    view.setWantsLayer(true);
+    let root = view.layer().expect("Ebene");
+    let bg = CALayer::new();
+    bg.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), bar_frame.size));
+    bg.setBackgroundColor(Some(&CGColor::new_srgb(0.12, 0.12, 0.13, 0.94)));
+    bg.setCornerRadius(10.0);
+    root.addSublayer(&bg);
+
+    let text = |frame: CGRect, s: &str, size: f64| {
+        let l = CATextLayer::new();
+        l.setFrame(frame);
+        l.setFontSize(size);
+        l.setForegroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 1.0)));
+        l.setContentsScale(scale);
+        let ns = NSString::from_str(s);
+        unsafe { l.setString(Some(as_any(&ns))) };
+        l
+    };
+    let status = text(
+        CGRect::new(
+            CGPoint::new(14.0, 13.0),
+            CGSize::new(FINISH_X.0 - 20.0, 18.0),
+        ),
+        labels.0,
+        13.0,
+    );
+    root.addSublayer(&status);
+
+    let finish_bg = CALayer::new();
+    finish_bg.setFrame(CGRect::new(
+        CGPoint::new(FINISH_X.0, 8.0),
+        CGSize::new(FINISH_X.1 - FINISH_X.0, 28.0),
+    ));
+    finish_bg.setBackgroundColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
+    finish_bg.setCornerRadius(6.0);
+    root.addSublayer(&finish_bg);
+    let finish = text(
+        CGRect::new(
+            CGPoint::new(FINISH_X.0, 13.0),
+            CGSize::new(FINISH_X.1 - FINISH_X.0, 18.0),
+        ),
+        labels.1,
+        13.0,
+    );
+    finish.setAlignmentMode(unsafe { kCAAlignmentCenter });
+    root.addSublayer(&finish);
+    let cancel = text(
+        CGRect::new(
+            CGPoint::new(CANCEL_X.0, 13.0),
+            CGSize::new(CANCEL_X.1 - CANCEL_X.0, 18.0),
+        ),
+        labels.2,
+        13.0,
+    );
+    cancel.setAlignmentMode(unsafe { kCAAlignmentCenter });
+    cancel.setForegroundColor(Some(&CGColor::new_srgb(0.8, 0.8, 0.8, 1.0)));
+    root.addSublayer(&cancel);
+
+    bar.setContentView(Some(&view));
+    border.orderFrontRegardless();
+    bar.orderFrontRegardless();
+    Ok(ScrollUi {
+        border,
+        bar,
+        status,
+    })
+}
+
+// --- Hinweis ---------------------------------------------------------------
+
+/// Wie lange der Hinweis sichtbar bleibt.
+const TOAST_SECONDS: f64 = 1.6;
+
+pub(crate) fn show_toast(text: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(screen) = NSScreen::mainScreen(mtm) else {
+        return;
+    };
+    let ns_text = NSString::from_str(text);
+    let font_size = 15.0;
+    let width = (40.0 + 8.5 * ns_text.length() as f64).min(screen.frame().size.width - 80.0);
+    let height = 40.0;
+    let sf = screen.visibleFrame();
+    let frame = NSRect::new(
+        CGPoint::new(
+            sf.origin.x + (sf.size.width - width) / 2.0,
+            sf.origin.y + 90.0,
+        ),
+        CGSize::new(width, height),
+    );
+    let panel = OverlayPanel::new(mtm, frame);
+    panel.setIgnoresMouseEvents(true);
+    panel.setHasShadow(true);
+    let view = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(CGPoint::new(0.0, 0.0), frame.size),
+    );
+    view.setWantsLayer(true);
+    let root = view.layer().expect("Ebene nach setWantsLayer");
+    let label = CATextLayer::new();
+    label.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), frame.size));
+    label.setBackgroundColor(Some(&CGColor::new_srgb(0.1, 0.1, 0.1, 0.88)));
+    label.setCornerRadius(height / 2.0);
+    label.setForegroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 1.0)));
+    // Text vertikal mittig: CATextLayer zeichnet oben – Zeile nach unten rücken.
+    let text_layer = CATextLayer::new();
+    text_layer.setFrame(CGRect::new(
+        CGPoint::new(0.0, (height - font_size * 1.3) / 2.0),
+        CGSize::new(width, font_size * 1.3),
+    ));
+    text_layer.setFontSize(font_size);
+    text_layer.setAlignmentMode(unsafe { kCAAlignmentCenter });
+    text_layer.setForegroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 1.0)));
+    text_layer.setContentsScale(screen.backingScaleFactor());
+    unsafe { text_layer.setString(Some(as_any(&ns_text))) };
+    label.addSublayer(&text_layer);
+    root.addSublayer(&label);
+    panel.setContentView(Some(&view));
+    panel.orderFrontRegardless();
+
+    let bound = MainThreadBound::new(panel, mtm);
+    let _ = DispatchQueue::main().after(
+        dispatch2::DispatchTime::NOW.time((TOAST_SECONDS * 1e9) as i64),
+        move || {
+            if let Some(mtm) = MainThreadMarker::new() {
+                bound.into_inner(mtm).orderOut(None);
+            }
+        },
+    );
 }
 
 // --- Hilfsfunktionen -------------------------------------------------------

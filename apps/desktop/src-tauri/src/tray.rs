@@ -43,6 +43,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "capture_region" => capture::start(app, capture::Mode::Region),
+            "capture_window" => capture::start(app, capture::Mode::Window),
+            "capture_screen" => capture::start(app, capture::Mode::Screen),
+            "capture_text" => capture::start(app, capture::Mode::Text),
+            "capture_scroll" => capture::start(app, capture::Mode::Scroll),
+            "capture_scroll_auto" => capture::start(app, capture::Mode::ScrollAuto),
             "open_window" => show_main_window(app),
             "open_library" => {
                 let root = app.state::<CaptureState>().library.root().to_path_buf();

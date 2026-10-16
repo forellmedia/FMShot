@@ -31,8 +31,10 @@ fmshot-clipboard.workspace = true
 fmshot-core = { workspace = true, features = ["specta"] }
 fmshot-hotkeys.workspace = true
 fmshot-library.workspace = true
+fmshot-ocr.workspace = true
 fmshot-overlay.workspace = true
 fmshot-render.workspace = true
+fmshot-stitch.workspace = true
 log = "0.4"
 sys-locale = "0.3"
 tauri-plugin-updater = "2"

@@ -27,6 +27,7 @@ use crate::i18n::t;
 pub struct CaptureState {
     pub capturer: Box<dyn ScreenCapturer>,
     pub library: Arc<Library>,
+    pub ocr: Option<Box<dyn fmshot_ocr::OcrEngine>>,
     /// Verhindert zwei Aufnahmen gleichzeitig (Taste doppelt gedrückt).
     busy: AtomicBool,
 }
@@ -36,6 +37,7 @@ impl CaptureState {
         Self {
             capturer,
             library,
+            ocr: fmshot_ocr::platform_engine(),
             busy: AtomicBool::new(false),
         }
     }
@@ -46,6 +48,12 @@ pub enum Mode {
     Region,
     Window,
     Screen,
+    /// Bereich wählen, Text erkennen, Text in die Zwischenablage.
+    Text,
+    /// Bereich wählen, dann von Hand scrollen.
+    Scroll,
+    /// Bereich wählen, FMShot scrollt selbst.
+    ScrollAuto,
 }
 
 impl Mode {
@@ -54,6 +62,8 @@ impl Mode {
             Mode::Region => "region",
             Mode::Window => "window",
             Mode::Screen => "screen",
+            Mode::Text => "text",
+            Mode::Scroll | Mode::ScrollAuto => "scroll",
         }
     }
 }
@@ -75,6 +85,10 @@ struct Pending {
 /// Startet eine Aufnahme. Kehrt sofort zurück.
 pub fn start(app: &AppHandle, mode: Mode) {
     let started = Instant::now();
+    // Zweites Drücken während einer Scroll-Aufnahme = „Fertig“.
+    if matches!(mode, Mode::Scroll | Mode::ScrollAuto) && crate::scroll::finish_running(app) {
+        return;
+    }
     let state = app.state::<CaptureState>();
     if state.busy.swap(true, Ordering::AcqRel) {
         return;
@@ -85,8 +99,20 @@ pub fn start(app: &AppHandle, mode: Mode) {
         show_permission_dialog(app);
         return;
     }
+    if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
+        state.capturer.request_input_permission();
+        release(app);
+        show_info(
+            app,
+            &t("scroll.permission_title", &[]),
+            &t("scroll.permission_body", &[]),
+        );
+        return;
+    }
     match mode {
-        Mode::Region => start_region(app, started),
+        Mode::Region | Mode::Text | Mode::Scroll | Mode::ScrollAuto => {
+            start_region(app, started, mode)
+        }
         Mode::Window => start_window(app),
         Mode::Screen => start_screen(app),
     }
@@ -98,7 +124,7 @@ fn release(app: &AppHandle) {
         .store(false, Ordering::Release);
 }
 
-fn start_region(app: &AppHandle, started: Instant) {
+fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
     let pending = Arc::new(Mutex::new(Pending::default()));
 
     // 1. Overlay sofort öffnen (Haupt-Thread).
@@ -116,7 +142,7 @@ fn start_region(app: &AppHandle, started: Instant) {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .selection = Some(sel);
-                        try_finish_region(&app_done, &pending_done);
+                        try_finish_region(&app_done, &pending_done, mode);
                     }
                     _ => {
                         pending_done
@@ -172,7 +198,7 @@ fn start_region(app: &AppHandle, started: Instant) {
                     });
                 });
                 pending.lock().unwrap_or_else(|e| e.into_inner()).frames = Some(frames);
-                try_finish_region(&app, &pending);
+                try_finish_region(&app, &pending, mode);
             }
             Err(e) => {
                 let _ = app.run_on_main_thread(|| {
@@ -190,7 +216,7 @@ fn start_region(app: &AppHandle, started: Instant) {
 }
 
 /// Schliesst ab, sobald Bild und Auswahl beide da sind.
-fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>) {
+fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode) {
     let (frames, sel) = {
         let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
         if p.finished || p.frames.is_none() || p.selection.is_none() {
@@ -204,10 +230,50 @@ fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>) {
     let Some(frame) = frames.into_iter().find(|f| f.display_id == sel.display_id) else {
         return;
     };
+    if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {
+        crate::scroll::begin(app, sel, frame.scale_factor, mode == Mode::ScrollAuto);
+        return;
+    }
     let Some(image) = frame.image.crop(sel.x, sel.y, sel.width, sel.height) else {
         return;
     };
-    finish(app, Mode::Region, image, frame.scale_factor);
+    if mode == Mode::Text {
+        recognize_and_copy(app, image);
+    } else {
+        finish(app, mode, image, frame.scale_factor);
+    }
+}
+
+/// „Text erfassen“: erkennen, kopieren, kurz Bescheid geben.
+fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<CaptureState>();
+        let Some(ocr) = state.ocr.as_ref() else {
+            show_error(&app, &t("ocr.unavailable", &[]));
+            return;
+        };
+        let started = Instant::now();
+        let message = match ocr.recognize(&image) {
+            Ok(blocks) if !blocks.is_empty() => {
+                let text = fmshot_ocr::join_text(&blocks);
+                match fmshot_clipboard::copy_text(&text) {
+                    Ok(()) => t(
+                        "ocr.copied",
+                        &[("count", &text.chars().count().to_string())],
+                    ),
+                    Err(e) => e.to_string(),
+                }
+            }
+            Ok(_) => t("ocr.nothing", &[]),
+            Err(e) => e.to_string(),
+        };
+        log::info!(
+            "Texterkennung in {:.0} ms: {message}",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&message));
+    });
 }
 
 fn start_window(app: &AppHandle) {
@@ -294,6 +360,11 @@ fn start_screen(app: &AppHandle) {
     });
 }
 
+/// Ergebnis einer Scroll-Aufnahme.
+pub fn finish_scroll(app: &AppHandle, image: RgbaImage, scale_factor: f32) {
+    finish(app, Mode::Scroll, image, scale_factor);
+}
+
 /// Zwischenablage und Bibliothek (im Hintergrund), danach Editor zeigen.
 fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32) {
     let capture = NewCapture {
@@ -365,6 +436,14 @@ fn show_permission_dialog(app: &AppHandle) {
             }
             let _ = &opener;
         });
+}
+
+pub fn show_info(app: &AppHandle, title: &str, body: &str) {
+    app.dialog()
+        .message(body)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
 }
 
 pub fn show_error(app: &AppHandle, error: &str) {

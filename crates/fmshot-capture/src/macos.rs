@@ -18,8 +18,9 @@ use objc2::rc::Retained;
 use objc2_core_foundation::{CFArray, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGEvent, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID,
-    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGWindowListCreate,
+    CGEvent, CGEventTapLocation, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID,
+    CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess, CGRequestPostEventAccess,
+    CGRequestScreenCaptureAccess, CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCreate,
     CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_foundation::{NSArray, NSError};
@@ -28,7 +29,7 @@ use objc2_screen_capture_kit::{
     SCStreamConfiguration, SCWindow,
 };
 
-use crate::{CaptureError, Display, Frame, Result, ScreenCapturer, WindowInfo};
+use crate::{CaptureError, Display, Frame, PixelRect, Result, ScreenCapturer, WindowInfo};
 
 /// Wie lange auf ScreenCaptureKit gewartet wird, bevor wir aufgeben.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -175,6 +176,48 @@ impl ScreenCapturer for MacCapturer {
         frame
     }
 
+    fn capture_region(&self, display_id: u32, rect: PixelRect) -> Result<Frame> {
+        let content = self.content()?;
+        let display = unsafe { content.0.displays() }
+            .iter()
+            .find(|d| unsafe { d.displayID() } == display_id)
+            .ok_or(CaptureError::UnknownDisplay(display_id))?;
+        let info = display_info(&display);
+        let own = own_app(&content.0);
+        let scale = info.scale_factor.max(1.0) as f64;
+        let source = CGRect::new(
+            CGPoint::new(rect.x as f64 / scale, rect.y as f64 / scale),
+            CGSize::new(rect.width as f64 / scale, rect.height as f64 / scale),
+        );
+        let rx = start_display_capture_rect(
+            &display,
+            own.as_deref(),
+            Some((source, rect.width as usize, rect.height as usize)),
+        );
+        wait_frame(rx)
+    }
+
+    fn has_input_permission(&self) -> bool {
+        CGPreflightPostEventAccess()
+    }
+
+    fn request_input_permission(&self) -> bool {
+        CGRequestPostEventAccess()
+    }
+
+    fn scroll_at(&self, at: (f32, f32), delta: i32) -> Result<()> {
+        let point = CGPoint::new(at.0 as f64, at.1 as f64);
+        // Mauszeiger über den Bereich – Scroll-Ereignisse gehen an das Fenster
+        // unter dem Zeiger.
+        let _ = CGWarpMouseCursorPosition(point);
+        let event =
+            CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 1, -delta, 0, 0)
+                .ok_or_else(|| CaptureError::Backend("Scroll-Ereignis".into()))?;
+        CGEvent::set_location(Some(&event), point);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        Ok(())
+    }
+
     fn capture_display(&self, display_id: u32) -> Result<Frame> {
         self.capture_all()?
             .into_iter()
@@ -277,8 +320,20 @@ type PendingFrame = mpsc::Receiver<std::result::Result<Frame, String>>;
 
 /// Startet die Aufnahme eines Monitors; das Ergebnis kommt über den Kanal.
 fn start_display_capture(display: &SCDisplay, own: Option<&SCRunningApplication>) -> PendingFrame {
+    start_display_capture_rect(display, own, None)
+}
+
+/// Wie oben, optional nur ein Ausschnitt (Punkte im Monitor + Pixelgrösse).
+fn start_display_capture_rect(
+    display: &SCDisplay,
+    own: Option<&SCRunningApplication>,
+    source: Option<(CGRect, usize, usize)>,
+) -> PendingFrame {
     let info = display_info(display);
-    let (px_w, px_h) = pixel_size(display);
+    let (px_w, px_h) = match source {
+        Some((_, w, h)) => (w, h),
+        None => pixel_size(display),
+    };
     let excluded = match own {
         Some(app) => NSArray::from_slice(&[app]),
         None => NSArray::new(),
@@ -299,6 +354,9 @@ fn start_display_capture(display: &SCDisplay, own: Option<&SCRunningApplication>
         // In sRGB umrechnen lassen, damit Farben ohne eingebettetes Profil
         // (PNG, Zwischenablage) überall gleich aussehen.
         config.setColorSpaceName(kCGColorSpaceSRGB);
+        if let Some((rect, _, _)) = source {
+            config.setSourceRect(rect);
+        }
     }
     screenshot(&filter, &config, info.id, info.scale_factor)
 }

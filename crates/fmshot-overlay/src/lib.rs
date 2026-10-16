@@ -110,6 +110,61 @@ pub fn open(
     }
 }
 
+/// Knopf in der Scroll-Leiste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollAction {
+    Finish,
+    Cancel,
+}
+
+/// Rahmen und Bedienleiste während einer Scroll-Aufnahme.
+pub struct ScrollUi {
+    #[cfg(target_os = "macos")]
+    inner: macos::ScrollUi,
+}
+
+impl ScrollUi {
+    /// Statuszeile, z. B. „Scrollen … 2400 px“.
+    pub fn set_status(&self, text: &str) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_status(text);
+        #[cfg(not(target_os = "macos"))]
+        let _ = text;
+    }
+
+    pub fn close(&self) {
+        #[cfg(target_os = "macos")]
+        self.inner.close();
+    }
+}
+
+/// Zeigt Rahmen und Leiste um `rect` (physische Pixel des Monitors).
+/// Mausklicks und Scrollen gehen weiterhin an die App darunter.
+pub fn open_scroll_ui(
+    display_id: u32,
+    rect: (u32, u32, u32, u32),
+    labels: (&str, &str, &str),
+    on_action: Box<dyn Fn(ScrollAction)>,
+) -> Result<ScrollUi, OverlayError> {
+    #[cfg(target_os = "macos")]
+    return macos::open_scroll_ui(display_id, rect, labels, on_action)
+        .map(|inner| ScrollUi { inner });
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (display_id, rect, labels, on_action);
+        Err(OverlayError::NotImplemented)
+    }
+}
+
+/// Kurzer Hinweis am unteren Bildschirmrand (z. B. „Text kopiert“), der von
+/// selbst verschwindet. Stiehlt keinen Fokus. Muss im Haupt-Thread laufen.
+pub fn show_toast(text: &str) {
+    #[cfg(target_os = "macos")]
+    macos::show_toast(text);
+    #[cfg(not(target_os = "macos"))]
+    let _ = text;
+}
+
 /// Rechteck in Punkten (Ursprung oben links) → physische Pixel.
 /// Rundet nach aussen, damit nichts Sichtbares abgeschnitten wird, und
 /// begrenzt auf den Monitor.

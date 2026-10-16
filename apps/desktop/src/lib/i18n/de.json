@@ -79,5 +79,20 @@
   "capture.region": "Bereich aufnehmen",
   "capture.window": "Fenster aufnehmen",
   "capture.screen": "Vollbild aufnehmen",
-  "start.hint": "Mach deine erste Aufnahme – sie erscheint dann hier im Editor."
+  "start.hint": "Mach deine erste Aufnahme – sie erscheint dann hier im Editor.",
+  "capture.text": "Text erfassen",
+  "ocr.copied": "Text kopiert ({count} Zeichen)",
+  "ocr.nothing": "Kein Text gefunden",
+  "ocr.unavailable": "Texterkennung ist auf diesem System noch nicht verfügbar",
+  "capture.scroll": "Scroll-Aufnahme",
+  "capture.scroll_auto": "Scroll-Aufnahme (automatisch)",
+  "scroll.hint": "Jetzt langsam scrollen …",
+  "scroll.progress": "Scrollen … {height} px",
+  "scroll.auto_running": "FMShot scrollt …",
+  "scroll.auto_progress": "Automatisch … {height} px",
+  "scroll.too_fast": "Zu schnell – etwas zurückscrollen",
+  "scroll.finish": "Fertig",
+  "scroll.cancel": "Abbrechen",
+  "scroll.permission_title": "Bedienungshilfen erlauben",
+  "scroll.permission_body": "Für das automatische Scrollen braucht FMShot die Freigabe „Bedienungshilfen“.\n\nIn den Systemeinstellungen unter Datenschutz & Sicherheit → Bedienungshilfen FMShot einschalten und es danach erneut versuchen."
 }

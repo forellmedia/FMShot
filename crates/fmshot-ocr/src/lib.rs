@@ -4,9 +4,20 @@
 //! - Windows: Windows.Media.Ocr
 //! - Linux: Tesseract (zur Laufzeit geladen)
 //!
-//! Die Backends kommen in Meilenstein 4.
+//! Windows und Linux folgen; dort liefert [`platform_engine`] vorerst `None`.
 
 use fmshot_core::{Rect, RgbaImage};
+
+#[cfg(target_os = "macos")]
+mod macos;
+
+/// Die Texterkennung der aktuellen Plattform, falls vorhanden.
+pub fn platform_engine() -> Option<Box<dyn OcrEngine>> {
+    #[cfg(target_os = "macos")]
+    return Some(Box::new(macos::VisionOcr));
+    #[cfg(not(target_os = "macos"))]
+    None
+}
 
 /// Ein erkannter Textblock (meist eine Zeile).
 #[derive(Debug, Clone, PartialEq)]

@@ -32,9 +32,8 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::CaptureRegion => capture::start(app, capture::Mode::Region),
         Action::CaptureWindow => capture::start(app, capture::Mode::Window),
         Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
+        Action::CaptureText => capture::start(app, capture::Mode::Text),
         Action::OpenGallery => show_main_window(app),
-        Action::CaptureScroll | Action::CaptureText => {
-            log::info!("{action:?} ist noch nicht umgesetzt")
-        }
+        Action::CaptureScroll => capture::start(app, capture::Mode::Scroll),
     }
 }

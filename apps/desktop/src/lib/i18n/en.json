@@ -79,5 +79,20 @@
   "capture.region": "Capture region",
   "capture.window": "Capture window",
   "capture.screen": "Capture screen",
-  "start.hint": "Take your first capture – it will show up here in the editor."
+  "start.hint": "Take your first capture – it will show up here in the editor.",
+  "capture.text": "Capture text",
+  "ocr.copied": "Text copied ({count} characters)",
+  "ocr.nothing": "No text found",
+  "ocr.unavailable": "Text recognition is not available on this system yet",
+  "capture.scroll": "Scrolling capture",
+  "capture.scroll_auto": "Scrolling capture (automatic)",
+  "scroll.hint": "Scroll slowly now …",
+  "scroll.progress": "Scrolling … {height} px",
+  "scroll.auto_running": "FMShot is scrolling …",
+  "scroll.auto_progress": "Automatic … {height} px",
+  "scroll.too_fast": "Too fast – scroll back a little",
+  "scroll.finish": "Done",
+  "scroll.cancel": "Cancel",
+  "scroll.permission_title": "Allow accessibility",
+  "scroll.permission_body": "For automatic scrolling FMShot needs the “Accessibility” permission.\n\nIn System Settings under Privacy & Security → Accessibility, turn on FMShot and try again."
 }

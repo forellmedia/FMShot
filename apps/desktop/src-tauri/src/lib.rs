@@ -6,6 +6,7 @@ mod commands;
 mod editor;
 mod hotkeys;
 mod i18n;
+mod scroll;
 mod tray;
 mod updater;
 
@@ -66,6 +67,7 @@ pub fn run() {
             ));
 
             app.manage(editor::EditorState::new());
+            app.manage(scroll::ScrollState::default());
             app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
             hotkeys::register_defaults(app.handle());
