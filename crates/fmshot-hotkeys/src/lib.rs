@@ -232,6 +232,35 @@ impl Shortcut {
     }
 }
 
+impl Shortcut {
+    /// Format für das Registrieren beim System (global-hotkey / Tauri), z. B.
+    /// `CmdOrCtrl+Shift+Digit2`.
+    pub fn accelerator(&self, platform: Platform) -> String {
+        let m = self.modifiers;
+        let secondary = if platform == Platform::MacOs {
+            "Ctrl"
+        } else {
+            "Super"
+        };
+        let mut parts: Vec<String> = [
+            (m.primary, "CmdOrCtrl"),
+            (m.secondary, secondary),
+            (m.alt, "Alt"),
+            (m.shift, "Shift"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| name.to_string())
+        .collect();
+        parts.push(match self.key {
+            Key::Digit(d) => format!("Digit{d}"),
+            Key::Letter(c) => format!("Key{c}"),
+            Key::PrintScreen => "PrintScreen".into(),
+        });
+        parts.join("+")
+    }
+}
+
 /// Doppelt belegte Kombinationen – für die Konfliktwarnung in den Einstellungen.
 pub fn conflicts(bindings: &[(Action, Shortcut)]) -> Vec<(Action, Action, Shortcut)> {
     let mut found = Vec::new();
@@ -303,6 +332,15 @@ mod tests {
         );
         assert!("Hyper+1".parse::<Shortcut>().is_err());
         assert_eq!("".parse::<Shortcut>(), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn accelerator_format() {
+        let s: Shortcut = "Primary+Alt+Shift+g".parse().unwrap();
+        assert_eq!(s.accelerator(Platform::MacOs), "CmdOrCtrl+Alt+Shift+KeyG");
+        let s: Shortcut = "Primary+Secondary+3".parse().unwrap();
+        assert_eq!(s.accelerator(Platform::Linux), "CmdOrCtrl+Super+Digit3");
+        assert_eq!(s.accelerator(Platform::MacOs), "CmdOrCtrl+Ctrl+Digit3");
     }
 
     #[test]

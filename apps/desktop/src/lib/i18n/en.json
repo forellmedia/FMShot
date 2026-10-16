@@ -5,5 +5,13 @@
   "update.install": "Install and restart",
   "update.installing": "Installing …",
   "update.later": "Later",
-  "update.failed": "Update failed: {error}"
+  "update.failed": "Update failed: {error}",
+  "tray.tooltip": "FMShot",
+  "tray.capture_region": "Capture region",
+  "tray.open_window": "Open FMShot",
+  "tray.open_library": "Show library in Finder",
+  "tray.quit": "Quit FMShot",
+  "permission.title": "Allow screen recording",
+  "permission.body": "FMShot needs the “Screen Recording” permission.\n\nIn System Settings under Privacy & Security → Screen & System Audio Recording, turn on FMShot and restart it afterwards.",
+  "error.capture": "Capture failed: {error}"
 }

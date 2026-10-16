@@ -14,3 +14,10 @@ workspace = true
 [dependencies]
 fmshot-core.workspace = true
 thiserror.workspace = true
+image-webp = "0.2"
+png = "0.18"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

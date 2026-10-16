@@ -7,13 +7,23 @@
 //!     original.png  doc.json  thumb.webp  assets/<hash>.png
 //! ```
 //!
-//! Index, Suche, Auto-Export und Aufbewahrung folgen in Meilenstein 2 und 6.
+//! Suche, Auto-Export und Aufbewahrung folgen in Meilenstein 6.
+
+mod encode;
+mod index;
+mod store;
 
 use std::path::{Path, PathBuf};
+
+pub use encode::{encode_png, thumbnail};
+pub use index::CaptureRecord;
+pub use store::{LibraryError, NewCapture};
 
 pub const ORIGINAL_FILE: &str = "original.png";
 pub const DOCUMENT_FILE: &str = "doc.json";
 pub const THUMBNAIL_FILE: &str = "thumb.webp";
+/// Längste Kante der Vorschaubilder in Pixeln.
+pub const THUMBNAIL_MAX: u32 = 320;
 pub const ASSETS_DIR: &str = "assets";
 pub const INDEX_FILE: &str = "index.sqlite";
 
@@ -54,32 +64,14 @@ impl std::fmt::Display for CaptureId {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Library {
-    root: PathBuf,
+/// Ordner einer Aufnahme: `<root>/<jahr>/<monat>/<id>`.
+pub fn capture_dir(root: &Path, id: &CaptureId) -> PathBuf {
+    root.join(format!("{:04}", id.year))
+        .join(format!("{:02}", id.month))
+        .join(id.as_str())
 }
 
-impl Library {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    pub fn index_path(&self) -> PathBuf {
-        self.root.join(INDEX_FILE)
-    }
-
-    /// Ordner einer Aufnahme: `<root>/<jahr>/<monat>/<id>`.
-    pub fn capture_dir(&self, id: &CaptureId) -> PathBuf {
-        self.root
-            .join(format!("{:04}", id.year))
-            .join(format!("{:02}", id.month))
-            .join(id.as_str())
-    }
-}
+pub use store::Library;
 
 /// Tage seit 1970-01-01 → (Jahr, Monat, Tag), proleptischer gregorianischer
 /// Kalender, UTC. Algorithmus nach Howard Hinnant („civil_from_days“).
@@ -116,10 +108,9 @@ mod tests {
 
     #[test]
     fn ordner_nach_jahr_und_monat() {
-        let lib = Library::new("/lib");
         let id = CaptureId::from_unix_millis(1_792_172_712_083, 3);
         assert_eq!(
-            lib.capture_dir(&id),
+            capture_dir(Path::new("/lib"), &id),
             PathBuf::from("/lib/2026/10/20261016-174512-083-3")
         );
     }

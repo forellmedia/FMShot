@@ -69,6 +69,28 @@ impl RgbaImage {
         self.data
     }
 
+    /// Ausschnitt; wird auf das Bild begrenzt. `None`, wenn nichts übrig bleibt.
+    pub fn crop(&self, x: u32, y: u32, width: u32, height: u32) -> Option<RgbaImage> {
+        let x = x.min(self.width);
+        let y = y.min(self.height);
+        let w = width.min(self.width - x);
+        let h = height.min(self.height - y);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let stride = self.width as usize * 4;
+        let mut data = Vec::with_capacity(w as usize * h as usize * 4);
+        for row in y..y + h {
+            let start = row as usize * stride + x as usize * 4;
+            data.extend_from_slice(&self.data[start..start + w as usize * 4]);
+        }
+        Some(RgbaImage {
+            width: w,
+            height: h,
+            data,
+        })
+    }
+
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         if x >= self.width || y >= self.height {
             return None;
@@ -98,6 +120,17 @@ mod tests {
     fn falsche_laenge_wird_abgelehnt() {
         let err = RgbaImage::new(2, 2, vec![0; 15]).unwrap_err();
         assert!(matches!(err, ImageError::WrongLength { expected: 16, .. }));
+    }
+
+    #[test]
+    fn ausschnitt_wird_begrenzt() {
+        let mut data = vec![0u8; 4 * 3 * 4];
+        data[(4 + 2) * 4] = 7; // Pixel (2, 1)
+        let img = RgbaImage::new(4, 3, data).unwrap();
+        let crop = img.crop(2, 1, 10, 10).unwrap();
+        assert_eq!((crop.width(), crop.height()), (2, 2));
+        assert_eq!(crop.pixel(0, 0), Some([7, 0, 0, 0]));
+        assert!(img.crop(4, 0, 1, 1).is_none());
     }
 
     #[test]

@@ -52,6 +52,14 @@ pub enum CaptureError {
 pub type Result<T> = std::result::Result<T, CaptureError>;
 
 pub trait ScreenCapturer: Send + Sync {
+    /// Darf die App den Bildschirm aufnehmen? (macOS: Datenschutz-Freigabe)
+    fn has_permission(&self) -> bool {
+        true
+    }
+    /// Fragt die Freigabe beim System an. Gibt zurück, ob sie jetzt besteht.
+    fn request_permission(&self) -> bool {
+        true
+    }
     fn displays(&self) -> Result<Vec<Display>>;
     /// Nimmt einen ganzen Monitor in voller physischer Auflösung auf.
     fn capture_display(&self, display_id: u32) -> Result<Frame>;

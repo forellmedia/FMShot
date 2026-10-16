@@ -21,7 +21,19 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+arboard = "3"
+fmshot-capture.workspace = true
+fmshot-core.workspace = true
+fmshot-hotkeys.workspace = true
+fmshot-library.workspace = true
+fmshot-overlay.workspace = true
+log = "0.4"
+sys-locale = "0.3"
 tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true

@@ -5,5 +5,13 @@
   "update.install": "Installieren und neu starten",
   "update.installing": "Wird installiert …",
   "update.later": "Später",
-  "update.failed": "Update fehlgeschlagen: {error}"
+  "update.failed": "Update fehlgeschlagen: {error}",
+  "tray.tooltip": "FMShot",
+  "tray.capture_region": "Bereich aufnehmen",
+  "tray.open_window": "FMShot öffnen",
+  "tray.open_library": "Bibliothek im Finder zeigen",
+  "tray.quit": "FMShot beenden",
+  "permission.title": "Bildschirmaufnahme erlauben",
+  "permission.body": "FMShot braucht die Freigabe „Bildschirmaufnahme“.\n\nIn den Systemeinstellungen unter Datenschutz & Sicherheit → Bildschirm- und Systemaudioaufnahme FMShot einschalten und FMShot danach neu starten.",
+  "error.capture": "Aufnahme fehlgeschlagen: {error}"
 }

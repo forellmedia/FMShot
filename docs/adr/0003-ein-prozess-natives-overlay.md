@@ -17,6 +17,16 @@ bei gemischtem HiDPI unzuverlässig.
 - Das Vorschau-Popup darf den Fokus nicht stehlen (macOS: nicht aktivierendes
   `NSPanel`, Windows: `WS_EX_NOACTIVATE`).
 
+### Nachtrag (Meilenstein 2): macOS ohne softbuffer
+Auf macOS zeichnet das Overlay nicht mit tiny-skia/softbuffer, sondern mit
+**Core-Animation-Ebenen** in einem nicht aktivierenden `NSPanel`: Das
+eingefrorene Bild liegt einmal als Textur auf der GPU, beim Ziehen ändern sich
+nur Pfade (Abdunklung, Rahmen) und Positionen (Lupe, Grössenanzeige).
+softbuffer kopiert bei jeder Mausbewegung den ganzen Puffer – bei 5K-Monitoren
+rund 60 MB pro Bild und damit zu langsam. Das Bild wird ohne Kopie an Core
+Graphics übergeben (`CGDataProvider` auf dem `Arc<RgbaImage>`).
+Windows und Linux entscheiden wir bei ihrer Umsetzung nach demselben Massstab.
+
 ## Folgen
 - Leerlauf ca. 60–120 MB RAM (Webview).
 - Unter Wayland bestimmt das Portal die Latenz (100–500 ms).

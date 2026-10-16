@@ -16,7 +16,7 @@ crates/
   fmshot-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
   fmshot-library   Bibliothek: Dateien, SQLite-Index, Suche, Auto-Export
   fmshot-hotkeys   globale Tastenkombinationen
-  fmshot-overlay   natives Auswahl-Overlay (softbuffer + tiny-skia)
+  fmshot-overlay   natives Auswahl-Overlay (macOS: NSPanel + Core Animation)
   fmshot-cli       Kommandozeile `fmshot`
 apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 ```
