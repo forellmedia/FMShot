@@ -94,5 +94,16 @@
   "scroll.finish": "Done",
   "scroll.cancel": "Cancel",
   "scroll.permission_title": "Allow accessibility",
-  "scroll.permission_body": "For automatic scrolling FMShot needs the “Accessibility” permission.\n\nIn System Settings under Privacy & Security → Accessibility, turn on FMShot and try again."
+  "scroll.permission_body": "For automatic scrolling FMShot needs the “Accessibility” permission.\n\nIn System Settings under Privacy & Security → Accessibility, turn on FMShot and try again.",
+  "redact.nothing": "Nothing sensitive found",
+  "redact.done": "{count} spots pixelated – delete individually if needed",
+  "editor.text": "Copy text",
+  "editor.redact": "Auto-redact",
+  "tool.background": "Background",
+  "props.background_remove": "Remove",
+  "props.fit_content": "Fit to content",
+  "props.radius": "Corners",
+  "props.shadow": "Shadow",
+  "editor.drop_hint": "Drop image here",
+  "props.padding": "Padding"
 }

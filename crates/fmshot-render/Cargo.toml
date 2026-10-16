@@ -17,3 +17,5 @@ thiserror.workspace = true
 tiny-skia.workspace = true
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 png = "0.18"
+image-webp = "0.2"
+jpeg-decoder = { version = "0.3", default-features = false }

@@ -47,6 +47,55 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, CodecError> {
     RgbaImage::new(w, h, rgba).map_err(|e| CodecError::Png(e.to_string()))
 }
 
+/// Liest PNG, JPEG oder WebP (am Inhalt erkannt).
+pub fn decode_image(bytes: &[u8]) -> Result<RgbaImage, CodecError> {
+    if bytes.starts_with(b"\x89PNG") {
+        return decode_png(bytes);
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+        let pixels = decoder
+            .decode()
+            .map_err(|e| CodecError::Unsupported(e.to_string()))?;
+        let info = decoder
+            .info()
+            .ok_or_else(|| CodecError::Unsupported("JPEG ohne Kopf".into()))?;
+        let rgba: Vec<u8> = match info.pixel_format {
+            jpeg_decoder::PixelFormat::RGB24 => pixels
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect(),
+            jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+            other => return Err(CodecError::Unsupported(format!("JPEG {other:?}"))),
+        };
+        return RgbaImage::new(info.width as u32, info.height as u32, rgba)
+            .map_err(|e| CodecError::Unsupported(e.to_string()));
+    }
+    if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes))
+            .map_err(|e| CodecError::Unsupported(e.to_string()))?;
+        let (w, h) = decoder.dimensions();
+        let alpha = decoder.has_alpha();
+        let mut buf = vec![0; decoder.output_buffer_size().unwrap_or(0)];
+        decoder
+            .read_image(&mut buf)
+            .map_err(|e| CodecError::Unsupported(e.to_string()))?;
+        let rgba = if alpha {
+            buf
+        } else {
+            buf.as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect()
+        };
+        return RgbaImage::new(w, h, rgba).map_err(|e| CodecError::Unsupported(e.to_string()));
+    }
+    Err(CodecError::Unsupported("unbekanntes Bildformat".into()))
+}
+
 /// RGBA mit gerader Deckkraft → vormultiplizierte Pixmap.
 pub(crate) fn to_pixmap(image: &RgbaImage) -> Option<Pixmap> {
     let mut data = image.data().to_vec();

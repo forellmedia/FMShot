@@ -6,7 +6,7 @@
 
   import { onMount } from "svelte";
   import type { WasmRenderer } from "$lib/wasm/fmshot_render";
-  import { fileBytes } from "$lib/api";
+  import { fileBytes, isTauri } from "$lib/api";
   import { editor } from "./state.svelte";
   import {
     bounds,
@@ -28,7 +28,7 @@
     type Rect,
   } from "./model";
   import { measureText, render, renderer } from "./renderer";
-  import { BOX_TOOLS } from "./tools";
+  import { LAYER_MARKER } from "./clipboard";
 
   let container: HTMLDivElement;
   let baseCanvas: HTMLCanvasElement;
@@ -166,6 +166,7 @@
 
   // Bilder der Aufnahme in den Renderer laden.
   $effect(() => {
+    void editor.revision;
     const cap = editor.current;
     const doc = editor.doc;
     if (!cap || !doc) return;
@@ -545,7 +546,11 @@
       case "crop": {
         const r = cropRect;
         cropRect = null;
-        if (r && r.width > px(4) && r.height > px(4)) {
+        if (!r || r.width <= px(4) || r.height <= px(4)) break;
+        const sel = editor.selected;
+        if (sel && !sel.locked && sel.kind.type === "image") {
+          cropImageLayer(sel.id, r);
+        } else {
           editor.commit((doc) => (doc.artboard.rect = r));
         }
         break;
@@ -569,6 +574,91 @@
         break;
     }
     endSession();
+  }
+
+  /** Bild-Ebene nicht-destruktiv auf `r` (Dokument-Koordinaten) zuschneiden. */
+  function cropImageLayer(id: number, r: Rect) {
+    editor.updateKind(id, (k) => {
+      if (k.type !== "image") return k;
+      const b = k.bounds;
+      const x0 = Math.max(b.x, r.x);
+      const y0 = Math.max(b.y, r.y);
+      const x1 = Math.min(b.x + b.width, r.x + r.width);
+      const y1 = Math.min(b.y + b.height, r.y + r.height);
+      if (x1 - x0 < 2 || y1 - y0 < 2) return k;
+      const src = k.crop ?? { x: 0, y: 0, width: k.source_size.width, height: k.source_size.height };
+      const sx = src.width / b.width;
+      const sy = src.height / b.height;
+      return {
+        ...k,
+        crop: {
+          x: src.x + (x0 - b.x) * sx,
+          y: src.y + (y0 - b.y) * sy,
+          width: (x1 - x0) * sx,
+          height: (y1 - y0) * sy,
+        },
+        bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 },
+      };
+    });
+  }
+
+  // --- Bilder hineinziehen und einfügen ------------------------------------------
+
+  let dropActive = $state(false);
+
+  function onDragOver(e: DragEvent) {
+    if (e.dataTransfer?.types.includes("text/x-fmshot-capture")) {
+      e.preventDefault();
+      dropActive = true;
+    }
+  }
+
+  function onDrop(e: DragEvent) {
+    dropActive = false;
+    const id = e.dataTransfer?.getData("text/x-fmshot-capture");
+    if (id) {
+      e.preventDefault();
+      editor.addCaptureAsImage(id, toDoc(e));
+    }
+  }
+
+  // Dateien aus dem Finder (Tauri liefert Pfade und Position).
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    if (isTauri) {
+      import("@tauri-apps/api/webview").then(async ({ getCurrentWebview }) => {
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          const p = event.payload;
+          if (p.type === "over" || p.type === "enter") dropActive = true;
+          else if (p.type === "leave") dropActive = false;
+          else if (p.type === "drop") {
+            dropActive = false;
+            const ratio = window.devicePixelRatio || 1;
+            const at = toDoc({ clientX: p.position.x / ratio, clientY: p.position.y / ratio });
+            for (const path of p.paths) {
+              if (/\.(png|jpe?g|webp)$/i.test(path)) editor.addImageFile(path, at);
+            }
+          }
+        });
+      });
+    }
+    return () => unlisten?.();
+  });
+
+  async function onPaste(e: ClipboardEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+    const items = [...(e.clipboardData?.items ?? [])];
+    const image = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+    if (image) {
+      e.preventDefault();
+      const file = image.getAsFile();
+      if (file) editor.addImageBytes(new Uint8Array(await file.arrayBuffer()));
+      return;
+    }
+    if (e.clipboardData?.getData("text/plain") === LAYER_MARKER && editor.pasteLayer()) {
+      e.preventDefault();
+    }
   }
 
   function onDoubleClick(e: MouseEvent) {
@@ -738,17 +828,27 @@
     return "crosshair";
   });
 
+  const ocrView = $derived.by(() => {
+    void editor.zoom;
+    void editor.panX;
+    void editor.panY;
+    return editor.ocrBlocks?.map((b) => ({
+      x: sx(b.x) - 2,
+      y: sy(b.y) - 2,
+      w: b.width * editor.zoom + 4,
+      h: b.height * editor.zoom + 4,
+      text: b.text,
+    }));
+  });
+
   const cropView = $derived(
     cropRect ? { x: sx(cropRect.x), y: sy(cropRect.y), w: cropRect.width * editor.zoom, h: cropRect.height * editor.zoom } : null,
   );
 
-  // Für Werkzeuge mit Rechteck die Auswahl beim Wechsel aufheben.
-  $effect(() => {
-    if (BOX_TOOLS.includes(editor.tool) && editor.tool === "crop") editor.selectedId = null;
-  });
+
 </script>
 
-<svelte:window onkeydown={onKey} onkeyup={onKey} />
+<svelte:window onkeydown={onKey} onkeyup={onKey} onpaste={onPaste} />
 
 <div
   class="canvas"
@@ -760,6 +860,10 @@
   onpointercancel={onPointerUp}
   ondblclick={onDoubleClick}
   onwheel={onWheel}
+  ondragover={onDragOver}
+  ondragleave={() => (dropActive = false)}
+  ondrop={onDrop}
+  class:drop={dropActive}
   role="application"
 >
   {#if artboard}
@@ -796,6 +900,24 @@
       {/if}
       {#each selection.handles as h (h.name)}
         <rect class="handle" class:tail={h.name === "tail"} x={h.x - 4.5} y={h.y - 4.5} width="9" height="9" rx="2" />
+      {/each}
+    {/if}
+    {#if ocrView}
+      {#each ocrView as b, i (i)}
+        <rect
+          class="ocr"
+          x={b.x}
+          y={b.y}
+          width={b.w}
+          height={b.h}
+          rx="3"
+          role="button"
+          tabindex="-1"
+          onpointerdown={(e) => {
+            e.stopPropagation();
+            editor.copyText(b.text);
+          }}
+        ><title>{b.text}</title></rect>
       {/each}
     {/if}
     {#if cropView}
@@ -866,6 +988,20 @@
   }
   .handle.tail {
     fill: var(--selection);
+  }
+  .ocr {
+    fill: rgb(30 136 229 / 0.12);
+    stroke: rgb(30 136 229 / 0.8);
+    stroke-width: 1;
+    pointer-events: all;
+    cursor: copy;
+  }
+  .ocr:hover {
+    fill: rgb(30 136 229 / 0.28);
+  }
+  .canvas.drop {
+    outline: 3px dashed var(--selection);
+    outline-offset: -6px;
   }
   .crop {
     fill: rgb(255 255 255 / 0.08);

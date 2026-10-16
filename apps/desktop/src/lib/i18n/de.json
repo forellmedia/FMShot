@@ -94,5 +94,16 @@
   "scroll.finish": "Fertig",
   "scroll.cancel": "Abbrechen",
   "scroll.permission_title": "Bedienungshilfen erlauben",
-  "scroll.permission_body": "Für das automatische Scrollen braucht FMShot die Freigabe „Bedienungshilfen“.\n\nIn den Systemeinstellungen unter Datenschutz & Sicherheit → Bedienungshilfen FMShot einschalten und es danach erneut versuchen."
+  "scroll.permission_body": "Für das automatische Scrollen braucht FMShot die Freigabe „Bedienungshilfen“.\n\nIn den Systemeinstellungen unter Datenschutz & Sicherheit → Bedienungshilfen FMShot einschalten und es danach erneut versuchen.",
+  "redact.nothing": "Nichts Sensibles gefunden",
+  "redact.done": "{count} Stellen verpixelt – bei Bedarf einzeln löschen",
+  "editor.text": "Text kopieren",
+  "editor.redact": "Auto-Schwärzen",
+  "tool.background": "Hintergrund",
+  "props.background_remove": "Entfernen",
+  "props.fit_content": "An Inhalt anpassen",
+  "props.radius": "Ecken",
+  "props.shadow": "Schatten",
+  "editor.drop_hint": "Bild hier ablegen",
+  "props.padding": "Rand"
 }

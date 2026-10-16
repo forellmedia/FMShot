@@ -8,12 +8,15 @@
   import Icon from "./Icon.svelte";
   import LayersPanel from "./LayersPanel.svelte";
   import { translate } from "./model";
+  import { LAYER_MARKER } from "./clipboard";
   import PropertiesBar from "./PropertiesBar.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { toolByKey } from "./tools";
 
   onMount(() => {
     editor.init();
+    // Zum Testen im Browser: Zustand von aussen erreichbar.
+    if (import.meta.env.DEV) (window as unknown as { __fmshot: typeof editor }).__fmshot = editor;
   });
 
   function isTyping(e: KeyboardEvent) {
@@ -29,7 +32,12 @@
       const actions: Record<string, () => void> = {
         z: () => (e.shiftKey ? editor.redo() : editor.undo()),
         y: () => editor.redo(),
-        c: () => editor.copy(),
+        c: () => {
+          // Mit Auswahl: Ebene kopieren, sonst das fertige Bild.
+          if (editor.copyLayer()) api.copyText(LAYER_MARKER);
+          else editor.copy();
+        },
+        d: () => editor.duplicate(),
         s: () => editor.exportAs(e.shiftKey ? "jpg" : "png"),
         "0": () => editor.fit(),
         "1": () => editor.actualSize(),
@@ -104,6 +112,18 @@
       <button title={t("editor.zoom_out")} onclick={() => editor.zoomAt(0.8)}><Icon d="M5 12h14" /></button>
       <button class="zoom" title={t("editor.zoom_fit")} onclick={() => editor.fit()}>{zoomPercent}%</button>
       <button title={t("editor.zoom_in")} onclick={() => editor.zoomAt(1.25)}><Icon d="M5 12h14M12 5v14" /></button>
+      <span class="sep"></span>
+      <button
+        title={t("editor.text")}
+        class:on={!!editor.ocrBlocks}
+        disabled={!editor.doc || editor.busy}
+        onclick={() => editor.showText()}
+      >
+        <Icon d="M4 7V5h16v2M12 5v14M9 19h6" />
+      </button>
+      <button title={t("editor.redact")} disabled={!editor.doc || editor.busy} onclick={() => editor.autoRedact()}>
+        <Icon d="M4 6h16M4 12h10M4 18h7M17 13l4 4m0-4l-4 4" />
+      </button>
       <span class="sep"></span>
       <button class="text" title="⌘C" onclick={() => editor.copy()} disabled={!editor.doc}>{t("editor.copy")}</button>
       <button class="text" title="⌘S" onclick={() => editor.exportAs("png")} disabled={!editor.doc}>PNG</button>

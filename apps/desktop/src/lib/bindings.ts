@@ -24,8 +24,15 @@ export const commands = {
 	 *  (`None` = abgebrochen).
 	 */
 	exportDocument: (id: string, document: Document_Deserialize, format: ExportFormat) => typedError<string | null, string>(__TAURI_INVOKE("export_document", { id, document, format })),
-	/**  Legt ein hineingezogenes Bild (PNG-Bytes) bei der Aufnahme ab. */
-	addAsset: (id: string, png: number[]) => typedError<string, string>(__TAURI_INVOKE("add_asset", { id, png })),
+	/**  Bild aus der Zwischenablage o. Ä. (Bytes). */
+	addAsset: (id: string, bytes: number[]) => typedError<AssetInfo, string>(__TAURI_INVOKE("add_asset", { id, bytes })),
+	/**  Bild aus einer Datei (z. B. aus dem Finder hineingezogen). */
+	addAssetFile: (id: string, path: string) => typedError<AssetInfo, string>(__TAURI_INVOKE("add_asset_file", { id, path })),
+	/**  Eine andere Aufnahme (fertig gezeichnet) als Bild-Ebene übernehmen. */
+	addAssetFromCapture: (id: string, sourceId: string) => typedError<AssetInfo, string>(__TAURI_INVOKE("add_asset_from_capture", { id, sourceId })),
+	/**  Texterkennung auf der Originalaufnahme. */
+	recognizeText: (id: string) => typedError<OcrBlock[], string>(__TAURI_INVOKE("recognize_text", { id })),
+	copyText: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_text", { text })),
 	deleteCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_capture", { id })),
 	setStarred: (id: string, starred: boolean) => typedError<null, string>(__TAURI_INVOKE("set_starred", { id, starred })),
 	/**  Zeigt die Originaldatei im Finder / Explorer. */
@@ -56,6 +63,13 @@ export type Artboard = {
 	rect: Rect,
 	/**  `None` = transparent. */
 	background: Fill | null,
+};
+
+/**  Ein hineingezogenes Bild, abgelegt bei der Aufnahme. */
+export type AssetInfo = {
+	hash: string,
+	width: number,
+	height: number,
 };
 
 /**  Woher die Pixel einer Bild-Ebene kommen. */
@@ -188,6 +202,15 @@ export type Layer_Serialize = {
 	/**  Drehung in Grad um den Mittelpunkt der Ebene. */
 	rotation: number | null,
 	kind: LayerKind,
+};
+
+/**  Ein erkannter Textblock in Pixeln der Originalaufnahme. */
+export type OcrBlock = {
+	text: string,
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	height: number | null,
 };
 
 /**  Punkt in Dokument-Koordinaten (Pixel des Originalbilds). */

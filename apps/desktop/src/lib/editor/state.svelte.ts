@@ -1,17 +1,26 @@
 // Zustand des Editors: aktuelle Aufnahme, Dokument, Auswahl, Werkzeug, Stil,
 // Rückgängig/Wiederholen und Ansicht (Zoom/Verschieben).
 
-import { api, onCaptureSaved, type CaptureInfo } from "$lib/api";
+import { api, onCaptureSaved, type AssetInfo, type CaptureInfo, type OcrBlock } from "$lib/api";
 import { t } from "$lib/i18n";
 import {
+  bounds,
   clone,
+  newLayer,
+  rgb,
+  translate,
+  union,
   type Color,
   type Doc,
+  type Fill,
   type Layer,
   type LayerKind,
+  type Point,
+  type Rect,
   PALETTE,
   HIGHLIGHT_YELLOW,
 } from "./model";
+import { findSensitive } from "./redact";
 import type { ToolId } from "./tools";
 
 const MAX_HISTORY = 200;
@@ -59,6 +68,11 @@ export class Editor {
   thumbVersion = $state(0);
   message = $state<string | null>(null);
   layersPanel = $state(false);
+  /** Erkannte Textblöcke (Werkzeug „Text kopieren“). */
+  ocrBlocks = $state<OcrBlock[] | null>(null);
+  busy = $state(false);
+  /** Kopierte Ebenen für ⌘V. */
+  private layerClipboard: Layer[] = [];
   /** Zählt jede Änderung am Dokument – die Leinwand zeichnet dann neu. */
   revision = $state(0);
 
@@ -106,6 +120,7 @@ export class Editor {
       this.doc = doc;
       this.selectedId = null;
       this.editingTextId = null;
+      this.ocrBlocks = null;
       this.undoStack = [];
       this.redoStack = [];
       this.updateHistoryFlags();
@@ -246,6 +261,189 @@ export class Editor {
       const [l] = d.layers.splice(i, 1);
       d.layers.splice(j, 0, l);
     });
+  }
+
+  // --- Bilder, Text, Schwärzen, Hintergrund ---------------------------------------
+
+  /** Bild als Ebene einfügen – zentriert auf `at` (oder die Zeichenfläche). */
+  insertImage(info: AssetInfo, at?: Point) {
+    if (!this.doc) return;
+    const board = this.doc.artboard.rect;
+    // Höchstens 60 % der Zeichenfläche, nie grösser als das Original.
+    const scale = Math.min(1, (board.width * 0.6) / info.width, (board.height * 0.6) / info.height);
+    const w = info.width * scale;
+    const h = info.height * scale;
+    const c = at ?? { x: board.x + board.width / 2, y: board.y + board.height / 2 };
+    const layer = newLayer(this.doc, {
+      type: "image",
+      asset: { source: "asset", hash: info.hash },
+      bounds: { x: c.x - w / 2, y: c.y - h / 2, width: w, height: h },
+      crop: null,
+      source_size: { width: info.width, height: info.height },
+      corner_radius: 0,
+      shadow: null,
+    });
+    this.addLayer(layer);
+    this.tool = "select";
+  }
+
+  async addImageBytes(bytes: Uint8Array, at?: Point) {
+    if (!this.current) return;
+    try {
+      this.insertImage(await api.addAsset(this.current.id, bytes), at);
+    } catch (e) {
+      this.flash(String(e));
+    }
+  }
+
+  async addImageFile(path: string, at?: Point) {
+    if (!this.current) return;
+    try {
+      this.insertImage(await api.addAssetFile(this.current.id, path), at);
+    } catch (e) {
+      this.flash(String(e));
+    }
+  }
+
+  async addCaptureAsImage(sourceId: string, at?: Point) {
+    if (!this.current || sourceId === this.current.id) return;
+    try {
+      this.insertImage(await api.addAssetFromCapture(this.current.id, sourceId), at);
+    } catch (e) {
+      this.flash(String(e));
+    }
+  }
+
+  private async ocr(): Promise<OcrBlock[]> {
+    if (!this.current) return [];
+    this.busy = true;
+    try {
+      return await api.recognizeText(this.current.id);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** „Text kopieren“: Blöcke anzeigen und alles kopieren. */
+  async showText() {
+    if (this.ocrBlocks) {
+      this.ocrBlocks = null;
+      return;
+    }
+    try {
+      const blocks = await this.ocr();
+      if (!blocks.length) {
+        this.flash(t("ocr.nothing"));
+        return;
+      }
+      this.ocrBlocks = blocks;
+      await this.copyText(blocks.map((b) => b.text).join("\n"));
+    } catch (e) {
+      this.flash(String(e));
+    }
+  }
+
+  async copyText(text: string) {
+    await api.copyText(text);
+    this.flash(t("ocr.copied", { count: String(text.length) }));
+  }
+
+  /** Auto-Schwärzen: sensible Stellen finden und verpixeln. */
+  async autoRedact() {
+    try {
+      const blocks = await this.ocr();
+      const hits = findSensitive(blocks);
+      if (!hits.length) {
+        this.flash(t("redact.nothing"));
+        return;
+      }
+      const block = 8 * this.ratio;
+      this.commit((d) => {
+        for (const r of hits) {
+          d.layers.push(newLayer(d, { type: "pixelate", bounds: r, block }));
+        }
+      });
+      this.flash(t("redact.done", { count: String(hits.length) }));
+    } catch (e) {
+      this.flash(String(e));
+    }
+  }
+
+  /** Bild der Originalaufnahme (unterste Ebene). */
+  private originalLayer(doc: Doc): Layer | undefined {
+    return doc.layers.find((l) => l.kind.type === "image" && l.kind.asset.source === "original");
+  }
+
+  /** Hintergrund/Rahmen: Rand, Verlauf, runde Ecken und Schatten. */
+  applyBackground(fill: Fill, paddingPt = 48) {
+    this.commit((d) => {
+      const pad = paddingPt * d.pixel_ratio;
+      const content = d.layers.filter((l) => l.visible).map((l) => bounds(l.kind)).reduce(union);
+      d.artboard.rect = {
+        x: content.x - pad,
+        y: content.y - pad,
+        width: content.width + 2 * pad,
+        height: content.height + 2 * pad,
+      };
+      d.artboard.background = fill;
+      const img = this.originalLayer(d);
+      if (img?.kind.type === "image") {
+        img.kind.corner_radius = 10 * d.pixel_ratio;
+        img.kind.shadow = { color: rgb(0, 0, 0, 90), blur: 24 * d.pixel_ratio, offset_y: 8 * d.pixel_ratio };
+      }
+    });
+  }
+
+  removeBackground() {
+    this.commit((d) => {
+      d.artboard.background = null;
+      const img = this.originalLayer(d);
+      if (img?.kind.type === "image") {
+        img.kind.corner_radius = 0;
+        img.kind.shadow = null;
+        d.artboard.rect = { ...img.kind.bounds };
+      }
+    });
+  }
+
+  /** „An Inhalt anpassen“. */
+  fitArtboardToContent() {
+    this.commit((d) => {
+      const visible = d.layers.filter((l) => l.visible);
+      if (visible.length) d.artboard.rect = visible.map((l) => bounds(l.kind)).reduce(union);
+    });
+  }
+
+  // --- Ebenen kopieren -------------------------------------------------------
+
+  copyLayer(): boolean {
+    const sel = this.selected;
+    if (!sel || sel.locked) return false;
+    this.layerClipboard = [clone($state.snapshot(sel) as Layer)];
+    return true;
+  }
+
+  /** Kopierte Ebene leicht versetzt einfügen. */
+  pasteLayer(): boolean {
+    if (!this.doc || !this.layerClipboard.length) return false;
+    const offset = 12 * this.ratio;
+    let lastId = 0;
+    this.commit((d) => {
+      for (const l of this.layerClipboard) {
+        const copy = newLayer(d, translate(clone(l.kind), offset, offset));
+        copy.opacity = l.opacity;
+        d.layers.push(copy);
+        lastId = copy.id;
+      }
+    });
+    // Nächstes Einfügen wieder ein Stück weiter.
+    this.layerClipboard = this.layerClipboard.map((l) => ({ ...l, kind: translate(l.kind, offset, offset) }));
+    this.selectedId = lastId;
+    return true;
+  }
+
+  duplicate() {
+    if (this.copyLayer()) this.pasteLayer();
   }
 
   // --- Speichern & Ausgeben ---------------------------------------------------

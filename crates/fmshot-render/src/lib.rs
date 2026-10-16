@@ -18,7 +18,7 @@ use std::ops::Range;
 use fmshot_core::{AssetRef, Document, Fill, Layer, LayerId, LayerKind, Rect, RgbaImage};
 use tiny_skia::{Pixmap, Transform};
 
-pub use codec::{CodecError, decode_png};
+pub use codec::{CodecError, decode_image, decode_png};
 pub use text::TextMetrics;
 
 /// Liefert die Pixel der Bild-Ebenen. Die Bibliothek lädt sie von der Platte,

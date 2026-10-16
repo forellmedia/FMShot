@@ -193,12 +193,114 @@ pub async fn export_document(
     .map_err(err)?
 }
 
-/// Legt ein hineingezogenes Bild (PNG-Bytes) bei der Aufnahme ab.
+/// Ein hineingezogenes Bild, abgelegt bei der Aufnahme.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AssetInfo {
+    pub hash: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Legt ein Bild (PNG, JPEG oder WebP) bei der Aufnahme ab – als PNG.
+fn store_asset(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, String> {
+    let img = fmshot_render::decode_image(bytes).map_err(err)?;
+    let png = if bytes.starts_with(b"\x89PNG") {
+        bytes.to_vec()
+    } else {
+        fmshot_library::encode_png(&img, 1.0).map_err(err)?
+    };
+    let hash = library(app).add_asset(id, &png).map_err(err)?;
+    Ok(AssetInfo {
+        hash,
+        width: img.width(),
+        height: img.height(),
+    })
+}
+
+/// Bild aus der Zwischenablage o. Ä. (Bytes).
 #[tauri::command]
 #[specta::specta]
-pub fn add_asset(app: AppHandle, id: String, png: Vec<u8>) -> Result<String, String> {
-    fmshot_render::decode_png(&png).map_err(err)?;
-    library(&app).add_asset(&id, &png).map_err(err)
+pub async fn add_asset(app: AppHandle, id: String, bytes: Vec<u8>) -> Result<AssetInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || store_asset(&app, &id, &bytes))
+        .await
+        .map_err(err)?
+}
+
+/// Bild aus einer Datei (z. B. aus dem Finder hineingezogen).
+#[tauri::command]
+#[specta::specta]
+pub async fn add_asset_file(app: AppHandle, id: String, path: String) -> Result<AssetInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(err)?;
+        store_asset(&app, &id, &bytes)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Eine andere Aufnahme (fertig gezeichnet) als Bild-Ebene übernehmen.
+#[tauri::command]
+#[specta::specta]
+pub async fn add_asset_from_capture(
+    app: AppHandle,
+    id: String,
+    source_id: String,
+) -> Result<AssetInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let lib = library(&app);
+        let doc = lib.load_document(&source_id).map_err(err)?;
+        let state = app.state::<EditorState>();
+        let img = render(&lib, &state, &source_id, &doc, None)?;
+        let png = fmshot_library::encode_png(&img, 1.0).map_err(err)?;
+        store_asset(&app, &id, &png)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Ein erkannter Textblock in Pixeln der Originalaufnahme.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct OcrBlock {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Texterkennung auf der Originalaufnahme.
+#[tauri::command]
+#[specta::specta]
+pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<CaptureState>();
+        let ocr = state
+            .ocr
+            .as_ref()
+            .ok_or_else(|| crate::i18n::t("ocr.unavailable", &[]))?;
+        let bytes = state.library.read_original(&id).map_err(err)?;
+        let img = fmshot_render::decode_png(&bytes).map_err(err)?;
+        Ok(ocr
+            .recognize(&img)
+            .map_err(err)?
+            .into_iter()
+            .map(|b| OcrBlock {
+                text: b.text,
+                x: b.bounds.x,
+                y: b.bounds.y,
+                width: b.bounds.width,
+                height: b.bounds.height,
+            })
+            .collect())
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn copy_text(text: String) -> Result<(), String> {
+    fmshot_clipboard::copy_text(&text).map_err(err)
 }
 
 #[tauri::command]

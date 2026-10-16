@@ -17,7 +17,8 @@ export type ToolId =
   | "magnifier"
   | "blur"
   | "pixelate"
-  | "crop";
+  | "crop"
+  | "background";
 
 export type Tool = { id: ToolId; key: string; label: MessageKey; icon: string };
 
@@ -37,6 +38,7 @@ export const TOOLS: Tool[] = [
   { id: "blur", key: "u", label: "tool.blur", icon: "M12 3c4 5 6 8 6 11a6 6 0 01-12 0c0-3 2-6 6-11z" },
   { id: "pixelate", key: "x", label: "tool.pixelate", icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" },
   { id: "crop", key: "c", label: "tool.crop", icon: "M7 3v14h14M3 7h14v14" },
+  { id: "background", key: "g", label: "tool.background", icon: "M3 3h18v18H3zM7 7h10v10H7z" },
 ];
 
 export function toolByKey(key: string): Tool | undefined {

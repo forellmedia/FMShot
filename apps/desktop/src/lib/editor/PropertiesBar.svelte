@@ -4,7 +4,7 @@
 
   import { t } from "$lib/i18n";
   import { editor } from "./state.svelte";
-  import { fromHex, PALETTE, sameColor, toCss, toHex, type Color, type LayerKind } from "./model";
+  import { fromHex, PALETTE, rgb, sameColor, toCss, toHex, type Color, type Fill, type LayerKind } from "./model";
   import type { ToolId } from "./tools";
 
   /** Welche Art wird gerade bearbeitet – Auswahl oder Werkzeug? */
@@ -132,6 +132,39 @@
     if (sel) editor.updateLayer(sel.id, (l) => (l.opacity = v / 100));
   }
 
+  /** Verläufe für „Hintergrund“. */
+  const BACKGROUNDS: Fill[] = [
+    { type: "linear_gradient", from: rgb(0x6a, 0x5a, 0xf9), to: rgb(0xf9, 0x5a, 0x9a), angle: 135 },
+    { type: "linear_gradient", from: rgb(0x22, 0xc1, 0xc3), to: rgb(0xfd, 0xbb, 0x2d), angle: 135 },
+    { type: "linear_gradient", from: rgb(0x0f, 0x20, 0x27), to: rgb(0x2c, 0x53, 0x64), angle: 135 },
+    { type: "linear_gradient", from: rgb(0xff, 0x9a, 0x9e), to: rgb(0xfa, 0xd0, 0xc4), angle: 135 },
+    { type: "solid", color: rgb(0xf2, 0xf2, 0xf5) },
+    { type: "solid", color: rgb(0x1c, 0x1c, 0x1e) },
+  ];
+
+  function fillCss(f: Fill): string {
+    return f.type === "solid"
+      ? toCss(f.color)
+      : `linear-gradient(${f.angle + 90}deg, ${toCss(f.from)}, ${toCss(f.to)})`;
+  }
+
+  let padding = $state(48);
+
+  const imageLayer = $derived(sel?.kind.type === "image" ? sel.kind : null);
+
+  function setRadius(pt: number) {
+    if (sel) editor.updateKind(sel.id, (k) => (k.type === "image" ? { ...k, corner_radius: pt * ratio } : k));
+  }
+
+  function toggleShadow() {
+    if (!sel) return;
+    editor.updateKind(sel.id, (k) =>
+      k.type === "image"
+        ? { ...k, shadow: k.shadow ? null : { color: rgb(0, 0, 0, 90), blur: 20 * ratio, offset_y: 6 * ratio } }
+        : k,
+    );
+  }
+
   function resetCrop() {
     const img = editor.doc?.layers.find((l) => l.kind.type === "image" && l.kind.asset.source === "original");
     if (img && img.kind.type === "image") {
@@ -142,7 +175,7 @@
 </script>
 
 <div class="props">
-  {#if kind && kind !== "image" && kind !== "crop" && kind !== "blur" && kind !== "pixelate" && kind !== "spotlight"}
+  {#if kind && !["image", "crop", "blur", "pixelate", "spotlight", "background"].includes(kind)}
     <div class="group" role="radiogroup" aria-label={t("props.color")}>
       {#each PALETTE as c (toHex(c))}
         <button
@@ -198,9 +231,31 @@
     </label>
   {/if}
 
-  {#if kind === "crop"}
+  {#if kind === "crop" || editor.tool === "crop"}
     <span class="hint">{t("props.crop_hint")}</span>
     <button class="toggle" onclick={resetCrop}>{t("props.crop_reset")}</button>
+    <button class="toggle" onclick={() => editor.fitArtboardToContent()}>{t("props.fit_content")}</button>
+  {/if}
+
+  {#if editor.tool === "background" && !sel}
+    <div class="group">
+      {#each BACKGROUNDS as f, i (i)}
+        <button class="swatch big" style:background={fillCss(f)} aria-label="Hintergrund {i + 1}" onclick={() => editor.applyBackground(f, padding)}></button>
+      {/each}
+    </div>
+    <label class="group">
+      {t("props.padding")}
+      <input type="range" min="8" max="160" bind:value={padding} />
+    </label>
+    <button class="toggle" onclick={() => editor.removeBackground()}>{t("props.background_remove")}</button>
+  {/if}
+
+  {#if imageLayer}
+    <label class="group">
+      {t("props.radius")}
+      <input type="range" min="0" max="40" value={imageLayer.corner_radius / ratio} oninput={(e) => setRadius(+e.currentTarget.value)} />
+    </label>
+    <button class="toggle" class:on={!!imageLayer.shadow} onclick={toggleShadow}>{t("props.shadow")}</button>
   {/if}
 
   {#if sel && !sel.locked}
@@ -210,7 +265,7 @@
     </label>
   {/if}
 
-  {#if !kind}
+  {#if !kind && editor.tool !== "background"}
     <span class="hint">{t("props.select_hint")}</span>
   {/if}
 </div>
@@ -238,6 +293,11 @@
     border: 1px solid rgb(0 0 0 / 0.2);
     padding: 0;
     cursor: pointer;
+  }
+  .swatch.big {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
   }
   .swatch.on {
     outline: 2px solid var(--selection);

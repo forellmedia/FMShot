@@ -2,10 +2,19 @@
 // ohne Tauri), liefert eine Attrappe Beispieldaten – so lässt sich die
 // Oberfläche mit `npm run dev` ansehen.
 
-import { commands, type CaptureInfo, type CaptureMode, type ExportFormat } from "$lib/bindings";
+import {
+  commands,
+  type AssetInfo,
+  type CaptureInfo,
+  type CaptureMode,
+  type ExportFormat,
+} from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { CaptureInfo };
+export type { AssetInfo, CaptureInfo };
+
+/** Erkannter Textblock in Pixeln der Originalaufnahme. */
+export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
 
 export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in (window as object);
@@ -42,8 +51,16 @@ export const api = {
     isTauri ? unwrap(commands.copyDocument(id, doc)) : Promise.resolve(null),
   exportDocument: (id: string, doc: Doc, format: ExportFormat): Promise<string | null> =>
     isTauri ? unwrap(commands.exportDocument(id, doc, format)) : Promise.resolve(null),
-  addAsset: (id: string, png: Uint8Array): Promise<string> =>
-    isTauri ? unwrap(commands.addAsset(id, Array.from(png))) : Promise.resolve("mock"),
+  addAsset: (id: string, bytes: Uint8Array): Promise<AssetInfo> =>
+    isTauri ? unwrap(commands.addAsset(id, Array.from(bytes))) : mock.addAsset(bytes),
+  addAssetFile: (id: string, path: string): Promise<AssetInfo> =>
+    isTauri ? unwrap(commands.addAssetFile(id, path)) : Promise.reject(new Error("nur in der App")),
+  addAssetFromCapture: (id: string, sourceId: string): Promise<AssetInfo> =>
+    isTauri ? unwrap(commands.addAssetFromCapture(id, sourceId)) : mock.addAssetFromCapture(sourceId),
+  recognizeText: async (id: string): Promise<OcrBlock[]> =>
+    isTauri ? ((await unwrap(commands.recognizeText(id))) as OcrBlock[]) : mock.recognizeText(id),
+  copyText: (text: string): Promise<null> =>
+    isTauri ? unwrap(commands.copyText(text)) : navigator.clipboard.writeText(text).then(() => null),
   deleteCapture: (id: string): Promise<null> =>
     isTauri ? unwrap(commands.deleteCapture(id)) : mock.deleteCapture(id),
   setStarred: (id: string, starred: boolean): Promise<null> =>
@@ -115,7 +132,10 @@ const mock = (() => {
   }
 
   return {
-    fileUrl: (path: string) => images.get(path) ?? path,
+    fileUrl: (path: string) => {
+      const asset = /_asset_(.+)\.png$/.exec(path);
+      return (asset ? images.get(`mock/${asset[1]}`) : images.get(path)) ?? path;
+    },
     async listCaptures() {
       ensure();
       return captures.slice();
@@ -152,6 +172,29 @@ const mock = (() => {
           },
         ],
       };
+    },
+    async addAsset(bytes: Uint8Array) {
+      const hash = `mock${images.size}`;
+      const blob = new Blob([bytes as BlobPart]);
+      const bmp = await createImageBitmap(blob);
+      images.set(`mock/${hash}`, URL.createObjectURL(blob));
+      return { hash, width: bmp.width, height: bmp.height };
+    },
+    async addAssetFromCapture(sourceId: string) {
+      const c = await this.getCapture(sourceId);
+      const hash = `cap${images.size}`;
+      images.set(`mock/${hash}`, images.get(c.originalPath)!);
+      return { hash, width: c.width, height: c.height };
+    },
+    async recognizeText(id: string) {
+      const c = await this.getCapture(id);
+      return Array.from({ length: 12 }, (_, l) => ({
+        text: `Zeile ${l + 1}: Lorem ipsum dolor sit amet, Fehler 0x${(l * 4099).toString(16)}`,
+        x: 24,
+        y: 110 + l * 40 - 18,
+        width: Math.min(c.width - 48, 640),
+        height: 24,
+      })).concat([{ text: "Kontakt: max.muster@example.com, IBAN CH93 0076 2011 6238 5295 7", x: 24, y: 620, width: 700, height: 24 }]);
     },
     async deleteCapture(id: string) {
       const i = captures.findIndex((c) => c.id === id);
