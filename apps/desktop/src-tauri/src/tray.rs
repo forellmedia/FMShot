@@ -42,7 +42,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "capture_region" => capture::start_region(app),
+            "capture_region" => capture::start(app, capture::Mode::Region),
             "open_window" => show_main_window(app),
             "open_library" => {
                 let root = app.state::<CaptureState>().library.root().to_path_buf();

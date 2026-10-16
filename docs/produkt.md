@@ -66,7 +66,7 @@ Windows-Signatur, Flatpak.
 | Fenster         | ⌘⇧3*   | Ctrl+Shift+3             |
 | Scroll          | ⌘⇧4*   | Ctrl+Shift+4             |
 | Text (OCR)      | ⌘⇧5*   | Ctrl+Shift+5             |
-| Galerie öffnen  | ⌘⇧G    | Ctrl+Shift+G             |
+| Galerie öffnen  | ⌥⌘G    | Ctrl+Alt+G               |
 
 \* Vom System belegt. Erster Start bietet an, die Systemkürzel zu ersetzen
 (mit Anleitung); sonst Ausweichkürzel ⌘⌥3/4/5.

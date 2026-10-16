@@ -10,8 +10,8 @@ mod updater;
 
 use std::sync::Arc;
 
-use fmshot_library::Library;
-use tauri::{Manager, WindowEvent};
+use fmshot_library::{CaptureRecord, Library};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_specta::{Builder, collect_commands};
 
 /// Alle Commands, die das Frontend aufrufen darf. Die TypeScript-Typen dazu
@@ -53,6 +53,7 @@ pub fn run() {
                 library,
             ));
 
+            app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
             hotkeys::register_defaults(app.handle());
             Ok(())
@@ -66,6 +67,14 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("FMShot konnte nicht gestartet werden");
+}
+
+/// Nach jeder gespeicherten Aufnahme: Editor mit der Aufnahme zeigen.
+pub(crate) fn after_capture(app: &tauri::AppHandle, rec: &CaptureRecord) {
+    if let Err(e) = app.emit("capture-saved", rec.id.clone()) {
+        log::error!("Ereignis capture-saved: {e}");
+    }
+    tray::show_main_window(app);
 }
 
 #[cfg(test)]

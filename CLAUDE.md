@@ -15,6 +15,7 @@ crates/
   fmshot-stitch    Scroll-Bilder zusammensetzen – plattformunabhängig
   fmshot-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
   fmshot-library   Bibliothek: Dateien, SQLite-Index, Suche, Auto-Export
+  fmshot-clipboard Zwischenablage (macOS: PNG mit Retina-Auflösung)
   fmshot-hotkeys   globale Tastenkombinationen
   fmshot-overlay   natives Auswahl-Overlay (macOS: NSPanel + Core Animation)
   fmshot-cli       Kommandozeile `fmshot`
@@ -26,7 +27,7 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 1. **Logik gehört in `crates/`.** `apps/desktop/src-tauri` verdrahtet nur
    (Commands, Fenster, Tray). Das Svelte-Frontend zeichnet nur Bedienelemente –
    die Leinwand zeichnet `fmshot-render`.
-2. **Plattformcode nur in `capture`, `ocr`, `hotkeys`, `overlay`**, jeweils hinter
+2. **Plattformcode nur in `capture`, `clipboard`, `ocr`, `hotkeys`, `overlay`**, jeweils hinter
    einem Trait, Implementierungen in `src/<plattform>.rs` per `#[cfg(target_os)]`.
    Alle anderen Crates sind plattformunabhängig und ohne Bildschirm testbar.
 3. **Abhängigkeitsrichtung:** `core` hängt von nichts Internem ab; `render`,

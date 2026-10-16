@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 fmshot-core.workspace = true
-fmshot-capture = { path = "../fmshot-capture" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -5,11 +5,14 @@
 //! Gezeichnet wird ausschliesslich mit Core-Animation-Ebenen: Das eingefrorene
 //! Bild liegt einmal als Textur auf der GPU, beim Ziehen ändern sich nur Pfade
 //! und Positionen. Kein Neuzeichnen von Pixeln pro Mausbewegung.
+//!
+//! Das Panel ist zuerst durchsichtig (laufender Bildschirm darunter) und zeigt
+//! das eingefrorene Bild, sobald [`Handle::set_frozen`] es liefert.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use dispatch2::{DispatchQueue, MainThreadBound};
@@ -20,7 +23,7 @@ use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
 };
 use objc2_app_kit::{
-    NSBackingStoreType, NSCursor, NSEvent, NSPanel, NSResponder, NSScreen,
+    NSBackingStoreType, NSColor, NSCursor, NSEvent, NSPanel, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -36,8 +39,8 @@ use objc2_quartz_core::{
 };
 
 use crate::{
-    DoneCallback, OverlayError, OverlayResult, OverlayScreen, Selection, points_to_pixels,
-    rect_from_points,
+    DoneCallback, OverlayError, OverlayMode, OverlayResult, Selection, WindowTarget,
+    points_to_pixels, rect_from_points, window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -48,26 +51,65 @@ const MAGNIFIER_SIZE: f64 = 128.0;
 const MAGNIFIER_ZOOM: f64 = 8.0;
 const DIM_ALPHA: f64 = 0.35;
 
-pub(crate) fn select_region(
-    screens: Vec<OverlayScreen>,
+pub(crate) struct Handle {
+    session: Weak<RefCell<Session>>,
+}
+
+impl Handle {
+    pub fn set_frozen(&self, display_id: u32, image: Arc<RgbaImage>) {
+        if let Some(session) = self.session.upgrade() {
+            let s = session.borrow();
+            if let Some(st) = s.screens.iter().find(|st| st.display_id == display_id) {
+                st.set_frozen(image);
+            }
+        }
+    }
+
+    pub fn cancel(&self) {
+        if let Some(session) = self.session.upgrade() {
+            with_session(&session, |s| s.finish(OverlayResult::Cancelled));
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.session
+            .upgrade()
+            .is_some_and(|s| s.borrow().on_done.is_some())
+    }
+}
+
+pub(crate) fn open(
+    mode: OverlayMode,
+    windows: Vec<WindowTarget>,
     on_done: DoneCallback,
-) -> Result<(), OverlayError> {
+) -> Result<Handle, OverlayError> {
     let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
     let session = Rc::new(RefCell::new(Session {
+        mode,
+        windows,
         screens: Vec::new(),
         on_done: Some(on_done),
         drag: None,
     }));
 
     let ns_screens = NSScreen::screens(mtm);
-    for (index, screen) in screens.into_iter().enumerate() {
-        let Some(ns_screen) = ns_screens
-            .iter()
-            .find(|s| screen_number(s) == Some(screen.display.id))
-        else {
+    // Höhe des Hauptmonitors: Umrechnung Cocoa (unten links) ↔ global (oben links).
+    let main_height = ns_screens
+        .firstObject()
+        .map(|s| s.frame().size.height)
+        .unwrap_or(0.0);
+    for (index, ns_screen) in ns_screens.iter().enumerate() {
+        let Some(display_id) = screen_number(&ns_screen) else {
             continue;
         };
-        let state = ScreenState::new(mtm, &ns_screen, screen, index, session.clone());
+        let state = ScreenState::new(
+            mtm,
+            &ns_screen,
+            display_id,
+            main_height,
+            index,
+            session.clone(),
+        );
         session.borrow_mut().screens.push(state);
     }
     if session.borrow().screens.is_empty() {
@@ -77,25 +119,30 @@ pub(crate) fn select_region(
     // Erst alles zeigen, dann das Panel unter der Maus zum Schlüsselfenster
     // machen – dort landen Tastendrücke (Esc).
     let mouse = NSEvent::mouseLocation();
-    let s = session.borrow();
-    for st in &s.screens {
-        st.panel.orderFrontRegardless();
-    }
-    let key = s
-        .screens
-        .iter()
-        .find(|st| contains(st.panel.frame(), mouse))
-        .or(s.screens.first());
-    if let Some(st) = key {
-        st.panel.makeKeyWindow();
-        st.panel.makeFirstResponder(Some(&st.view));
-        st.update_magnifier(st.view.convert_from_screen(mouse));
+    {
+        let s = session.borrow();
+        for st in &s.screens {
+            st.panel.orderFrontRegardless();
+        }
+        if let Some(st) = s
+            .screens
+            .iter()
+            .find(|st| contains(st.panel.frame(), mouse))
+        {
+            st.panel.makeKeyWindow();
+            st.panel.makeFirstResponder(Some(&st.view));
+            st.pointer_moved(&s, st.view.convert_from_screen(mouse));
+        }
     }
     NSCursor::crosshairCursor().set();
-    Ok(())
+    Ok(Handle {
+        session: Rc::downgrade(&session),
+    })
 }
 
 struct Session {
+    mode: OverlayMode,
+    windows: Vec<WindowTarget>,
     screens: Vec<ScreenState>,
     on_done: Option<DoneCallback>,
     drag: Option<Drag>,
@@ -144,54 +191,78 @@ fn with_session(
 
 struct ScreenState {
     display_id: u32,
-    image_size: (u32, u32),
+    /// Ursprung des Monitors in globalen Punkten (oben links).
+    origin: (f64, f64),
     points_size: (f64, f64),
+    scale: f64,
     panel: Retained<OverlayPanel>,
     view: Retained<OverlayView>,
+    image: Retained<CALayer>,
     dim: Retained<CAShapeLayer>,
     border: Retained<CAShapeLayer>,
+    highlight: Retained<CAShapeLayer>,
+    guide_shadow: Retained<CAShapeLayer>,
+    guide: Retained<CAShapeLayer>,
     label: Retained<CATextLayer>,
     magnifier: Retained<CALayer>,
     magnifier_image: Retained<CALayer>,
+    frozen: RefCell<bool>,
 }
 
 impl ScreenState {
     fn new(
         mtm: MainThreadMarker,
         ns_screen: &NSScreen,
-        screen: OverlayScreen,
+        display_id: u32,
+        main_height: f64,
         index: usize,
         session: Rc<RefCell<Session>>,
     ) -> Self {
         let frame = ns_screen.frame();
         let scale = ns_screen.backingScaleFactor();
         let bounds = NSRect::new(CGPoint::new(0.0, 0.0), frame.size);
-        let image_size = (screen.image.width(), screen.image.height());
-        let cg_image = cgimage_from_rgba(screen.image.clone());
+        let origin = (
+            frame.origin.x,
+            main_height - (frame.origin.y + frame.size.height),
+        );
 
         let panel = OverlayPanel::new(mtm, frame);
         let view = OverlayView::new(mtm, bounds, ViewIvars { session, index });
         view.setWantsLayer(true);
         let root = view.layer().expect("Ebene nach setWantsLayer");
 
-        // Eingefrorenes Bild
-        let image_layer = CALayer::new();
-        image_layer.setFrame(bounds);
-        set_image(&image_layer, cg_image.as_deref());
-        image_layer.setContentsGravity(unsafe { kCAGravityResize });
-        root.addSublayer(&image_layer);
+        // Eingefrorenes Bild (kommt nach)
+        let image = CALayer::new();
+        image.setFrame(bounds);
+        image.setContentsGravity(unsafe { kCAGravityResize });
+        root.addSublayer(&image);
 
         // Abdunklung mit Loch für die Auswahl
-        let dim = CAShapeLayer::new();
-        dim.setFrame(bounds);
+        let dim = shape_layer(bounds);
         dim.setFillRule(unsafe { kCAFillRuleEvenOdd });
         dim.setFillColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, DIM_ALPHA)));
         root.addSublayer(&dim);
 
+        // Fenster-Hervorhebung
+        let highlight = shape_layer(bounds);
+        highlight.setFillColor(Some(&CGColor::new_srgb(0.2, 0.5, 1.0, 0.25)));
+        highlight.setStrokeColor(Some(&CGColor::new_srgb(0.2, 0.5, 1.0, 0.95)));
+        highlight.setLineWidth(2.0);
+        root.addSublayer(&highlight);
+
+        // Fadenkreuz über den ganzen Monitor – dunkler Schatten für Kontrast
+        // auf hellem Grund, darüber eine helle Linie.
+        let guide_shadow = shape_layer(bounds);
+        guide_shadow.setStrokeColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, 0.45)));
+        guide_shadow.setLineWidth(3.0);
+        root.addSublayer(&guide_shadow);
+        let guide = shape_layer(bounds);
+        guide.setStrokeColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 0.9)));
+        guide.setLineWidth(1.0);
+        root.addSublayer(&guide);
+
         // Auswahlrahmen
-        let border = CAShapeLayer::new();
-        border.setFrame(bounds);
-        border.setFillColor(None);
+        let border = shape_layer(bounds);
         border.setStrokeColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 0.95)));
         border.setLineWidth(1.0);
         root.addSublayer(&border);
@@ -214,33 +285,18 @@ impl ScreenState {
         magnifier.setBorderWidth(2.0);
         magnifier.setBorderColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 0.9)));
         magnifier.setBackgroundColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, 1.0)));
+        magnifier.setHidden(true);
         let magnifier_image = CALayer::new();
-        set_image(&magnifier_image, cg_image.as_deref());
         magnifier_image.setContentsGravity(unsafe { kCAGravityResize });
         magnifier_image.setMagnificationFilter(unsafe { kCAFilterNearest });
-        magnifier_image.setFrame(CGRect::new(
-            CGPoint::new(0.0, 0.0),
-            CGSize::new(
-                bounds.size.width * MAGNIFIER_ZOOM,
-                bounds.size.height * MAGNIFIER_ZOOM,
-            ),
-        ));
         magnifier.addSublayer(&magnifier_image);
-        // Fadenkreuz-Pixel in der Mitte der Lupe
+        // Ein Pixel in der Mitte der Lupe markieren
         let center = CAShapeLayer::new();
         let px = MAGNIFIER_ZOOM / scale.max(1.0);
-        let path = CGMutablePath::new();
-        unsafe {
-            CGMutablePath::add_rect(
-                Some(&path),
-                std::ptr::null(),
-                CGRect::new(
-                    CGPoint::new((MAGNIFIER_SIZE - px) / 2.0, (MAGNIFIER_SIZE - px) / 2.0),
-                    CGSize::new(px, px),
-                ),
-            );
-        }
-        center.setPath(Some(&path));
+        center.setPath(Some(&rect_path(CGRect::new(
+            CGPoint::new((MAGNIFIER_SIZE - px) / 2.0, (MAGNIFIER_SIZE - px) / 2.0),
+            CGSize::new(px, px),
+        ))));
         center.setFillColor(None);
         center.setStrokeColor(Some(&CGColor::new_srgb(1.0, 0.25, 0.2, 1.0)));
         center.setLineWidth(1.0);
@@ -264,19 +320,105 @@ impl ScreenState {
         view.addTrackingArea(&tracking);
 
         let state = Self {
-            display_id: screen.display.id,
-            image_size,
+            display_id,
+            origin,
             points_size: (bounds.size.width, bounds.size.height),
+            scale,
             panel,
             view,
+            image,
             dim,
             border,
+            highlight,
+            guide_shadow,
+            guide,
             label,
             magnifier,
             magnifier_image,
+            frozen: RefCell::new(false),
         };
         state.update_selection(None);
         state
+    }
+
+    fn pixel_size(&self) -> (u32, u32) {
+        (
+            (self.points_size.0 * self.scale).round() as u32,
+            (self.points_size.1 * self.scale).round() as u32,
+        )
+    }
+
+    fn set_frozen(&self, image: Arc<RgbaImage>) {
+        let Some(cg) = cgimage_from_rgba(image) else {
+            return;
+        };
+        without_animation(|| {
+            set_contents(&self.image, &cg);
+            set_contents(&self.magnifier_image, &cg);
+            let (w, h) = self.points_size;
+            self.magnifier_image.setFrame(CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(w * MAGNIFIER_ZOOM, h * MAGNIFIER_ZOOM),
+            ));
+        });
+        *self.frozen.borrow_mut() = true;
+    }
+
+    /// Mausbewegung ohne gedrückte Taste: Fadenkreuz, Lupe, Fenster-Hervorhebung.
+    fn pointer_moved(&self, session: &Session, p: (f64, f64)) {
+        self.update_guides(Some(p));
+        self.update_magnifier(Some(p));
+        if session.mode == OverlayMode::Window {
+            let global = (self.origin.0 + p.0, self.origin.1 + p.1);
+            let rect = window_at(&session.windows, global).map(|w| {
+                let (x, y, ww, wh) = w.bounds;
+                (x - self.origin.0, y - self.origin.1, ww, wh)
+            });
+            self.update_highlight(rect);
+        }
+    }
+
+    fn pointer_left(&self) {
+        self.update_guides(None);
+        self.update_magnifier(None);
+        self.update_highlight(None);
+    }
+
+    /// Waagrechte und senkrechte Linie durch den Mauszeiger.
+    fn update_guides(&self, p: Option<(f64, f64)>) {
+        without_animation(|| match p {
+            Some((x, y)) => {
+                let (w, h) = self.points_size;
+                let path = CGMutablePath::new();
+                // Halber Punkt Versatz: 1-Punkt-Linie liegt scharf auf dem Raster.
+                let (x, y) = (x.floor() + 0.5, y.floor() + 0.5);
+                unsafe {
+                    CGMutablePath::move_to_point(Some(&path), std::ptr::null(), 0.0, y);
+                    CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), w, y);
+                    CGMutablePath::move_to_point(Some(&path), std::ptr::null(), x, 0.0);
+                    CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), x, h);
+                }
+                self.guide.setPath(Some(&path));
+                self.guide_shadow.setPath(Some(&path));
+            }
+            None => {
+                self.guide.setPath(None);
+                self.guide_shadow.setPath(None);
+            }
+        });
+    }
+
+    fn update_highlight(&self, rect: Option<(f64, f64, f64, f64)>) {
+        without_animation(|| match rect {
+            Some((x, y, w, h)) => {
+                let r = CGRect::new(
+                    CGPoint::new(x + 1.0, y + 1.0),
+                    CGSize::new(w - 2.0, h - 2.0),
+                );
+                self.highlight.setPath(Some(&rect_path(r)));
+            }
+            None => self.highlight.setPath(None),
+        });
     }
 
     /// Zeichnet Abdunklung, Rahmen und Grössenanzeige für die Auswahl.
@@ -289,25 +431,15 @@ impl ScreenState {
             let dim_path = CGMutablePath::new();
             unsafe { CGMutablePath::add_rect(Some(&dim_path), std::ptr::null(), full) };
             match rect {
-                Some((x, y, w, h)) => {
+                Some(r @ (x, y, w, h)) => {
                     let sel = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
                     unsafe { CGMutablePath::add_rect(Some(&dim_path), std::ptr::null(), sel) };
-                    let border_path = CGMutablePath::new();
-                    // Halber Punkt Versatz: 1-Punkt-Linie liegt scharf auf dem Pixelraster.
-                    unsafe {
-                        CGMutablePath::add_rect(
-                            Some(&border_path),
-                            std::ptr::null(),
-                            CGRect::new(
-                                CGPoint::new(x + 0.5, y + 0.5),
-                                CGSize::new(w - 1.0, h - 1.0),
-                            ),
-                        )
-                    };
-                    self.border.setPath(Some(&border_path));
+                    self.border.setPath(Some(&rect_path(CGRect::new(
+                        CGPoint::new(x + 0.5, y + 0.5),
+                        CGSize::new((w - 1.0).max(0.0), (h - 1.0).max(0.0)),
+                    ))));
 
-                    let (_, _, pw, ph) =
-                        points_to_pixels(rect.unwrap(), self.points_size, self.image_size);
+                    let (_, _, pw, ph) = points_to_pixels(r, self.points_size, self.pixel_size());
                     let text = NSString::from_str(&format!("{pw} × {ph}"));
                     unsafe { self.label.setString(Some(as_any(&text))) };
                     let lw = 12.0 + 7.0 * text.length() as f64;
@@ -332,14 +464,16 @@ impl ScreenState {
     }
 
     /// Lupe neben dem Mauszeiger; zeigt die Umgebung des Cursors vergrössert.
-    fn update_magnifier(&self, p: (f64, f64)) {
+    fn update_magnifier(&self, p: Option<(f64, f64)>) {
         without_animation(|| {
             let (w, h) = self.points_size;
-            let inside = p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= w && p.1 <= h;
-            self.magnifier.setHidden(!inside);
-            if !inside {
+            let Some(p) = p.filter(|p| {
+                *self.frozen.borrow() && p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= w && p.1 <= h
+            }) else {
+                self.magnifier.setHidden(true);
                 return;
-            }
+            };
+            self.magnifier.setHidden(false);
             // Rechts unterhalb des Cursors, an Rändern auf die andere Seite.
             let offset = 24.0;
             let mut mx = p.0 + offset;
@@ -406,7 +540,9 @@ impl OverlayPanel {
                 | NSWindowCollectionBehavior::Stationary
                 | NSWindowCollectionBehavior::IgnoresCycle,
         );
-        panel.setOpaque(true);
+        // Durchsichtig, bis das eingefrorene Bild da ist.
+        panel.setOpaque(false);
+        panel.setBackgroundColor(Some(&NSColor::clearColor()));
         panel.setHasShadow(false);
         panel.setAcceptsMouseMovedEvents(true);
         panel.setFrame_display(frame, false);
@@ -458,8 +594,13 @@ define_class!(
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
             let ivars = self.ivars();
-            if let Some(st) = ivars.session.borrow().screens.get(ivars.index) {
-                st.magnifier.setHidden(true);
+            let s = ivars.session.borrow();
+            // Während des Ziehens bleibt das Fadenkreuz auf dem Start-Monitor.
+            if s.drag.as_ref().is_some_and(|d| d.screen == ivars.index) {
+                return;
+            }
+            if let Some(st) = s.screens.get(ivars.index) {
+                st.pointer_left();
             }
         }
 
@@ -467,8 +608,9 @@ define_class!(
         fn mouse_moved(&self, event: &NSEvent) {
             let p = self.location(event);
             let ivars = self.ivars();
-            if let Some(st) = ivars.session.borrow().screens.get(ivars.index) {
-                st.update_magnifier(p);
+            let s = ivars.session.borrow();
+            if let Some(st) = s.screens.get(ivars.index) {
+                st.pointer_moved(&s, p);
             }
             NSCursor::crosshairCursor().set();
         }
@@ -485,6 +627,9 @@ define_class!(
         fn mouse_dragged(&self, event: &NSEvent) {
             let ivars = self.ivars();
             let s = ivars.session.borrow();
+            if s.mode != OverlayMode::Region {
+                return;
+            }
             // Ziehen bleibt auf dem Monitor, auf dem es begonnen hat.
             let Some(drag) = s.drag.as_ref().filter(|d| d.screen == ivars.index) else {
                 return;
@@ -494,7 +639,8 @@ define_class!(
             };
             let p = st.clamp(self.location(event));
             st.update_selection(Some(rect_from_points(drag.start, p)));
-            st.update_magnifier(p);
+            st.update_guides(Some(p));
+            st.update_magnifier(Some(p));
         }
 
         #[unsafe(method(mouseUp:))]
@@ -504,13 +650,18 @@ define_class!(
             with_session(&ivars.session, |s| {
                 let drag = s.drag.take()?;
                 let st = s.screens.get(drag.screen)?;
+                if s.mode == OverlayMode::Window {
+                    let global = (st.origin.0 + p.0, st.origin.1 + p.1);
+                    let id = window_at(&s.windows, global)?.id;
+                    return s.finish(OverlayResult::Window(id));
+                }
                 let rect = rect_from_points(drag.start, st.clamp(p));
                 if rect.2 < MIN_DRAG_POINTS || rect.3 < MIN_DRAG_POINTS {
                     // Nur geklickt – Overlay bleibt offen.
                     st.update_selection(None);
                     return None;
                 }
-                let (x, y, width, height) = points_to_pixels(rect, st.points_size, st.image_size);
+                let (x, y, width, height) = points_to_pixels(rect, st.points_size, st.pixel_size());
                 let selection = Selection { display_id: st.display_id, x, y, width, height };
                 s.finish(OverlayResult::Selected(selection))
             });
@@ -562,6 +713,19 @@ fn without_animation(f: impl FnOnce()) {
     CATransaction::commit();
 }
 
+fn shape_layer(bounds: CGRect) -> Retained<CAShapeLayer> {
+    let layer = CAShapeLayer::new();
+    layer.setFrame(bounds);
+    layer.setFillColor(None);
+    layer
+}
+
+fn rect_path(r: CGRect) -> CFRetained<CGMutablePath> {
+    let path = CGMutablePath::new();
+    unsafe { CGMutablePath::add_rect(Some(&path), std::ptr::null(), r) };
+    path
+}
+
 fn contains(r: CGRect, p: CGPoint) -> bool {
     p.x >= r.origin.x
         && p.y >= r.origin.y
@@ -582,12 +746,10 @@ fn as_any<T: AsRef<AnyObject>>(obj: &T) -> &AnyObject {
     obj.as_ref()
 }
 
-fn set_image(layer: &CALayer, image: Option<&CGImage>) {
-    if let Some(image) = image {
-        // SAFETY: CGImage ist ein gültiger Inhalt für `contents` (CFType ↔ id).
-        let obj = unsafe { &*(image as *const CGImage as *const AnyObject) };
-        unsafe { layer.setContents(Some(obj)) };
-    }
+fn set_contents(layer: &CALayer, image: &CGImage) {
+    // SAFETY: CGImage ist ein gültiger Inhalt für `contents` (CFType ↔ id).
+    let obj = unsafe { &*(image as *const CGImage as *const AnyObject) };
+    unsafe { layer.setContents(Some(obj)) };
 }
 
 /// CGImage direkt auf den Pixeln von `image` – ohne Kopie. Das `Arc` bleibt

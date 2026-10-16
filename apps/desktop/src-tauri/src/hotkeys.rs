@@ -27,14 +27,14 @@ pub fn register_defaults(app: &AppHandle) {
     }
 }
 
-fn run(app: &AppHandle, action: Action) {
+pub fn run(app: &AppHandle, action: Action) {
     match action {
-        Action::CaptureRegion => capture::start_region(app),
+        Action::CaptureRegion => capture::start(app, capture::Mode::Region),
+        Action::CaptureWindow => capture::start(app, capture::Mode::Window),
+        Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
         Action::OpenGallery => show_main_window(app),
-        // Folgen in Meilenstein 4.
-        Action::CaptureScreen
-        | Action::CaptureWindow
-        | Action::CaptureScroll
-        | Action::CaptureText => log::info!("{action:?} ist noch nicht umgesetzt"),
+        Action::CaptureScroll | Action::CaptureText => {
+            log::info!("{action:?} ist noch nicht umgesetzt")
+        }
     }
 }

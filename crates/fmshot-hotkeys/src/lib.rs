@@ -113,10 +113,12 @@ pub fn default_bindings(platform: Platform, replace_mac_system: bool) -> Vec<(Ac
         (Action::CaptureWindow, digit(taken, 3)),
         (Action::CaptureScroll, digit(taken, 4)),
         (Action::CaptureText, digit(taken, 5)),
+        // ⌥⌘G statt ⇧⌘G: ⇧⌘G gehört in vielen Apps zu „Gehe zu Ordner“
+        // bzw. „Vorheriges suchen“.
         (
             Action::OpenGallery,
             Shortcut {
-                modifiers: PRIMARY_SHIFT,
+                modifiers: PRIMARY_ALT,
                 key: Key::Letter('G'),
             },
         ),

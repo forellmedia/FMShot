@@ -1,15 +1,23 @@
-//! Ablauf einer Bereichsaufnahme:
-//! Tastenkürzel → alle Monitore einfrieren → natives Overlay → Ausschnitt →
-//! Zwischenablage + Bibliothek (im Hintergrund).
+//! Ablauf einer Aufnahme.
+//!
+//! **Bereich:** Tastenkürzel → Overlay sofort öffnen (durchsichtig) und
+//! gleichzeitig alle Monitore aufnehmen → eingefrorenes Bild ins Overlay →
+//! Auswahl → Ausschnitt → Zwischenablage + Bibliothek (im Hintergrund).
+//!
+//! **Fenster:** Fensterliste holen → Overlay mit Hervorhebung → Klick →
+//! Fenster einzeln aufnehmen (mit runden Ecken).
+//!
+//! **Vollbild:** Monitor unter der Maus direkt aufnehmen, ohne Overlay.
 
-use std::sync::Arc;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fmshot_capture::{CaptureError, ScreenCapturer};
+use fmshot_capture::{Frame, ScreenCapturer, display_at};
 use fmshot_core::RgbaImage;
-use fmshot_library::{Library, NewCapture};
-use fmshot_overlay::{OverlayResult, OverlayScreen};
+use fmshot_library::{CaptureRecord, Library, NewCapture};
+use fmshot_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -19,7 +27,7 @@ use crate::i18n::t;
 pub struct CaptureState {
     pub capturer: Box<dyn ScreenCapturer>,
     pub library: Arc<Library>,
-    /// Verhindert zwei Overlays gleichzeitig (Taste doppelt gedrückt).
+    /// Verhindert zwei Aufnahmen gleichzeitig (Taste doppelt gedrückt).
     busy: AtomicBool,
 }
 
@@ -33,129 +41,301 @@ impl CaptureState {
     }
 }
 
-/// Startet eine Bereichsaufnahme. Kehrt sofort zurück.
-pub fn start_region(app: &AppHandle) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Region,
+    Window,
+    Screen,
+}
+
+impl Mode {
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Region => "region",
+            Mode::Window => "window",
+            Mode::Screen => "screen",
+        }
+    }
+}
+
+thread_local! {
+    /// Das offene Overlay – lebt nur im Haupt-Thread.
+    static OVERLAY: RefCell<Option<OverlayHandle>> = const { RefCell::new(None) };
+}
+
+/// Was von einer Bereichsaufnahme schon da ist. Bild und Auswahl kommen in
+/// beliebiger Reihenfolge an; wer zuletzt kommt, schliesst ab.
+#[derive(Default)]
+struct Pending {
+    frames: Option<Vec<Frame>>,
+    selection: Option<Selection>,
+    finished: bool,
+}
+
+/// Startet eine Aufnahme. Kehrt sofort zurück.
+pub fn start(app: &AppHandle, mode: Mode) {
     let started = Instant::now();
     let state = app.state::<CaptureState>();
     if state.busy.swap(true, Ordering::AcqRel) {
         return;
     }
+    if !state.capturer.has_permission() {
+        state.capturer.request_permission();
+        release(app);
+        show_permission_dialog(app);
+        return;
+    }
+    match mode {
+        Mode::Region => start_region(app, started),
+        Mode::Window => start_window(app),
+        Mode::Screen => start_screen(app),
+    }
+}
+
+fn release(app: &AppHandle) {
+    app.state::<CaptureState>()
+        .busy
+        .store(false, Ordering::Release);
+}
+
+fn start_region(app: &AppHandle, started: Instant) {
+    let pending = Arc::new(Mutex::new(Pending::default()));
+
+    // 1. Overlay sofort öffnen (Haupt-Thread).
+    let (app_main, pending_main) = (app.clone(), pending.clone());
+    let opened = app.run_on_main_thread(move || {
+        let (app_done, pending_done) = (app_main.clone(), pending_main.clone());
+        let result = fmshot_overlay::open(
+            OverlayMode::Region,
+            Vec::new(),
+            Box::new(move |result| {
+                OVERLAY.with(|o| o.borrow_mut().take());
+                match result {
+                    OverlayResult::Selected(sel) => {
+                        pending_done
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .selection = Some(sel);
+                        try_finish_region(&app_done, &pending_done);
+                    }
+                    _ => {
+                        pending_done
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .finished = true;
+                        release(&app_done);
+                    }
+                }
+            }),
+        );
+        match result {
+            Ok(handle) => {
+                OVERLAY.with(|o| *o.borrow_mut() = Some(handle));
+                log::info!(
+                    "Overlay sichtbar nach {:.1} ms",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Err(e) => {
+                release(&app_main);
+                show_error(&app_main, &e.to_string());
+            }
+        }
+    });
+    if let Err(e) = opened {
+        log::error!("Haupt-Thread nicht erreichbar: {e}");
+        release(app);
+        return;
+    }
+
+    // 2. Gleichzeitig aufnehmen (Hintergrund).
     let app = app.clone();
-    // Aufnehmen blockiert – nie im Haupt-Thread.
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
-        if !state.capturer.has_permission() {
-            state.capturer.request_permission();
-            state.busy.store(false, Ordering::Release);
-            show_permission_dialog(&app);
-            return;
-        }
-        let screens = match freeze_screens(state.capturer.as_ref()) {
-            Ok(s) => s,
-            Err(e) => {
-                state.busy.store(false, Ordering::Release);
-                show_error(&app, &e.to_string());
-                return;
-            }
-        };
-        let frozen_ms = started.elapsed().as_secs_f64() * 1000.0;
-
-        let app2 = app.clone();
-        let result = app.run_on_main_thread(move || {
-            let images: Vec<(u32, f32, Arc<RgbaImage>)> = screens
-                .iter()
-                .map(|s| (s.display.id, s.display.scale_factor, s.image.clone()))
-                .collect();
-            let app3 = app2.clone();
-            let opened = fmshot_overlay::select_region(
-                screens,
-                Box::new(move |result| finish(&app3, result, &images)),
-            );
-            match opened {
-                Ok(()) => log::info!(
-                    "Overlay sichtbar nach {:.1} ms (Einfrieren {frozen_ms:.1} ms)",
+        match state.capturer.capture_all() {
+            Ok(frames) => {
+                log::info!(
+                    "Bildschirme eingefroren nach {:.1} ms",
                     started.elapsed().as_secs_f64() * 1000.0
-                ),
-                Err(e) => {
-                    app2.state::<CaptureState>()
-                        .busy
-                        .store(false, Ordering::Release);
-                    show_error(&app2, &e.to_string());
-                }
+                );
+                let images: Vec<(u32, Arc<RgbaImage>)> = frames
+                    .iter()
+                    .map(|f| (f.display_id, Arc::new(f.image.clone())))
+                    .collect();
+                let _ = app.run_on_main_thread(move || {
+                    OVERLAY.with(|o| {
+                        if let Some(h) = o.borrow().as_ref() {
+                            for (id, img) in images {
+                                h.set_frozen(id, img);
+                            }
+                        }
+                    });
+                });
+                pending.lock().unwrap_or_else(|e| e.into_inner()).frames = Some(frames);
+                try_finish_region(&app, &pending);
             }
-        });
-        if let Err(e) = result {
-            log::error!("Haupt-Thread nicht erreichbar: {e}");
-            state.busy.store(false, Ordering::Release);
+            Err(e) => {
+                let _ = app.run_on_main_thread(|| {
+                    OVERLAY.with(|o| {
+                        if let Some(h) = o.borrow_mut().take() {
+                            h.cancel();
+                        }
+                    });
+                });
+                release(&app);
+                show_error(&app, &e.to_string());
+            }
         }
     });
 }
 
-/// Nimmt alle Monitore auf und ordnet die Bilder ihren Monitoren zu.
-fn freeze_screens(capturer: &dyn ScreenCapturer) -> Result<Vec<OverlayScreen>, CaptureError> {
-    let displays = capturer.displays()?;
-    let frames = capturer.capture_all()?;
-    Ok(frames
-        .into_iter()
-        .filter_map(|frame| {
-            let display = displays.iter().find(|d| d.id == frame.display_id)?.clone();
-            Some(OverlayScreen {
-                display,
-                image: Arc::new(frame.image),
-            })
-        })
-        .collect())
+/// Schliesst ab, sobald Bild und Auswahl beide da sind.
+fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>) {
+    let (frames, sel) = {
+        let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
+        if p.finished || p.frames.is_none() || p.selection.is_none() {
+            return;
+        }
+        p.finished = true;
+        (p.frames.take().unwrap_or_default(), p.selection.take())
+    };
+    release(app);
+    let Some(sel) = sel else { return };
+    let Some(frame) = frames.into_iter().find(|f| f.display_id == sel.display_id) else {
+        return;
+    };
+    let Some(image) = frame.image.crop(sel.x, sel.y, sel.width, sel.height) else {
+        return;
+    };
+    finish(app, Mode::Region, image, frame.scale_factor);
 }
 
-/// Läuft im Haupt-Thread, sobald das Overlay geschlossen ist.
-fn finish(app: &AppHandle, result: OverlayResult, images: &[(u32, f32, Arc<RgbaImage>)]) {
-    let state = app.state::<CaptureState>();
-    state.busy.store(false, Ordering::Release);
-    let OverlayResult::Selected(sel) = result else {
-        return;
-    };
-    let Some((_, scale, image)) = images.iter().find(|(id, _, _)| *id == sel.display_id) else {
-        return;
-    };
-    let Some(cropped) = image.crop(sel.x, sel.y, sel.width, sel.height) else {
-        return;
-    };
+fn start_window(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<CaptureState>();
+        let windows: Vec<WindowTarget> = match state.capturer.windows() {
+            Ok(w) => w
+                .into_iter()
+                .map(|w| WindowTarget {
+                    id: w.id,
+                    bounds: (
+                        w.bounds.x as f64,
+                        w.bounds.y as f64,
+                        w.bounds.width as f64,
+                        w.bounds.height as f64,
+                    ),
+                })
+                .collect(),
+            Err(e) => {
+                release(&app);
+                show_error(&app, &e.to_string());
+                return;
+            }
+        };
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let app_done = app_main.clone();
+            let result = fmshot_overlay::open(
+                OverlayMode::Window,
+                windows,
+                Box::new(move |result| {
+                    OVERLAY.with(|o| o.borrow_mut().take());
+                    let OverlayResult::Window(id) = result else {
+                        release(&app_done);
+                        return;
+                    };
+                    let app = app_done.clone();
+                    // Kurz warten, bis das Overlay wirklich weg ist.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(60));
+                        let state = app.state::<CaptureState>();
+                        let result = state.capturer.capture_window(id);
+                        release(&app);
+                        match result {
+                            Ok(frame) => {
+                                finish(&app, Mode::Window, frame.image, frame.scale_factor)
+                            }
+                            Err(e) => show_error(&app, &e.to_string()),
+                        }
+                    });
+                }),
+            );
+            match result {
+                Ok(handle) => OVERLAY.with(|o| *o.borrow_mut() = Some(handle)),
+                Err(e) => {
+                    release(&app_main);
+                    show_error(&app_main, &e.to_string());
+                }
+            }
+        });
+    });
+}
+
+fn start_screen(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<CaptureState>();
+        let cursor = state.capturer.cursor_position();
+        let result = state.capturer.displays().and_then(|displays| {
+            let target = cursor
+                .and_then(|c| display_at(&displays, c))
+                .or_else(|| displays.iter().find(|d| d.is_primary))
+                .map(|d| d.id);
+            let frames = state.capturer.capture_all()?;
+            Ok(frames.into_iter().find(|f| Some(f.display_id) == target))
+        });
+        release(&app);
+        match result {
+            Ok(Some(frame)) => finish(&app, Mode::Screen, frame.image, frame.scale_factor),
+            Ok(None) => {}
+            Err(e) => show_error(&app, &e.to_string()),
+        }
+    });
+}
+
+/// Zwischenablage und Bibliothek (im Hintergrund), danach Editor zeigen.
+fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32) {
     let capture = NewCapture {
-        image: cropped,
-        scale_factor: *scale,
-        mode: "region".into(),
+        image,
+        scale_factor,
+        mode: mode.name().into(),
         created_at_ms: now_ms(),
     };
-    let library = state.library.clone();
-    // Kodieren und Schreiben im Hintergrund – die Oberfläche bleibt frei.
-    std::thread::spawn(move || save_and_copy(&library, capture));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let library = app.state::<CaptureState>().library.clone();
+        if let Some(rec) = save_and_copy(&library, capture) {
+            crate::after_capture(&app, &rec);
+        }
+    });
 }
 
-/// Zwischenablage und Bibliothek. Öffentlich für den Selbsttest.
-pub fn save_and_copy(library: &Library, capture: NewCapture) {
+/// Zwischenablage und Bibliothek.
+pub fn save_and_copy(library: &Library, capture: NewCapture) -> Option<CaptureRecord> {
     let start = Instant::now();
-    copy_to_clipboard(&capture.image);
+    copy_to_clipboard(&capture.image, capture.scale_factor);
     let copied = start.elapsed().as_secs_f64() * 1000.0;
     match library.save_capture(&capture) {
-        Ok(rec) => log::info!(
-            "Aufnahme {} ({}×{}) – Zwischenablage {copied:.1} ms, gespeichert nach {:.1} ms",
-            rec.id,
-            rec.width,
-            rec.height,
-            start.elapsed().as_secs_f64() * 1000.0
-        ),
-        Err(e) => log::error!("Speichern fehlgeschlagen: {e}"),
+        Ok(rec) => {
+            log::info!(
+                "Aufnahme {} ({}×{}) – Zwischenablage {copied:.1} ms, gespeichert nach {:.1} ms",
+                rec.id,
+                rec.width,
+                rec.height,
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            Some(rec)
+        }
+        Err(e) => {
+            log::error!("Speichern fehlgeschlagen: {e}");
+            None
+        }
     }
 }
 
-fn copy_to_clipboard(image: &RgbaImage) {
-    let data = arboard::ImageData {
-        width: image.width() as usize,
-        height: image.height() as usize,
-        bytes: std::borrow::Cow::Borrowed(image.data()),
-    };
-    let result = arboard::Clipboard::new().and_then(|mut c| c.set_image(data));
-    if let Err(e) = result {
+pub fn copy_to_clipboard(image: &RgbaImage, scale_factor: f32) {
+    if let Err(e) = fmshot_clipboard::copy_image(image, scale_factor) {
         log::error!("Zwischenablage: {e}");
     }
 }
@@ -187,7 +367,7 @@ fn show_permission_dialog(app: &AppHandle) {
         });
 }
 
-fn show_error(app: &AppHandle, error: &str) {
+pub fn show_error(app: &AppHandle, error: &str) {
     log::error!("Aufnahme: {error}");
     app.dialog()
         .message(t("error.capture", &[("error", error)]))

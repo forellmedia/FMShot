@@ -27,6 +27,16 @@ pub struct Display {
     pub is_primary: bool,
 }
 
+/// Ein sichtbares Fenster (für die Fenster-Aufnahme).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowInfo {
+    pub id: u32,
+    /// Globale Punkte, Ursprung oben links am Hauptmonitor.
+    pub bounds: Rect,
+    pub app_name: String,
+    pub title: String,
+}
+
 /// Ein aufgenommenes Bild mit der Herkunft.
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -61,7 +71,27 @@ pub trait ScreenCapturer: Send + Sync {
         true
     }
     fn displays(&self) -> Result<Vec<Display>>;
+    /// Mauszeiger in globalen Punkten (Ursprung oben links am Hauptmonitor).
+    fn cursor_position(&self) -> Option<(f32, f32)> {
+        None
+    }
+
+    /// Bereitet die Aufnahme vor (Caches füllen), damit die erste schnell ist.
+    fn warm_up(&self) {}
+
+    /// Sichtbare normale Fenster, von vorne nach hinten. Die eigenen Fenster
+    /// der App sind nicht dabei.
+    fn windows(&self) -> Result<Vec<WindowInfo>> {
+        Err(CaptureError::NotImplemented("Fenster auflisten"))
+    }
+
+    /// Nimmt ein einzelnes Fenster auf (mit durchsichtigen Ecken).
+    fn capture_window(&self, _window_id: u32) -> Result<Frame> {
+        Err(CaptureError::NotImplemented("Fenster aufnehmen"))
+    }
+
     /// Nimmt einen ganzen Monitor in voller physischer Auflösung auf.
+    /// Fenster von FMShot selbst (z. B. das Overlay) sind nie zu sehen.
     fn capture_display(&self, display_id: u32) -> Result<Frame>;
     /// Nimmt alle Monitore auf einmal auf – Grundlage fürs eingefrorene Overlay.
     fn capture_all(&self) -> Result<Vec<Frame>> {
@@ -72,6 +102,14 @@ pub trait ScreenCapturer: Send + Sync {
     }
 }
 
+/// Monitor, auf dem der Punkt liegt (globale Punkte).
+pub fn display_at(displays: &[Display], p: (f32, f32)) -> Option<&Display> {
+    displays.iter().find(|d| {
+        let b = d.bounds;
+        p.0 >= b.x && p.1 >= b.y && p.0 < b.right() && p.1 < b.bottom()
+    })
+}
+
 /// Die Implementierung für die aktuelle Plattform.
 pub fn platform_capturer() -> Box<dyn ScreenCapturer> {
     #[cfg(target_os = "macos")]
@@ -80,4 +118,26 @@ pub fn platform_capturer() -> Box<dyn ScreenCapturer> {
     return Box::new(windows::WindowsCapturer::new());
     #[cfg(target_os = "linux")]
     return Box::new(linux::LinuxCapturer::new());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn display(id: u32, x: f32) -> Display {
+        Display {
+            id,
+            name: String::new(),
+            bounds: Rect::new(x, 0.0, 100.0, 100.0),
+            scale_factor: 1.0,
+            is_primary: id == 1,
+        }
+    }
+
+    #[test]
+    fn monitor_unter_dem_punkt() {
+        let d = [display(1, 0.0), display(2, 100.0)];
+        assert_eq!(display_at(&d, (150.0, 50.0)).map(|d| d.id), Some(2));
+        assert_eq!(display_at(&d, (250.0, 50.0)), None);
+    }
 }

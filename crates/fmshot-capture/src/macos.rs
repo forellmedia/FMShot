@@ -1,43 +1,96 @@
 //! macOS: ScreenCaptureKit (`SCScreenshotManager`, ab macOS 14).
+//!
+//! `SCShareableContent` abzufragen kostet spürbar Zeit. Wir halten deshalb
+//! einen Schnappschuss im Cache und erneuern ihn nach jeder Aufnahme im
+//! Hintergrund. Für Monitore und die eigene App ist ein leicht veralteter
+//! Schnappschuss unkritisch; schlägt eine Aufnahme damit fehl, wird frisch
+//! abgefragt.
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use block2::RcBlock;
 use fmshot_core::{Rect, RgbaImage};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFArray, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID,
-    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, kCGColorSpaceSRGB,
+    CGEvent, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID,
+    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGWindowListCreate,
+    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCDisplay, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
+    SCContentFilter, SCDisplay, SCRunningApplication, SCScreenshotManager, SCShareableContent,
+    SCStreamConfiguration, SCWindow,
 };
 
-use crate::{CaptureError, Display, Frame, Result, ScreenCapturer};
+use crate::{CaptureError, Display, Frame, Result, ScreenCapturer, WindowInfo};
 
 /// Wie lange auf ScreenCaptureKit gewartet wird, bevor wir aufgeben.
 const TIMEOUT: Duration = Duration::from_secs(5);
-
-pub struct MacCapturer;
-
-impl MacCapturer {
-    pub fn new() -> Self {
-        Self
-    }
-}
+/// Kleinere Fenster (Symbole, Ränder) sind keine sinnvollen Ziele.
+const MIN_WINDOW_SIZE: f64 = 40.0;
 
 /// ScreenCaptureKit-Objekte sind unveränderlich und dürfen zwischen Threads
 /// wandern; objc2 markiert sie vorsichtshalber nicht als `Send`.
 struct SendRetained<T>(Retained<T>);
 // SAFETY: siehe oben – SCShareableContent ist ein unveränderlicher Schnappschuss.
 unsafe impl<T> Send for SendRetained<T> {}
+// SAFETY: wie oben, nur lesender Zugriff.
+unsafe impl<T> Sync for SendRetained<T> {}
+
+type Content = Arc<SendRetained<SCShareableContent>>;
+
+pub struct MacCapturer {
+    cache: Arc<Mutex<Option<Content>>>,
+}
+
+impl MacCapturer {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Schnappschuss aus dem Cache oder frisch.
+    fn content(&self) -> Result<Content> {
+        if let Some(c) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            return Ok(c);
+        }
+        self.fresh_content()
+    }
+
+    fn fresh_content(&self) -> Result<Content> {
+        let content = Arc::new(SendRetained(fetch_shareable_content()?));
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(content.clone());
+        Ok(content)
+    }
+
+    /// Erneuert den Cache im Hintergrund.
+    fn refresh_later(&self) {
+        let cache = self.cache.clone();
+        std::thread::spawn(move || {
+            if let Ok(c) = fetch_shareable_content() {
+                *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(SendRetained(c)));
+            }
+        });
+    }
+
+    fn capture_all_with(&self, content: &SCShareableContent) -> Result<Vec<Frame>> {
+        let displays = unsafe { content.displays() };
+        let own = own_app(content);
+        // Alle Monitore gleichzeitig anstossen, dann einsammeln.
+        let pending = displays
+            .iter()
+            .map(|d| start_display_capture(&d, own.as_deref()))
+            .collect::<Vec<_>>();
+        pending.into_iter().map(wait_frame).collect()
+    }
+}
 
 impl ScreenCapturer for MacCapturer {
     fn has_permission(&self) -> bool {
@@ -48,32 +101,100 @@ impl ScreenCapturer for MacCapturer {
         CGRequestScreenCaptureAccess()
     }
 
+    fn cursor_position(&self) -> Option<(f32, f32)> {
+        // Quartz-Koordinaten: Ursprung oben links am Hauptmonitor.
+        let event = CGEvent::new(None)?;
+        let p = CGEvent::location(Some(&event));
+        Some((p.x as f32, p.y as f32))
+    }
+
+    fn warm_up(&self) {
+        if self.has_permission() {
+            self.refresh_later();
+        }
+    }
+
     fn displays(&self) -> Result<Vec<Display>> {
-        let content = shareable_content()?;
-        let displays = unsafe { content.displays() };
+        let content = self.content()?;
+        let displays = unsafe { content.0.displays() };
         Ok(displays.iter().map(|d| display_info(&d)).collect())
     }
 
+    fn windows(&self) -> Result<Vec<WindowInfo>> {
+        let content = self.fresh_content()?;
+        let own_pid = std::process::id() as i32;
+        let sc_windows = unsafe { content.0.windows() };
+        let mut result = Vec::new();
+        for id in window_ids_front_to_back() {
+            let Some(w) = sc_windows.iter().find(|w| unsafe { w.windowID() } == id) else {
+                continue;
+            };
+            let frame = unsafe { w.frame() };
+            let app = unsafe { w.owningApplication() };
+            let normal = unsafe { w.windowLayer() } == 0 && unsafe { w.isOnScreen() };
+            let own = app
+                .as_ref()
+                .is_some_and(|a| unsafe { a.processID() } == own_pid);
+            if !normal
+                || own
+                || frame.size.width < MIN_WINDOW_SIZE
+                || frame.size.height < MIN_WINDOW_SIZE
+            {
+                continue;
+            }
+            result.push(WindowInfo {
+                id,
+                bounds: Rect::new(
+                    frame.origin.x as f32,
+                    frame.origin.y as f32,
+                    frame.size.width as f32,
+                    frame.size.height as f32,
+                ),
+                app_name: app
+                    .map(|a| unsafe { a.applicationName() }.to_string())
+                    .unwrap_or_default(),
+                title: unsafe { w.title() }
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+            });
+        }
+        Ok(result)
+    }
+
+    fn capture_window(&self, window_id: u32) -> Result<Frame> {
+        let content = self.fresh_content()?;
+        let window = unsafe { content.0.windows() }
+            .iter()
+            .find(|w| unsafe { w.windowID() } == window_id)
+            .ok_or(CaptureError::Backend(format!(
+                "Fenster {window_id} nicht gefunden"
+            )))?;
+        let rx = start_window_capture(&window, &content.0);
+        let frame = wait_frame(rx);
+        self.refresh_later();
+        frame
+    }
+
     fn capture_display(&self, display_id: u32) -> Result<Frame> {
-        let content = shareable_content()?;
-        let display = find_display(&content, display_id)?;
-        let rx = start_capture(&display)?;
-        wait_frame(rx)
+        self.capture_all()?
+            .into_iter()
+            .find(|f| f.display_id == display_id)
+            .ok_or(CaptureError::UnknownDisplay(display_id))
     }
 
     fn capture_all(&self) -> Result<Vec<Frame>> {
-        let content = shareable_content()?;
-        let displays = unsafe { content.displays() };
-        // Alle Monitore gleichzeitig anstossen, dann einsammeln.
-        let pending = displays
-            .iter()
-            .map(|d| start_capture(&d))
-            .collect::<Result<Vec<_>>>()?;
-        pending.into_iter().map(wait_frame).collect()
+        let content = self.content()?;
+        let frames = match self.capture_all_with(&content.0) {
+            Ok(f) => f,
+            // Veralteter Schnappschuss (z. B. Monitor abgesteckt) – frisch versuchen.
+            Err(_) => self.capture_all_with(&self.fresh_content()?.0)?,
+        };
+        self.refresh_later();
+        Ok(frames)
     }
 }
 
-fn shareable_content() -> Result<Retained<SCShareableContent>> {
+fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
     if !CGPreflightScreenCaptureAccess() {
         return Err(CaptureError::PermissionDenied);
     }
@@ -98,11 +219,26 @@ fn shareable_content() -> Result<Retained<SCShareableContent>> {
     }
 }
 
-fn find_display(content: &SCShareableContent, id: u32) -> Result<Retained<SCDisplay>> {
-    unsafe { content.displays() }
+/// FMShot selbst – wird aus Monitor-Aufnahmen ausgeblendet (Overlay!).
+fn own_app(content: &SCShareableContent) -> Option<Retained<SCRunningApplication>> {
+    let pid = std::process::id() as i32;
+    unsafe { content.applications() }
         .iter()
-        .find(|d| unsafe { d.displayID() } == id)
-        .ok_or(CaptureError::UnknownDisplay(id))
+        .find(|a| unsafe { a.processID() } == pid)
+}
+
+/// Fenster-IDs in Bildschirm-Reihenfolge (vorne zuerst).
+fn window_ids_front_to_back() -> Vec<u32> {
+    let options =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let Some(array) = CGWindowListCreate(options, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    let array: &CFArray = &array;
+    (0..array.count())
+        // SAFETY: CGWindowListCreate liefert CGWindowIDs als Zeigerwerte.
+        .map(|i| unsafe { array.value_at_index(i) } as usize as u32)
+        .collect()
 }
 
 fn display_info(d: &SCDisplay) -> Display {
@@ -140,14 +276,18 @@ fn pixel_size(d: &SCDisplay) -> (usize, usize) {
 type PendingFrame = mpsc::Receiver<std::result::Result<Frame, String>>;
 
 /// Startet die Aufnahme eines Monitors; das Ergebnis kommt über den Kanal.
-fn start_capture(display: &SCDisplay) -> Result<PendingFrame> {
+fn start_display_capture(display: &SCDisplay, own: Option<&SCRunningApplication>) -> PendingFrame {
     let info = display_info(display);
     let (px_w, px_h) = pixel_size(display);
-
+    let excluded = match own {
+        Some(app) => NSArray::from_slice(&[app]),
+        None => NSArray::new(),
+    };
     let filter = unsafe {
-        SCContentFilter::initWithDisplay_excludingWindows(
+        SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
             SCContentFilter::alloc(),
             display,
+            &excluded,
             &NSArray::new(),
         )
     };
@@ -160,7 +300,52 @@ fn start_capture(display: &SCDisplay) -> Result<PendingFrame> {
         // (PNG, Zwischenablage) überall gleich aussehen.
         config.setColorSpaceName(kCGColorSpaceSRGB);
     }
+    screenshot(&filter, &config, info.id, info.scale_factor)
+}
 
+fn start_window_capture(window: &SCWindow, content: &SCShareableContent) -> PendingFrame {
+    let frame = unsafe { window.frame() };
+    // Skalierung des Monitors, auf dem die Fenstermitte liegt.
+    let center = (
+        frame.origin.x + frame.size.width / 2.0,
+        frame.origin.y + frame.size.height / 2.0,
+    );
+    let display = unsafe { content.displays() }.iter().find(|d| {
+        let f = unsafe { d.frame() };
+        center.0 >= f.origin.x
+            && center.1 >= f.origin.y
+            && center.0 < f.origin.x + f.size.width
+            && center.1 < f.origin.y + f.size.height
+    });
+    let (display_id, scale) = display
+        .map(|d| {
+            let info = display_info(&d);
+            (info.id, info.scale_factor)
+        })
+        .unwrap_or((CGMainDisplayID(), 2.0));
+
+    let filter = unsafe {
+        SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window)
+    };
+    let config = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        config.setWidth((frame.size.width * scale as f64).round() as usize);
+        config.setHeight((frame.size.height * scale as f64).round() as usize);
+        config.setShowsCursor(false);
+        config.setColorSpaceName(kCGColorSpaceSRGB);
+        // Runde Ecken bleiben durchsichtig.
+        config.setShouldBeOpaque(false);
+        config.setIgnoreShadowsSingleWindow(true);
+    }
+    screenshot(&filter, &config, display_id, scale)
+}
+
+fn screenshot(
+    filter: &SCContentFilter,
+    config: &SCStreamConfiguration,
+    display_id: u32,
+    scale_factor: f32,
+) -> PendingFrame {
     let (tx, rx) = mpsc::sync_channel(1);
     let block = RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
         let result = match NonNull::new(image) {
@@ -169,8 +354,8 @@ fn start_capture(display: &SCDisplay) -> Result<PendingFrame> {
             Some(image) => {
                 let image = unsafe { CFRetained::retain(image) };
                 cgimage_to_rgba(&image).map(|image| Frame {
-                    display_id: info.id,
-                    scale_factor: info.scale_factor,
+                    display_id,
+                    scale_factor,
                     image,
                 })
             }
@@ -180,12 +365,12 @@ fn start_capture(display: &SCDisplay) -> Result<PendingFrame> {
     });
     unsafe {
         SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-            &filter,
-            &config,
+            filter,
+            config,
             Some(&block),
         );
     }
-    Ok(rx)
+    rx
 }
 
 fn wait_frame(rx: PendingFrame) -> Result<Frame> {
@@ -232,8 +417,21 @@ fn cgimage_to_rgba(image: &CGImage) -> std::result::Result<RgbaImage, String> {
         Some(image),
     );
     drop(ctx);
-    // Bildschirme sind deckend – vormultipliziert ist hier gleich gerade.
+    unpremultiply(&mut data);
     RgbaImage::new(width as u32, height as u32, data).map_err(|e| e.to_string())
+}
+
+/// Vormultiplizierte Farben → gerade (nur bei halbdurchsichtigen Pixeln nötig,
+/// z. B. runde Fensterecken).
+fn unpremultiply(data: &mut [u8]) {
+    for px in data.as_chunks_mut::<4>().0 {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
 }
 
 fn error_text(error: *mut NSError) -> String {

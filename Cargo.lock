@@ -1294,6 +1294,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmshot-clipboard"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "fmshot-core",
+ "fmshot-library",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "fmshot-core"
 version = "0.1.0"
 dependencies = [
@@ -1306,8 +1319,8 @@ dependencies = [
 name = "fmshot-desktop"
 version = "0.1.0"
 dependencies = [
- "arboard",
  "fmshot-capture",
+ "fmshot-clipboard",
  "fmshot-core",
  "fmshot-hotkeys",
  "fmshot-library",
@@ -1340,6 +1353,7 @@ dependencies = [
 name = "fmshot-library"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fmshot-core",
  "image-webp",
  "png 0.18.1",
@@ -1362,7 +1376,6 @@ name = "fmshot-overlay"
 version = "0.1.0"
 dependencies = [
  "dispatch2",
- "fmshot-capture",
  "fmshot-core",
  "objc2",
  "objc2-app-kit",
