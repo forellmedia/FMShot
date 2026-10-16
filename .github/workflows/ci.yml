@@ -85,3 +85,13 @@ jobs:
           npm ci
           npm run build
       - run: cargo test --workspace
+        if: runner.os != 'Windows'
+      # Unter Windows starten Test-Programme, die Tauri linken, nicht
+      # (STATUS_ENTRYPOINT_NOT_FOUND – das App-Manifest für comctl32 v6 wird nur
+      # ins eigentliche Programm eingebettet). Die App selbst wird trotzdem
+      # gebaut; ihre einzigen Tests (Bindings) laufen im Linux-Job.
+      - name: cargo test (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --workspace --exclude fmshot-desktop
+          cargo build -p fmshot-desktop
