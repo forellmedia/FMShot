@@ -71,7 +71,12 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "quit" => app.exit(0),
             _ => {}
         });
-    if let Some(icon) = app.default_window_icon() {
+    // Schwarz-auf-durchsichtig als Vorlage: macOS färbt es passend zur
+    // Menüleiste (hell/dunkel). Unter Windows/Linux das App-Symbol.
+    if cfg!(target_os = "macos") {
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+        builder = builder.icon(icon).icon_as_template(true);
+    } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;

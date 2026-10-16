@@ -4,12 +4,16 @@ Schnelles Screenshot-Tool für macOS, Windows und Linux – mit Bereichs-, Vollb
 Fenster- und Scroll-Aufnahme, Texterkennung (OCR), einem Editor mit Ebenen und
 einer durchsuchbaren Galerie.
 
-> **Status:** in Entwicklung, noch keine nutzbare Version.
+> **Status:** in Entwicklung. macOS: alle Funktionen von v0.1 umgesetzt und
+> bereit zum Testen ([Testanleitung](docs/testanleitung.md)). Windows und
+> Linux folgen.
 
 ## Dokumentation
 - [Produktbeschreibung & Umfang v0.1](docs/produkt.md)
 - [Architektur-Entscheidungen](docs/adr/)
 - [Entwicklung & Signatur einrichten](docs/entwicklung.md)
+- [Testanleitung](docs/testanleitung.md)
+- [Drittanbieter-Komponenten](docs/drittanbieter.md)
 
 ## Mitwirken
 Fehlermeldungen und Wünsche gerne als [Issue](https://github.com/forellmedia/FMShot/issues).
