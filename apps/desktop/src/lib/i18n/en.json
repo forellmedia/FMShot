@@ -161,5 +161,9 @@
   "hotkey.capture_text": "Capture text",
   "hotkey.open_gallery": "Open gallery",
   "gallery.search": "Search (text in captures) …",
-  "editor.settings": "Settings"
+  "editor.settings": "Settings",
+  "presets.title": "Presets",
+  "presets.save": "+ Save current style",
+  "presets.empty": "No presets yet",
+  "presets.delete": "Delete preset"
 }

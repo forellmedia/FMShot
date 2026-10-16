@@ -6,6 +6,7 @@
   import { editor } from "./state.svelte";
   import { fromHex, PALETTE, rgb, sameColor, toCss, toHex, type Color, type Fill, type LayerKind } from "./model";
   import type { ToolId } from "./tools";
+  import Presets from "./Presets.svelte";
 
   /** Welche Art wird gerade bearbeitet – Auswahl oder Werkzeug? */
   const kind = $derived<string>(editor.selected?.kind.type ?? toolKind(editor.tool));
@@ -175,6 +176,7 @@
 </script>
 
 <div class="props">
+  <Presets />
   {#if kind && !["image", "crop", "blur", "pixelate", "spotlight", "background"].includes(kind)}
     <div class="group" role="radiogroup" aria-label={t("props.color")}>
       {#each PALETTE as c (toHex(c))}

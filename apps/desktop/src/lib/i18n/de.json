@@ -161,5 +161,9 @@
   "hotkey.capture_text": "Text erfassen",
   "hotkey.open_gallery": "Galerie öffnen",
   "gallery.search": "Suchen (Text in Aufnahmen) …",
-  "editor.settings": "Einstellungen"
+  "editor.settings": "Einstellungen",
+  "presets.title": "Vorlagen",
+  "presets.save": "+ Aktuellen Stil speichern",
+  "presets.empty": "Noch keine Vorlagen",
+  "presets.delete": "Vorlage löschen"
 }
