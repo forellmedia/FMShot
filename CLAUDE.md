@@ -33,6 +33,8 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
    `stitch`, `library` nur von `core`. Keine Zyklen, keine Tauri-Abhängigkeit in
    `crates/`.
 4. **Rust↔TS-Typen** werden mit `tauri-specta` erzeugt, nie von Hand gepflegt.
+   Neue Commands in `specta_builder()` (src-tauri/src/lib.rs) eintragen, dann
+   `cargo test -p fmshot-desktop` – die CI prüft, ob `bindings.ts` aktuell ist.
 5. **Lizenzen:** Keine Copyleft-Abhängigkeiten (GPL/AGPL/LGPL). `cargo deny check`
    muss grün sein.
 6. **Geschwindigkeit ist eine Funktion.** Budgets in docs/produkt.md. Nichts
@@ -54,6 +56,7 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 cargo test --workspace                 # alle Rust-Tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                       # Lizenzen/Advisories
+cargo test -p fmshot-desktop           # erzeugt apps/desktop/src/lib/bindings.ts
 cd apps/desktop && npm run tauri dev   # App starten
 ```
 

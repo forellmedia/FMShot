@@ -1,4 +1,9 @@
 {
   "app.title": "FMShot",
-  "app.placeholder": "In development – capture, editor and gallery are coming."
+  "app.placeholder": "In development – capture, editor and gallery are coming.",
+  "update.available": "FMShot {version} is available.",
+  "update.install": "Install and restart",
+  "update.installing": "Installing …",
+  "update.later": "Later",
+  "update.failed": "Update failed: {error}"
 }

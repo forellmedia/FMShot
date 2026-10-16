@@ -12,6 +12,9 @@ ignore = [
   # Nur „unmaintained“, keine Sicherheitslücke. Kommt über glib-macros 0.18
   # aus Tauris GTK-Abhängigkeiten unter Linux; nicht von uns behebbar.
   { id = "RUSTSEC-2024-0370", reason = "transitiv über Tauri/GTK, kein Fix verfügbar" },
+  # Nur „unmaintained“: paste ist ein Proc-Macro (nur zur Compile-Zeit) und
+  # kommt über specta (tauri-specta).
+  { id = "RUSTSEC-2024-0436", reason = "transitiv über specta, nur Compile-Zeit" },
 ]
 
 [licenses]

@@ -35,6 +35,27 @@ mit einem dauerhaften, selbst erstellten Zertifikat signiert (ADR 0008).
 Ohne Secrets signiert die CI ad-hoc – die App läuft, aber macOS fragt nach
 jedem Update neu nach der Bildschirmaufnahme-Freigabe.
 
+## Einmalige Einrichtung: Updater-Schlüssel
+
+Updates werden mit einem eigenen Schlüssel signiert; die App prüft sie gegen den
+öffentlichen Schlüssel in `tauri.conf.json` (`plugins.updater.pubkey`).
+
+1. `./scripts/make-updater-key.sh` (schon erledigt – Schlüssel liegt in
+   `~/.fmshot-signing/updater.key`).
+2. Secrets setzen:
+   ```bash
+   gh secret set TAURI_SIGNING_PRIVATE_KEY -R forellmedia/FMShot < ~/.fmshot-signing/updater.key
+   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R forellmedia/FMShot < ~/.fmshot-signing/updater-password.txt
+   ```
+3. **Geht `updater.key` verloren, nehmen installierte Versionen keine Updates
+   mehr an.** Zusammen mit dem Zertifikat sichern.
+
+Ohne diese Secrets schlägt die Release-Pipeline fehl.
+
+Die App sucht beim Start und danach alle 6 Stunden nach Updates
+(`latest.json` am neuesten GitHub-Release). Unter Linux kann nur das AppImage
+sich selbst aktualisieren, das .deb nicht.
+
 ## Release erstellen
 
 1. Version in `Cargo.toml` (workspace), `apps/desktop/package.json` und

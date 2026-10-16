@@ -18,6 +18,8 @@ export function setLocale(locale: Locale) {
   current = locale;
 }
 
-export function t(key: MessageKey): string {
-  return messages[current][key] ?? messages.en[key] ?? key;
+/** Text zum Schlüssel; `{name}` wird durch `params.name` ersetzt. */
+export function t(key: MessageKey, params: Record<string, string> = {}): string {
+  const text = messages[current][key] ?? messages.en[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (_, name: string) => params[name] ?? `{${name}}`);
 }

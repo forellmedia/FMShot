@@ -1,4 +1,9 @@
 {
   "app.title": "FMShot",
-  "app.placeholder": "In Entwicklung – Aufnahme, Editor und Galerie folgen."
+  "app.placeholder": "In Entwicklung – Aufnahme, Editor und Galerie folgen.",
+  "update.available": "FMShot {version} ist verfügbar.",
+  "update.install": "Installieren und neu starten",
+  "update.installing": "Wird installiert …",
+  "update.later": "Später",
+  "update.failed": "Update fehlgeschlagen: {error}"
 }

@@ -41,6 +41,13 @@ jobs:
           npm run build
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: TypeScript-Bindings aktuell?
+        run: |
+          cargo test -p fmshot-desktop typescript_bindings
+          git diff --exit-code apps/desktop/src/lib/bindings.ts || {
+            echo "::error::bindings.ts ist veraltet – 'cargo test -p fmshot-desktop' ausführen und committen."
+            exit 1
+          }
       - name: Renderer als WASM bauen
         run: cargo build -p fmshot-core -p fmshot-render --target wasm32-unknown-unknown
       - uses: EmbarkStudios/cargo-deny-action@v2
