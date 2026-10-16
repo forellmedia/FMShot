@@ -1,16 +1,23 @@
 //! Registriert die globalen Tastenkürzel beim System.
 
-use fmshot_hotkeys::{Action, Platform, default_bindings};
+use fmshot_hotkeys::{Action, Platform};
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::capture;
 use crate::tray::show_main_window;
 
-pub fn register_defaults(app: &AppHandle) {
+pub fn unregister_all(app: &AppHandle) {
+    if let Err(e) = app.global_shortcut().unregister_all() {
+        log::warn!("Tastenkürzel abmelden: {e}");
+    }
+}
+
+/// Registriert die Kürzel aus den Einstellungen (vorher alle abmelden).
+pub fn register(app: &AppHandle) {
+    unregister_all(app);
     let platform = Platform::current();
-    // Bis es Einstellungen gibt: macOS-Systemkürzel nicht ersetzen (ADR/Produkt).
-    for (action, shortcut) in default_bindings(platform, false) {
+    for (action, shortcut) in crate::settings::get(app).effective_hotkeys(platform) {
         let accelerator = shortcut.accelerator(platform);
         let result = app.global_shortcut().on_shortcut(
             accelerator.as_str(),
@@ -34,6 +41,12 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
         Action::CaptureText => capture::start(app, capture::Mode::Text),
         Action::OpenGallery => show_main_window(app),
-        Action::CaptureScroll => capture::start(app, capture::Mode::Scroll),
+        Action::CaptureScroll => {
+            let mode = match crate::settings::get(app).scroll_mode {
+                fmshot_settings::ScrollMode::Manual => capture::Mode::Scroll,
+                fmshot_settings::ScrollMode::Auto => capture::Mode::ScrollAuto,
+            };
+            capture::start(app, mode)
+        }
     }
 }

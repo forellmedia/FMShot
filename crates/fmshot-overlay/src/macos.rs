@@ -18,12 +18,13 @@ use std::sync::Arc;
 use dispatch2::{DispatchQueue, MainThreadBound};
 use fmshot_core::RgbaImage;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
 };
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSCursor, NSEvent, NSPanel, NSResponder, NSScreen,
+    NSBackingStoreType, NSColor, NSCursor, NSDragOperation, NSDraggingContext, NSDraggingItem,
+    NSDraggingSession, NSDraggingSource, NSEvent, NSImage, NSPanel, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -32,15 +33,17 @@ use objc2_core_graphics::{
     CGBitmapInfo, CGColor, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
     CGImageAlphaInfo, CGImageByteOrderInfo, CGMutablePath, kCGColorSpaceSRGB,
 };
-use objc2_foundation::{NSNumber, NSObject, NSRect, NSString};
+use objc2_foundation::{
+    NSArray, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRect, NSString, NSURL,
+};
 use objc2_quartz_core::{
     CALayer, CAShapeLayer, CATextLayer, CATransaction, kCAAlignmentCenter, kCAFillRuleEvenOdd,
     kCAFilterNearest, kCAGravityResize,
 };
 
 use crate::{
-    DoneCallback, OverlayError, OverlayMode, OverlayResult, ScrollAction, Selection, WindowTarget,
-    points_to_pixels, rect_from_points, window_at,
+    DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction, PreviewPlacement,
+    ScrollAction, Selection, WindowTarget, points_to_pixels, rect_from_points, window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -909,6 +912,368 @@ pub(crate) fn open_scroll_ui(
         bar,
         status,
     })
+}
+
+// --- Schnellzugriff-Vorschau ---------------------------------------------------
+
+const PREVIEW_W: f64 = 252.0;
+const PREVIEW_IMG_MAX_H: f64 = 170.0;
+const PREVIEW_PAD: f64 = 8.0;
+const PREVIEW_BAR_H: f64 = 34.0;
+/// Ohne Maus darüber verschwindet die Vorschau nach dieser Zeit.
+const PREVIEW_SECONDS: f64 = 6.0;
+
+struct PreviewIvars {
+    on_action: Box<dyn Fn(PreviewAction)>,
+    file: String,
+    image_rect: CGRect,
+    image: CFRetained<CGImage>,
+    /// Mauszeiger über der Vorschau → nicht automatisch schliessen.
+    hovered: RefCell<bool>,
+    /// Zieh-Start (zum Unterscheiden von Klick und Ziehen).
+    down: RefCell<Option<NSPoint>>,
+    dragging: RefCell<bool>,
+    closed: RefCell<bool>,
+}
+
+define_class!(
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FMShotPreviewView"]
+    #[ivars = PreviewIvars]
+    struct PreviewView;
+
+    impl PreviewView {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            *self.ivars().hovered.borrow_mut() = true;
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            *self.ivars().hovered.borrow_mut() = false;
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let p = self.convertPoint_fromView(event.locationInWindow(), None);
+            *self.ivars().down.borrow_mut() = Some(p);
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            let iv = self.ivars();
+            let Some(start) = *iv.down.borrow() else { return };
+            if *iv.dragging.borrow() || !contains(iv.image_rect, start) {
+                return;
+            }
+            let p = self.convertPoint_fromView(event.locationInWindow(), None);
+            if (p.x - start.x).hypot(p.y - start.y) < 4.0 {
+                return;
+            }
+            *iv.dragging.borrow_mut() = true;
+            self.start_drag(event);
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, event: &NSEvent) {
+            let iv = self.ivars();
+            let start = iv.down.borrow_mut().take();
+            if *iv.dragging.borrow() {
+                return;
+            }
+            let p = self.convertPoint_fromView(event.locationInWindow(), None);
+            let Some(start) = start else { return };
+            if (p.x - start.x).hypot(p.y - start.y) > 4.0 {
+                return;
+            }
+            if let Some(action) = preview_hit(iv.image_rect, p) {
+                if action != PreviewAction::Copy && action != PreviewAction::Text {
+                    *iv.closed.borrow_mut() = true;
+                }
+                (iv.on_action)(action);
+                if *iv.closed.borrow()
+                    && let Some(w) = self.window() {
+                        w.orderOut(None);
+                    }
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for PreviewView {}
+
+    unsafe impl NSDraggingSource for PreviewView {
+        #[unsafe(method(draggingSession:sourceOperationMaskForDraggingContext:))]
+        fn source_operation_mask(
+            &self,
+            _session: &NSDraggingSession,
+            _context: NSDraggingContext,
+        ) -> NSDragOperation {
+            NSDragOperation::Copy
+        }
+
+        #[unsafe(method(draggingSession:endedAtPoint:operation:))]
+        fn ended(&self, _session: &NSDraggingSession, _point: NSPoint, operation: NSDragOperation) {
+            let iv = self.ivars();
+            *iv.dragging.borrow_mut() = false;
+            if operation != NSDragOperation::None {
+                *iv.closed.borrow_mut() = true;
+                (iv.on_action)(PreviewAction::Dragged);
+                if let Some(w) = self.window() {
+                    w.orderOut(None);
+                }
+            }
+        }
+    }
+);
+
+impl PreviewView {
+    fn start_drag(&self, event: &NSEvent) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let iv = self.ivars();
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&iv.file));
+        let writer = ProtocolObject::from_ref(&*url);
+        let item = NSDraggingItem::initWithPasteboardWriter(NSDraggingItem::alloc(), writer);
+        let r = iv.image_rect;
+        let ns_image = NSImage::initWithCGImage_size(NSImage::alloc(), &iv.image, r.size);
+        unsafe { item.setDraggingFrame_contents(r, Some(as_any(&ns_image))) };
+        let _ = mtm;
+        let source = ProtocolObject::from_ref(self);
+        self.beginDraggingSessionWithItems_event_source(
+            &NSArray::from_retained_slice(&[item]),
+            event,
+            source,
+        );
+    }
+}
+
+/// Knopf unter dem Punkt (Ansichtskoordinaten, oben links).
+fn preview_hit(image_rect: CGRect, p: NSPoint) -> Option<PreviewAction> {
+    // ✕ oben rechts auf dem Bild
+    let close = CGRect::new(
+        CGPoint::new(
+            image_rect.origin.x + image_rect.size.width - 26.0,
+            image_rect.origin.y + 4.0,
+        ),
+        CGSize::new(22.0, 22.0),
+    );
+    if contains(close, p) {
+        return Some(PreviewAction::Close);
+    }
+    if contains(image_rect, p) {
+        return Some(PreviewAction::Edit);
+    }
+    let bar_y = image_rect.origin.y + image_rect.size.height + 4.0;
+    if p.y < bar_y || p.y > bar_y + PREVIEW_BAR_H {
+        return None;
+    }
+    let w = (PREVIEW_W - 2.0 * PREVIEW_PAD) / 4.0;
+    let i = ((p.x - PREVIEW_PAD) / w).floor() as i32;
+    [
+        PreviewAction::Copy,
+        PreviewAction::Save,
+        PreviewAction::Edit,
+        PreviewAction::Text,
+    ]
+    .get(i as usize)
+    .copied()
+}
+
+thread_local! {
+    /// Offene Vorschauen (zum Stapeln in der Ecke).
+    static PREVIEWS: RefCell<Vec<Retained<OverlayPanel>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn show_preview(
+    image: Arc<RgbaImage>,
+    file: &str,
+    placement: PreviewPlacement,
+    labels: [&str; 4],
+    on_action: Box<dyn Fn(PreviewAction)>,
+) -> Result<(), OverlayError> {
+    let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
+    let screens = NSScreen::screens(mtm);
+    let main = screens.firstObject().ok_or(OverlayError::NoScreens)?;
+    let main_h = main.frame().size.height;
+
+    let (iw, ih) = (image.width() as f64, image.height() as f64);
+    let max_w = PREVIEW_W - 2.0 * PREVIEW_PAD;
+    let scale = (max_w / iw).min(PREVIEW_IMG_MAX_H / ih).min(1.0);
+    let (dw, dh) = ((iw * scale).max(40.0), (ih * scale).max(30.0));
+    let height = PREVIEW_PAD + dh + 4.0 + PREVIEW_BAR_H + PREVIEW_PAD;
+    let image_rect = CGRect::new(
+        CGPoint::new((PREVIEW_W - dw) / 2.0, PREVIEW_PAD),
+        CGSize::new(dw, dh),
+    );
+
+    // Position in Cocoa-Koordinaten (unten links).
+    let origin = match placement {
+        PreviewPlacement::At(x, y) => {
+            let cocoa = CGPoint::new(x, main_h - y);
+            let screen = screens
+                .iter()
+                .find(|s| contains(s.frame(), cocoa))
+                .unwrap_or_else(|| main.clone());
+            let vf = screen.visibleFrame();
+            // Rechts unterhalb des Punkts, ganz auf dem Monitor.
+            let px = (cocoa.x + 16.0).clamp(
+                vf.origin.x + 8.0,
+                vf.origin.x + vf.size.width - PREVIEW_W - 8.0,
+            );
+            let py = (cocoa.y - 16.0 - height).clamp(
+                vf.origin.y + 8.0,
+                vf.origin.y + vf.size.height - height - 8.0,
+            );
+            CGPoint::new(px, py)
+        }
+        PreviewPlacement::Corner => {
+            let vf = main.visibleFrame();
+            let stacked: f64 =
+                PREVIEWS.with(|p| p.borrow().iter().map(|w| w.frame().size.height + 8.0).sum());
+            CGPoint::new(
+                vf.origin.x + vf.size.width - PREVIEW_W - 16.0,
+                vf.origin.y + 16.0 + stacked,
+            )
+        }
+    };
+    let frame = NSRect::new(origin, CGSize::new(PREVIEW_W, height));
+    let panel = OverlayPanel::new(mtm, frame);
+    panel.setHasShadow(true);
+    // Nicht über allem wie das Overlay, aber über normalen Fenstern.
+    panel.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+
+    let cg = cgimage_from_rgba(image).ok_or(OverlayError::NoScreens)?;
+    let view = PreviewView::alloc(mtm).set_ivars(PreviewIvars {
+        on_action,
+        file: file.to_string(),
+        image_rect,
+        image: cg.clone(),
+        hovered: RefCell::new(false),
+        down: RefCell::new(None),
+        dragging: RefCell::new(false),
+        closed: RefCell::new(false),
+    });
+    let bounds = NSRect::new(CGPoint::new(0.0, 0.0), frame.size);
+    let view: Retained<PreviewView> = unsafe { msg_send![super(view), initWithFrame: bounds] };
+    view.setWantsLayer(true);
+    let root = view.layer().expect("Ebene");
+
+    let bg = CALayer::new();
+    bg.setFrame(bounds);
+    bg.setBackgroundColor(Some(&CGColor::new_srgb(0.12, 0.12, 0.13, 0.95)));
+    bg.setCornerRadius(12.0);
+    root.addSublayer(&bg);
+
+    let img = CALayer::new();
+    img.setFrame(image_rect);
+    img.setContentsGravity(unsafe { kCAGravityResize });
+    img.setCornerRadius(6.0);
+    img.setMasksToBounds(true);
+    set_contents(&img, &cg);
+    root.addSublayer(&img);
+
+    // ✕
+    let close_bg = CALayer::new();
+    close_bg.setFrame(CGRect::new(
+        CGPoint::new(
+            image_rect.origin.x + image_rect.size.width - 26.0,
+            image_rect.origin.y + 4.0,
+        ),
+        CGSize::new(22.0, 22.0),
+    ));
+    close_bg.setBackgroundColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, 0.6)));
+    close_bg.setCornerRadius(11.0);
+    root.addSublayer(&close_bg);
+    let scale_f = main.backingScaleFactor();
+    let text_layer = |frame: CGRect, s: &str, size: f64| {
+        let l = CATextLayer::new();
+        l.setFrame(frame);
+        l.setFontSize(size);
+        l.setAlignmentMode(unsafe { kCAAlignmentCenter });
+        l.setForegroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 1.0)));
+        l.setContentsScale(scale_f);
+        let ns = NSString::from_str(s);
+        unsafe { l.setString(Some(as_any(&ns))) };
+        l
+    };
+    root.addSublayer(&text_layer(
+        CGRect::new(
+            CGPoint::new(close_bg.frame().origin.x, close_bg.frame().origin.y + 3.0),
+            CGSize::new(22.0, 16.0),
+        ),
+        "✕",
+        12.0,
+    ));
+
+    // Knopfleiste
+    let bar_y = image_rect.origin.y + image_rect.size.height + 4.0;
+    let w = (PREVIEW_W - 2.0 * PREVIEW_PAD) / 4.0;
+    for (i, label) in labels.iter().enumerate() {
+        let x = PREVIEW_PAD + i as f64 * w;
+        let btn = CALayer::new();
+        btn.setFrame(CGRect::new(
+            CGPoint::new(x + 2.0, bar_y + 3.0),
+            CGSize::new(w - 4.0, PREVIEW_BAR_H - 6.0),
+        ));
+        btn.setBackgroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 0.1)));
+        btn.setCornerRadius(6.0);
+        root.addSublayer(&btn);
+        root.addSublayer(&text_layer(
+            CGRect::new(CGPoint::new(x, bar_y + 10.0), CGSize::new(w, 16.0)),
+            label,
+            11.5,
+        ));
+    }
+
+    panel.setContentView(Some(&view));
+    let tracking = unsafe {
+        NSTrackingArea::initWithRect_options_owner_userInfo(
+            NSTrackingArea::alloc(),
+            bounds,
+            NSTrackingAreaOptions::MouseEnteredAndExited
+                | NSTrackingAreaOptions::ActiveAlways
+                | NSTrackingAreaOptions::InVisibleRect,
+            Some(&view),
+            None,
+        )
+    };
+    view.addTrackingArea(&tracking);
+    panel.orderFrontRegardless();
+    PREVIEWS.with(|p| p.borrow_mut().push(panel.clone()));
+    schedule_preview_close(MainThreadBound::new((panel, view), mtm));
+    Ok(())
+}
+
+/// Schliesst die Vorschau nach Ablauf – verschiebt, solange die Maus darüber ist.
+fn schedule_preview_close(bound: MainThreadBound<(Retained<OverlayPanel>, Retained<PreviewView>)>) {
+    let _ = DispatchQueue::main().after(
+        dispatch2::DispatchTime::NOW.time((PREVIEW_SECONDS * 1e9) as i64),
+        move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let (panel, view) = bound.into_inner(mtm);
+            let iv = view.ivars();
+            if !*iv.closed.borrow() && (*iv.hovered.borrow() || *iv.dragging.borrow()) {
+                schedule_preview_close(MainThreadBound::new((panel, view), mtm));
+                return;
+            }
+            panel.orderOut(None);
+            PREVIEWS.with(|p| p.borrow_mut().retain(|w| !std::ptr::eq(&**w, &*panel)));
+        },
+    );
 }
 
 // --- Hinweis ---------------------------------------------------------------

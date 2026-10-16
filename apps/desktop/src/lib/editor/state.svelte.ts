@@ -1,7 +1,7 @@
 // Zustand des Editors: aktuelle Aufnahme, Dokument, Auswahl, Werkzeug, Stil,
 // Rückgängig/Wiederholen und Ansicht (Zoom/Verschieben).
 
-import { api, onCaptureSaved, type AssetInfo, type CaptureInfo, type OcrBlock } from "$lib/api";
+import { api, on, type AssetInfo, type CaptureInfo, type OcrBlock } from "$lib/api";
 import { t } from "$lib/i18n";
 import {
   bounds,
@@ -71,6 +71,9 @@ export class Editor {
   /** Erkannte Textblöcke (Werkzeug „Text kopieren“). */
   ocrBlocks = $state<OcrBlock[] | null>(null);
   busy = $state(false);
+  /** Suchbegriff der Galerie (Volltext über erkannten Text). */
+  query = $state("");
+  settingsOpen = $state(false);
   /** Kopierte Ebenen für ⌘V. */
   private layerClipboard: Layer[] = [];
   /** Zählt jede Änderung am Dokument – die Leinwand zeichnet dann neu. */
@@ -98,15 +101,20 @@ export class Editor {
   async init() {
     await this.refreshCaptures();
     if (this.captures.length && !this.current) await this.open(this.captures[0].id);
-    await onCaptureSaved(async (id) => {
+    await on<string>("capture-saved", () => this.refreshCaptures());
+    await on("library-changed", () => this.refreshCaptures());
+    await on<string>("open-capture", async (id) => {
       await this.refreshCaptures();
       await this.open(id);
     });
+    await on("open-settings", () => (this.settingsOpen = true));
   }
 
   async refreshCaptures() {
     try {
-      this.captures = await api.listCaptures();
+      this.captures = this.query.trim()
+        ? await api.searchCaptures(this.query)
+        : await api.listCaptures();
     } catch (e) {
       this.flash(String(e));
     }

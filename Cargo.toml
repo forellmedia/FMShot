@@ -17,6 +17,7 @@ fmshot-render = { path = "crates/fmshot-render" }
 fmshot-render-wasm = { path = "crates/fmshot-render-wasm" }
 fmshot-capture = { path = "crates/fmshot-capture" }
 fmshot-clipboard = { path = "crates/fmshot-clipboard" }
+fmshot-settings = { path = "crates/fmshot-settings" }
 fmshot-stitch = { path = "crates/fmshot-stitch" }
 fmshot-ocr = { path = "crates/fmshot-ocr" }
 fmshot-library = { path = "crates/fmshot-library" }

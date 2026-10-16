@@ -156,6 +156,47 @@ pub fn open_scroll_ui(
     }
 }
 
+/// Knöpfe der Schnellzugriff-Vorschau.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewAction {
+    Copy,
+    Save,
+    Edit,
+    Text,
+    Close,
+    /// Bild wurde in eine andere App gezogen.
+    Dragged,
+}
+
+/// Wo die Vorschau erscheint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PreviewPlacement {
+    /// Neben diesem Punkt (globale Punkte, Ursprung oben links).
+    At(f64, f64),
+    /// Unten rechts auf dem Hauptmonitor.
+    Corner,
+}
+
+/// Zeigt die Schnellzugriff-Vorschau. `image` ist ein Vorschaubild,
+/// `file` die Datei, die beim Ziehen übergeben wird. Schliesst sich nach
+/// einigen Sekunden von selbst, solange die Maus nicht darüber ist.
+/// Muss im Haupt-Thread laufen.
+pub fn show_preview(
+    image: Arc<RgbaImage>,
+    file: &str,
+    placement: PreviewPlacement,
+    labels: [&str; 4],
+    on_action: Box<dyn Fn(PreviewAction)>,
+) -> Result<(), OverlayError> {
+    #[cfg(target_os = "macos")]
+    return macos::show_preview(image, file, placement, labels, on_action);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (image, file, placement, labels, on_action);
+        Err(OverlayError::NotImplemented)
+    }
+}
+
 /// Kurzer Hinweis am unteren Bildschirmrand (z. B. „Text kopiert“), der von
 /// selbst verschwindet. Stiehlt keinen Fokus. Muss im Haupt-Thread laufen.
 pub fn show_toast(text: &str) {

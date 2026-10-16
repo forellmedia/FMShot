@@ -158,6 +158,44 @@ impl Library {
         Ok(hash)
     }
 
+    /// Aufnahmen, deren Text noch nicht erkannt wurde.
+    pub fn pending_ocr(&self, limit: u32) -> Result<Vec<String>> {
+        Ok(index::pending_ocr(&self.lock(), limit)?)
+    }
+
+    /// Erkannten Text für die Suche ablegen.
+    pub fn set_ocr_text(&self, id: &str, text: &str) -> Result<()> {
+        Ok(index::set_ocr_text(&self.lock(), id, text)?)
+    }
+
+    /// Volltextsuche über den erkannten Text; leere Suche = neueste.
+    pub fn search(&self, query: &str, limit: u32) -> Result<Vec<CaptureRecord>> {
+        Ok(index::search(&self.lock(), &self.root, query, limit)?)
+    }
+
+    /// Wohin die Aufnahme zuletzt automatisch exportiert wurde.
+    pub fn export_path(&self, id: &str) -> Result<Option<PathBuf>> {
+        Ok(index::export_path(&self.lock(), id)?.map(PathBuf::from))
+    }
+
+    pub fn set_export_path(&self, id: &str, path: &Path) -> Result<()> {
+        Ok(index::set_export_path(
+            &self.lock(),
+            id,
+            &path.to_string_lossy(),
+        )?)
+    }
+
+    /// Löscht Aufnahmen, die älter als `before_ms` sind und keinen Stern
+    /// haben. Gibt die Anzahl zurück.
+    pub fn purge_older_than(&self, before_ms: i64) -> Result<usize> {
+        let ids = index::expired(&self.lock(), before_ms)?;
+        for id in &ids {
+            self.delete(id)?;
+        }
+        Ok(ids.len())
+    }
+
     pub fn set_starred(&self, id: &str, starred: bool) -> Result<()> {
         Ok(index::set_starred(&self.lock(), id, starred)?)
     }
@@ -343,6 +381,56 @@ mod tests {
     }
 
     #[test]
+    fn volltextsuche_findet_erkannten_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let a = lib.save_capture(&capture(1_000)).unwrap();
+        let b = lib.save_capture(&capture(2_000)).unwrap();
+        assert_eq!(
+            lib.pending_ocr(10).unwrap(),
+            vec![b.id.clone(), a.id.clone()]
+        );
+        lib.set_ocr_text(&a.id, "Fehlermeldung: Datei nicht gefunden")
+            .unwrap();
+        lib.set_ocr_text(&b.id, "Rechnung März").unwrap();
+        assert!(lib.pending_ocr(10).unwrap().is_empty());
+        let hits = lib.search("datei gef", 10).unwrap();
+        assert_eq!(hits.iter().map(|r| &r.id).collect::<Vec<_>>(), vec![&a.id]);
+        // Umlaute: „marz“ findet „März“.
+        assert_eq!(lib.search("marz", 10).unwrap().len(), 1);
+        assert_eq!(lib.search("", 10).unwrap().len(), 2);
+        lib.delete(&a.id).unwrap();
+        assert!(lib.search("datei", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn aufbewahrung_verschont_sterne() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let old = lib.save_capture(&capture(1_000)).unwrap();
+        let star = lib.save_capture(&capture(1_500)).unwrap();
+        let new = lib.save_capture(&capture(9_000)).unwrap();
+        lib.set_starred(&star.id, true).unwrap();
+        assert_eq!(lib.purge_older_than(5_000).unwrap(), 1);
+        assert!(lib.get(&old.id).is_err());
+        assert!(lib.get(&star.id).is_ok());
+        assert!(lib.get(&new.id).is_ok());
+    }
+
+    #[test]
+    fn exportpfad_merken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let a = lib.save_capture(&capture(1_000)).unwrap();
+        assert_eq!(lib.export_path(&a.id).unwrap(), None);
+        lib.set_export_path(&a.id, Path::new("/tmp/x.png")).unwrap();
+        assert_eq!(
+            lib.export_path(&a.id).unwrap(),
+            Some(PathBuf::from("/tmp/x.png"))
+        );
+    }
+
+    #[test]
     fn alte_ordner_ablage_wird_umgezogen() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -356,7 +444,8 @@ mod tests {
         {
             let conn = index::open(&root.join(INDEX_FILE)).unwrap();
             conn.execute(
-                "INSERT INTO captures VALUES ('20261016-200122-944-0', 1, 'region', 1, 1, 2.0,
+                "INSERT INTO captures (id, created_at, mode, width, height, scale_factor, rel_dir, starred)
+                 VALUES ('20261016-200122-944-0', 1, 'region', 1, 1, 2.0,
                  '2026/10/20261016-200122-944-0', 0)",
                 [],
             )

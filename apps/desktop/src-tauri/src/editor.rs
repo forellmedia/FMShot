@@ -134,6 +134,7 @@ pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(
             }
             Err(e) => log::error!("Vorschaubild {id}: {e}"),
         }
+        crate::services::refresh_export(&app, &id);
     });
     Ok(())
 }
@@ -342,6 +343,16 @@ pub fn start_capture(app: AppHandle, mode: CaptureMode) {
         std::thread::sleep(std::time::Duration::from_millis(150));
         capture::start(&app2, mode);
     });
+}
+
+/// Fertiges Bild in voller Grösse (für Dienste ausserhalb des Editors).
+pub fn render_native(
+    app: &AppHandle,
+    lib: &Library,
+    id: &str,
+    doc: &Document,
+) -> Result<RgbaImage, String> {
+    render(lib, &app.state::<EditorState>(), id, doc, None)
 }
 
 /// Zeichnet das Dokument nativ. `max` begrenzt die Kantenlänge (Vorschau).

@@ -2,28 +2,50 @@
 //! Dieselben Dateien wie im Frontend – eine Quelle für alle Texte.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 static DE: &str = include_str!("../../src/lib/i18n/de.json");
 static EN: &str = include_str!("../../src/lib/i18n/en.json");
 
-fn messages() -> &'static HashMap<String, String> {
-    static MESSAGES: OnceLock<HashMap<String, String>> = OnceLock::new();
-    MESSAGES.get_or_init(|| {
-        let german = sys_locale::get_locale().is_some_and(|l| l.to_lowercase().starts_with("de"));
-        let mut map: HashMap<String, String> =
-            serde_json::from_str(EN).expect("en.json ist gültig");
-        if german {
-            let de: HashMap<String, String> = serde_json::from_str(DE).expect("de.json ist gültig");
-            map.extend(de);
-        }
+fn table(german: bool) -> &'static HashMap<String, String> {
+    static EN_MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
+    static DE_MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let en = EN_MAP.get_or_init(|| serde_json::from_str(EN).expect("en.json ist gültig"));
+    if !german {
+        return en;
+    }
+    DE_MAP.get_or_init(|| {
+        let mut map = en.clone();
+        let de: HashMap<String, String> = serde_json::from_str(DE).expect("de.json ist gültig");
+        map.extend(de);
         map
     })
 }
 
+/// Sprache aus den Einstellungen (`None` = System).
+static LANGUAGE: RwLock<Option<String>> = RwLock::new(None);
+
+pub fn set_language(lang: Option<&str>) {
+    *LANGUAGE.write().unwrap_or_else(|e| e.into_inner()) = lang.map(str::to_string);
+}
+
+fn german() -> bool {
+    match LANGUAGE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_deref()
+    {
+        Some(l) => l.starts_with("de"),
+        None => sys_locale::get_locale().is_some_and(|l| l.to_lowercase().starts_with("de")),
+    }
+}
+
 /// Text zum Schlüssel; `{name}` wird durch den passenden Parameter ersetzt.
 pub fn t(key: &str, params: &[(&str, &str)]) -> String {
-    let mut text = messages().get(key).cloned().unwrap_or_else(|| key.into());
+    let mut text = table(german())
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.into());
     for (name, value) in params {
         text = text.replace(&format!("{{{name}}}"), value);
     }

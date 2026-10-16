@@ -39,6 +39,25 @@ export const commands = {
 	revealCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("reveal_capture", { id })),
 	/**  Aufnahme aus der Oberfläche starten (z. B. Knopf im Editor). */
 	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),
+	getSettings: () => __TAURI_INVOKE<Settings>("get_settings"),
+	/**  Speichert und wendet sofort an (Tastenkürzel, Sprache, Tray-Menü). */
+	setSettings: (settings: Settings) => typedError<null, string>(__TAURI_INVOKE("set_settings", { settings })),
+	/**  Aktuelle Belegung inklusive Konflikten. */
+	getHotkeys: () => __TAURI_INVOKE<HotkeyInfo[]>("get_hotkeys"),
+	/**  Wandelt ein Kürzel ins Anzeigeformat (für das Aufnahme-Feld). */
+	shortcutLabel: (shortcut: string) => typedError<string, string>(__TAURI_INVOKE("shortcut_label", { shortcut })),
+	/**  Während ein neues Kürzel aufgenommen wird, dürfen die alten nicht auslösen. */
+	pauseHotkeys: (paused: boolean) => __TAURI_INVOKE<void>("pause_hotkeys", { paused }),
+	/**  Ordner für den Auto-Export wählen. */
+	chooseFolder: () => __TAURI_INVOKE<string | null>("choose_folder"),
+	getDiagnostics: () => __TAURI_INVOKE<Diagnostics>("get_diagnostics"),
+	/**  Volltextsuche über den erkannten Text. */
+	searchCaptures: (query: string) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("search_captures", { query })),
+	/**
+	 *  „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.
+	 *  Der Nutzer sieht alles und schickt es selbst ab – ohne Screenshots.
+	 */
+	reportBug: () => typedError<null, string>(__TAURI_INVOKE("report_bug")),
 	/**  Prüft, ob eine neuere Version veröffentlicht ist. */
 	checkForUpdate: () => typedError<{
 	version: string,
@@ -51,6 +70,15 @@ export const commands = {
 };
 
 /* Types */
+/**  Was nach einer Aufnahme passiert (Produkt: A, B, C). */
+export type AfterCapture = 
+/**  Editor öffnen. */
+"editor" | 
+/**  Nur in die Zwischenablage. */
+"clipboard" | 
+/**  Schnellzugriff-Vorschau. */
+"preview";
+
 export type AppInfo = {
 	version: string,
 	/**  `macos`, `windows` oder `linux` */
@@ -79,6 +107,16 @@ export type AssetRef =
 /**  Hineingezogenes Bild (Hash des Inhalts). */
 { source: "asset"; hash: string };
 
+/**  Jede Aufnahme zusätzlich als Datei in einen Ordner schreiben. */
+export type AutoExport = {
+	enabled?: boolean,
+	/**  `None` = Schreibtisch. */
+	folder?: string | null,
+	/**  Platzhalter: `{date}`, `{time}`, `{id}`, `{mode}`. */
+	pattern?: string,
+	format?: ImageFormat,
+};
+
 /**  Eine Aufnahme für Galerie und Editor. */
 export type CaptureInfo = {
 	id: string,
@@ -104,6 +142,15 @@ export type Color = {
 	g: number,
 	b: number,
 	a: number,
+};
+
+export type Diagnostics = {
+	version: string,
+	platform: string,
+	library: string,
+	logFile: string,
+	/**  Letzte Messwerte, neueste zuerst. */
+	timings: string[],
 };
 
 /**
@@ -151,6 +198,20 @@ export type ExportFormat = "png" | "jpg";
 export type Fill = { type: "solid"; color: Color } | 
 /**  Linearer Verlauf; `angle` in Grad, 0 = von links nach rechts. */
 { type: "linear_gradient"; from: Color; to: Color; angle: number | null };
+
+/**  Ein Tastenkürzel für die Einstellungen. */
+export type HotkeyInfo = {
+	/**  Schlüssel wie in `Settings::hotkeys`. */
+	action: string,
+	/**  Gespeichertes Format (`Primary+Shift+2`), leer = keines. */
+	shortcut: string,
+	/**  Anzeige für Menschen (`⇧⌘2`). */
+	label: string,
+	/**  Kollidiert mit einem anderen Kürzel. */
+	conflict: boolean,
+};
+
+export type ImageFormat = "png" | "jpg";
 
 export type Layer = Layer_Serialize | Layer_Deserialize;
 
@@ -219,11 +280,36 @@ export type Point = {
 	y: number | null,
 };
 
+export type PreviewPosition = 
+/**  Dort, wo die Auswahl losgelassen wurde. */
+"mouse" | 
+/**  Unten rechts auf dem Hauptmonitor. */
+"corner";
+
 export type Rect = {
 	x: number | null,
 	y: number | null,
 	width: number | null,
 	height: number | null,
+};
+
+export type ScrollMode = "manual" | "auto";
+
+export type Settings = {
+	/**  `None` = Sprache des Systems; sonst `de` oder `en`. */
+	language?: string | null,
+	after_capture?: AfterCapture,
+	preview_position?: PreviewPosition,
+	/**  Aufnahme immer sofort in die Zwischenablage legen. */
+	copy_to_clipboard?: boolean,
+	scroll_mode?: ScrollMode,
+	/**  Tastenkürzel im Textformat (`Primary+Shift+2`); leer = keines. */
+	hotkeys?: { [key in string]: string },
+	/**  macOS: ⌘⇧3/4/5 statt der Ausweichkürzel ⌘⌥3/4/5. */
+	replace_mac_system_shortcuts?: boolean,
+	auto_export?: AutoExport,
+	/**  Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie. */
+	retention_days?: number | null,
 };
 
 /**  Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund). */

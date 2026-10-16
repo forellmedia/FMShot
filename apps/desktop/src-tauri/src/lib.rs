@@ -7,12 +7,14 @@ mod editor;
 mod hotkeys;
 mod i18n;
 mod scroll;
+mod services;
+mod settings;
 mod tray;
 mod updater;
 
 use std::sync::Arc;
 
-use fmshot_library::{CaptureRecord, Library};
+use fmshot_library::Library;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_specta::{Builder, collect_commands};
 
@@ -36,6 +38,15 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         editor::set_starred,
         editor::reveal_capture,
         editor::start_capture,
+        settings::get_settings,
+        settings::set_settings,
+        settings::get_hotkeys,
+        settings::shortcut_label,
+        settings::pause_hotkeys,
+        settings::choose_folder,
+        services::get_diagnostics,
+        services::search_captures,
+        services::report_bug,
         updater::check_for_update,
         updater::install_update,
     ])
@@ -45,6 +56,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
 pub fn run() {
     let builder = specta_builder();
     tauri::Builder::default()
+        // Zweiter Start (z. B. `FMShot capture region`): an die laufende App
+        // weiterreichen statt ein zweites Tray-Symbol zu öffnen.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            handle_args(app, &argv);
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -62,6 +78,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            let config = app.path().app_config_dir()?.join("settings.json");
+            app.manage(settings::SettingsState::load(config));
+            i18n::set_language(settings::get(app.handle()).language.as_deref());
+
             let root = app.path().app_data_dir()?.join("Library");
             let library = Arc::new(Library::open(&root)?);
             log::info!("Bibliothek: {}", root.display());
@@ -72,9 +92,14 @@ pub fn run() {
 
             app.manage(editor::EditorState::new());
             app.manage(scroll::ScrollState::default());
+            app.manage(services::Services::new());
             app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
-            hotkeys::register_defaults(app.handle());
+            hotkeys::register(app.handle());
+            services::start(app.handle());
+            // Erster Start mit Argumenten (z. B. aus der Kommandozeile).
+            let argv: Vec<String> = std::env::args().collect();
+            handle_args(app.handle(), &argv);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -88,12 +113,31 @@ pub fn run() {
         .expect("FMShot konnte nicht gestartet werden");
 }
 
-/// Nach jeder gespeicherten Aufnahme: Editor mit der Aufnahme zeigen.
-pub(crate) fn after_capture(app: &tauri::AppHandle, rec: &CaptureRecord) {
-    if let Err(e) = app.emit("capture-saved", rec.id.clone()) {
-        log::error!("Ereignis capture-saved: {e}");
+/// Befehle aus der Kommandozeile: `capture region|screen|window|scroll|text`
+/// oder `gallery`.
+fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
+    let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+    let mode = match args.as_slice() {
+        ["capture", "region", ..] => Some(capture::Mode::Region),
+        ["capture", "screen", ..] => Some(capture::Mode::Screen),
+        ["capture", "window", ..] => Some(capture::Mode::Window),
+        ["capture", "scroll", ..] => Some(capture::Mode::Scroll),
+        ["capture", "text", ..] => Some(capture::Mode::Text),
+        ["gallery", ..] => {
+            tray::show_main_window(app);
+            None
+        }
+        _ => None,
+    };
+    if let Some(mode) = mode {
+        let app = app.clone();
+        // Etwas warten, falls die App gerade erst startet.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            capture::start(&app, mode);
+        });
     }
-    tray::show_main_window(app);
+    let _ = app.emit("cli", args.join(" "));
 }
 
 #[cfg(test)]

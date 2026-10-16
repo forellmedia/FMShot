@@ -1,5 +1,16 @@
-// Tauri doesn't have a Node.js server to do proper SSR
-// so we use adapter-static with a fallback to index.html to put the site in SPA mode
-// See: https://svelte.dev/docs/kit/single-page-apps
-// See: https://v2.tauri.app/start/frontend/sveltekit/ for more info
+// Tauri hat keinen Node-Server – SvelteKit läuft als SPA (adapter-static).
+// Siehe https://svelte.dev/docs/kit/single-page-apps
+import { api } from "$lib/api";
+import { setLocale } from "$lib/i18n";
+
 export const ssr = false;
+
+/** Sprache aus den Einstellungen setzen, bevor etwas angezeigt wird. */
+export async function load() {
+  try {
+    const settings = await api.getSettings();
+    if (settings.language === "de" || settings.language === "en") setLocale(settings.language);
+  } catch {
+    // Ohne Einstellungen: Systemsprache.
+  }
+}

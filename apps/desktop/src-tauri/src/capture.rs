@@ -157,9 +157,12 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
         match result {
             Ok(handle) => {
                 OVERLAY.with(|o| *o.borrow_mut() = Some(handle));
-                log::info!(
-                    "Overlay sichtbar nach {:.1} ms",
-                    started.elapsed().as_secs_f64() * 1000.0
+                crate::services::timing(
+                    &app_main,
+                    format!(
+                        "Taste → Overlay sichtbar: {:.0} ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    ),
                 );
             }
             Err(e) => {
@@ -180,9 +183,12 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
         let state = app.state::<CaptureState>();
         match state.capturer.capture_all() {
             Ok(frames) => {
-                log::info!(
-                    "Bildschirme eingefroren nach {:.1} ms",
-                    started.elapsed().as_secs_f64() * 1000.0
+                crate::services::timing(
+                    &app,
+                    format!(
+                        "Taste → Bildschirm eingefroren: {:.0} ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    ),
                 );
                 let images: Vec<(u32, Arc<RgbaImage>)> = frames
                     .iter()
@@ -376,25 +382,35 @@ fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32) {
     let app = app.clone();
     std::thread::spawn(move || {
         let library = app.state::<CaptureState>().library.clone();
-        if let Some(rec) = save_and_copy(&library, capture) {
-            crate::after_capture(&app, &rec);
+        let copy = crate::settings::get(&app).copy_to_clipboard;
+        if let Some(rec) = save_and_copy(&app, &library, &capture, copy) {
+            crate::services::after_capture(&app, &rec, &capture.image, mode);
         }
     });
 }
 
 /// Zwischenablage und Bibliothek.
-pub fn save_and_copy(library: &Library, capture: NewCapture) -> Option<CaptureRecord> {
+pub fn save_and_copy(
+    app: &AppHandle,
+    library: &Library,
+    capture: &NewCapture,
+    copy: bool,
+) -> Option<CaptureRecord> {
     let start = Instant::now();
-    copy_to_clipboard(&capture.image, capture.scale_factor);
+    if copy {
+        copy_to_clipboard(&capture.image, capture.scale_factor);
+    }
     let copied = start.elapsed().as_secs_f64() * 1000.0;
-    match library.save_capture(&capture) {
+    match library.save_capture(capture) {
         Ok(rec) => {
-            log::info!(
-                "Aufnahme {} ({}×{}) – Zwischenablage {copied:.1} ms, gespeichert nach {:.1} ms",
-                rec.id,
-                rec.width,
-                rec.height,
-                start.elapsed().as_secs_f64() * 1000.0
+            crate::services::timing(
+                app,
+                format!(
+                    "Aufnahme {}×{}: Zwischenablage {copied:.0} ms, gespeichert nach {:.0} ms",
+                    rec.width,
+                    rec.height,
+                    start.elapsed().as_secs_f64() * 1000.0
+                ),
             );
             Some(rec)
         }

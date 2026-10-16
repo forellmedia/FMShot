@@ -1375,6 +1375,7 @@ dependencies = [
  "fmshot-ocr",
  "fmshot-overlay",
  "fmshot-render",
+ "fmshot-settings",
  "fmshot-stitch",
  "log",
  "serde",
@@ -1388,6 +1389,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-specta",
 ]
@@ -1465,6 +1467,18 @@ dependencies = [
  "fmshot-render",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "fmshot-settings"
+version = "0.1.0"
+dependencies = [
+ "fmshot-hotkeys",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4962,6 +4976,22 @@ dependencies = [
  "thiserror 2.0.21",
  "url",
  "windows",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561cd99484561bc39c954768e7b41a66cebbe1ac3d9d081c34361f740c489e2c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 

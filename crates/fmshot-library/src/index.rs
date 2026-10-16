@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 
-/// 1: ein Ordner pro Aufnahme · 2: flache Monatsordner
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+/// 1: ein Ordner pro Aufnahme · 2: flache Monatsordner · 3: Suche, Export
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 /// Eine Aufnahme, wie die Galerie sie braucht.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +41,91 @@ pub(crate) fn open(path: &Path) -> rusqlite::Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS captures_created ON captures(created_at DESC);",
     )?;
+    add_column(&conn, "ocr_done", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column(&conn, "export_path", "TEXT")?;
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS captures_fts USING fts5(
+            id UNINDEXED,
+            text,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );",
+    )?;
     Ok(conn)
+}
+
+fn add_column(conn: &Connection, name: &str, def: &str) -> rusqlite::Result<()> {
+    let exists: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('captures') WHERE name = ?1")?
+        .exists([name])?;
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE captures ADD COLUMN {name} {def}"))?;
+    }
+    Ok(())
+}
+
+/// Aufnahmen ohne Texterkennung, neueste zuerst.
+pub(crate) fn pending_ocr(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id FROM captures WHERE ocr_done = 0 ORDER BY created_at DESC LIMIT ?1",
+    )?;
+    stmt.query_map([limit], |r| r.get(0))?.collect()
+}
+
+pub(crate) fn set_ocr_text(conn: &Connection, id: &str, text: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM captures_fts WHERE id = ?1", [id])?;
+    conn.execute(
+        "INSERT INTO captures_fts (id, text) VALUES (?1, ?2)",
+        params![id, text],
+    )?;
+    conn.execute("UPDATE captures SET ocr_done = 1 WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Volltextsuche; jedes Wort muss (als Wortanfang) vorkommen.
+pub(crate) fn search(
+    conn: &Connection,
+    root: &Path,
+    query: &str,
+    limit: u32,
+) -> rusqlite::Result<Vec<CaptureRecord>> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|w| w.replace('"', ""))
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{w}\"*"))
+        .collect();
+    if terms.is_empty() {
+        return recent(conn, root, limit);
+    }
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM captures WHERE id IN
+           (SELECT id FROM captures_fts WHERE captures_fts MATCH ?1)
+         ORDER BY created_at DESC LIMIT ?2"
+    ))?;
+    stmt.query_map(params![terms.join(" "), limit], |r| row(root, r))?
+        .collect()
+}
+
+pub(crate) fn set_export_path(conn: &Connection, id: &str, path: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE captures SET export_path = ?2 WHERE id = ?1",
+        params![id, path],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn export_path(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT export_path FROM captures WHERE id = ?1",
+        [id],
+        |r| r.get(0),
+    )
+}
+
+/// IDs älter als `before_ms`, ohne Stern.
+pub(crate) fn expired(conn: &Connection, before_ms: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM captures WHERE created_at < ?1 AND starred = 0")?;
+    stmt.query_map([before_ms], |r| r.get(0))?.collect()
 }
 
 pub(crate) fn version(conn: &Connection) -> rusqlite::Result<i64> {
@@ -124,6 +208,7 @@ pub(crate) fn get(
 
 pub(crate) fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM captures WHERE id = ?1", [id])?;
+    conn.execute("DELETE FROM captures_fts WHERE id = ?1", [id])?;
     Ok(())
 }
 

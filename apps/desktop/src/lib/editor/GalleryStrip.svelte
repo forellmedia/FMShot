@@ -25,6 +25,13 @@
     if (c) await fn(c);
   }
 
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  function onSearch(e: Event) {
+    editor.query = (e.currentTarget as HTMLInputElement).value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => editor.refreshCaptures(), 200);
+  }
+
   function time(ms: number | null) {
     return ms ? new Date(ms).toLocaleString() : "";
   }
@@ -33,6 +40,7 @@
 <svelte:window onclick={() => (menu = null)} />
 
 <section class="strip" aria-label={t("gallery.title")}>
+  <input class="search" type="search" placeholder={t("gallery.search")} value={editor.query} oninput={onSearch} />
   {#each editor.captures as c (c.id)}
     <button
       class="thumb"
@@ -76,6 +84,17 @@
     border-top: 1px solid var(--border);
     min-height: 92px;
     align-items: center;
+  }
+  .search {
+    flex: none;
+    width: 180px;
+    align-self: center;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
   }
   .thumb {
     position: relative;

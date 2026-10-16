@@ -7,11 +7,14 @@ import {
   type AssetInfo,
   type CaptureInfo,
   type CaptureMode,
+  type Diagnostics,
   type ExportFormat,
+  type HotkeyInfo,
+  type Settings,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo };
+export type { AssetInfo, CaptureInfo, Diagnostics, HotkeyInfo, Settings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -69,13 +72,32 @@ export const api = {
     isTauri ? unwrap(commands.revealCapture(id)) : Promise.resolve(null),
   startCapture: (mode: CaptureMode): Promise<void> =>
     isTauri ? commands.startCapture(mode) : Promise.resolve(),
+  searchCaptures: (query: string): Promise<CaptureInfo[]> =>
+    isTauri ? unwrap(commands.searchCaptures(query)) : mock.search(query),
+  getSettings: (): Promise<Settings> =>
+    isTauri ? commands.getSettings() : Promise.resolve(mock.settings),
+  setSettings: (settings: Settings): Promise<null> =>
+    isTauri ? unwrap(commands.setSettings(settings)) : Promise.resolve((mock.settings = settings, null)),
+  getHotkeys: (): Promise<HotkeyInfo[]> => (isTauri ? commands.getHotkeys() : Promise.resolve(mock.hotkeys)),
+  shortcutLabel: (shortcut: string): Promise<string> =>
+    isTauri ? unwrap(commands.shortcutLabel(shortcut)) : Promise.resolve(shortcut),
+  pauseHotkeys: (paused: boolean): Promise<void> =>
+    isTauri ? commands.pauseHotkeys(paused) : Promise.resolve(),
+  chooseFolder: (): Promise<string | null> =>
+    isTauri ? commands.chooseFolder() : Promise.resolve("/Users/beispiel/Desktop/Screenshots"),
+  diagnostics: (): Promise<Diagnostics> =>
+    isTauri
+      ? commands.getDiagnostics()
+      : Promise.resolve({ version: "0.1.0", platform: "browser", library: "-", logFile: "-", timings: ["Taste → Overlay sichtbar: 18 ms"] }),
+  reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
+  appInfo: () => (isTauri ? commands.appInfo() : Promise.resolve({ version: "0.1.0", platform: "browser", arch: "" })),
 };
 
-/** Ereignisse aus dem Backend (z. B. neue Aufnahme gespeichert). */
-export async function onCaptureSaved(handler: (id: string) => void): Promise<() => void> {
+/** Ereignis aus dem Backend abonnieren (in der Attrappe: nie). */
+export async function on<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
   if (!isTauri) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
-  return listen<string>("capture-saved", (e) => handler(e.payload));
+  return listen<T>(event, (e) => handler(e.payload));
 }
 
 // --- Attrappe für den Browser ---------------------------------------------------
@@ -132,6 +154,29 @@ const mock = (() => {
   }
 
   return {
+    settings: {
+      language: null,
+      after_capture: "preview",
+      preview_position: "mouse",
+      copy_to_clipboard: true,
+      scroll_mode: "manual",
+      hotkeys: {},
+      replace_mac_system_shortcuts: false,
+      auto_export: { enabled: false, folder: null, pattern: "FMShot {date} {time}", format: "png" },
+      retention_days: null,
+    } as Settings,
+    hotkeys: [
+      { action: "capture_region", shortcut: "Primary+Shift+2", label: "⇧⌘2", conflict: false },
+      { action: "capture_screen", shortcut: "Primary+Shift+1", label: "⇧⌘1", conflict: false },
+      { action: "capture_window", shortcut: "Primary+Alt+3", label: "⌥⌘3", conflict: false },
+      { action: "capture_scroll", shortcut: "Primary+Alt+4", label: "⌥⌘4", conflict: false },
+      { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
+      { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
+    ] as HotkeyInfo[],
+    async search(query: string) {
+      ensure();
+      return captures.filter((c) => !query || c.id.includes(query) || "lorem fehler".includes(query.toLowerCase()));
+    },
     fileUrl: (path: string) => {
       const asset = /_asset_(.+)\.png$/.exec(path);
       return (asset ? images.get(`mock/${asset[1]}`) : images.get(path)) ?? path;

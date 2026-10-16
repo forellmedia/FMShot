@@ -10,6 +10,7 @@
   import { translate } from "./model";
   import { LAYER_MARKER } from "./clipboard";
   import PropertiesBar from "./PropertiesBar.svelte";
+  import Settings from "./Settings.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { toolByKey } from "./tools";
 
@@ -25,7 +26,14 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (isTyping(e) || !editor.doc) return;
+    if (isTyping(e) || editor.settingsOpen) return;
+    const modKey = e.metaKey || e.ctrlKey;
+    if (modKey && e.key === ",") {
+      e.preventDefault();
+      editor.settingsOpen = true;
+      return;
+    }
+    if (!editor.doc) return;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
     if (mod) {
@@ -135,6 +143,9 @@
       >
         <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
       </button>
+      <button title={t("editor.settings")} onclick={() => (editor.settingsOpen = true)}>
+        <Icon d="M12 9a3 3 0 110 6 3 3 0 010-6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z" />
+      </button>
     </div>
   </header>
 
@@ -159,6 +170,10 @@
   </main>
 
   <GalleryStrip />
+
+  {#if editor.settingsOpen}
+    <Settings />
+  {/if}
 
   {#if editor.message}
     <div class="toast" role="status">{editor.message}</div>
