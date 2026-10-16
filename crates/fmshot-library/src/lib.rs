@@ -21,7 +21,7 @@ mod store;
 
 use std::path::{Path, PathBuf};
 
-pub use encode::{encode_png, thumbnail};
+pub use encode::{encode_jpeg, encode_png, thumbnail};
 pub use index::CaptureRecord;
 pub use store::{Library, LibraryError, NewCapture};
 

@@ -15,6 +15,9 @@ ignore = [
   # Nur „unmaintained“: paste ist ein Proc-Macro (nur zur Compile-Zeit) und
   # kommt über specta (tauri-specta).
   { id = "RUSTSEC-2024-0436", reason = "transitiv über specta, nur Compile-Zeit" },
+  # Nur „unmaintained“: ttf-parser kommt über fontdb (cosmic-text) und liest
+  # ausschliesslich die mitgelieferte Schrift Inter, keine fremden Dateien.
+  { id = "RUSTSEC-2026-0192", reason = "über fontdb, liest nur mitgelieferte Schriften" },
 ]
 
 [licenses]
@@ -39,6 +42,9 @@ allow = [
   # erlaubt, nur Änderungen an MPL-Dateien selbst müssen offengelegt werden.
   # Wird von Tauri-Abhängigkeiten (z. B. cssparser) benötigt.
   "MPL-2.0",
+  # Independent JPEG Group: freizügig, verlangt nur einen Hinweis in der
+  # Dokumentation („based in part on the work of the IJG“). jpeg-encoder.
+  "IJG",
 ]
 
 [licenses.private]

@@ -3,6 +3,7 @@
 
 mod capture;
 mod commands;
+mod editor;
 mod hotkeys;
 mod i18n;
 mod tray;
@@ -19,6 +20,17 @@ use tauri_specta::{Builder, collect_commands};
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::app_info,
+        editor::list_captures,
+        editor::get_capture,
+        editor::load_document,
+        editor::save_document,
+        editor::copy_document,
+        editor::export_document,
+        editor::add_asset,
+        editor::delete_capture,
+        editor::set_starred,
+        editor::reveal_capture,
+        editor::start_capture,
         updater::check_for_update,
         updater::install_update,
     ])
@@ -53,6 +65,7 @@ pub fn run() {
                 library,
             ));
 
+            app.manage(editor::EditorState::new());
             app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
             hotkeys::register_defaults(app.handle());
@@ -62,7 +75,7 @@ pub fn run() {
             // Fenster schliessen = verstecken; die App läuft im Tray weiter.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                tray::hide_main_window(window.app_handle());
             }
         })
         .run(tauri::generate_context!())

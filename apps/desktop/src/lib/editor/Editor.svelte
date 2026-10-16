@@ -1,0 +1,265 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { api } from "$lib/api";
+  import { t } from "$lib/i18n";
+  import Canvas from "./Canvas.svelte";
+  import { editor } from "./state.svelte";
+  import GalleryStrip from "./GalleryStrip.svelte";
+  import Icon from "./Icon.svelte";
+  import LayersPanel from "./LayersPanel.svelte";
+  import { translate } from "./model";
+  import PropertiesBar from "./PropertiesBar.svelte";
+  import Toolbar from "./Toolbar.svelte";
+  import { toolByKey } from "./tools";
+
+  onMount(() => {
+    editor.init();
+  });
+
+  function isTyping(e: KeyboardEvent) {
+    const el = e.target as HTMLElement | null;
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (isTyping(e) || !editor.doc) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (mod) {
+      const actions: Record<string, () => void> = {
+        z: () => (e.shiftKey ? editor.redo() : editor.undo()),
+        y: () => editor.redo(),
+        c: () => editor.copy(),
+        s: () => editor.exportAs(e.shiftKey ? "jpg" : "png"),
+        "0": () => editor.fit(),
+        "1": () => editor.actualSize(),
+        "=": () => editor.zoomAt(1.25),
+        "+": () => editor.zoomAt(1.25),
+        "-": () => editor.zoomAt(0.8),
+      };
+      const action = actions[key];
+      if (action) {
+        e.preventDefault();
+        action();
+      }
+      return;
+    }
+    if (key === "backspace" || key === "delete") {
+      e.preventDefault();
+      editor.deleteSelected();
+      return;
+    }
+    if (key === "escape") {
+      editor.selectedId = null;
+      return;
+    }
+    const arrows: Record<string, [number, number]> = {
+      arrowleft: [-1, 0],
+      arrowright: [1, 0],
+      arrowup: [0, -1],
+      arrowdown: [0, 1],
+    };
+    const sel = editor.selected;
+    if (arrows[key] && sel && !sel.locked) {
+      e.preventDefault();
+      const step = (e.shiftKey ? 10 : 1) * editor.ratio;
+      const [dx, dy] = arrows[key];
+      editor.updateLayer(sel.id, (l) => (l.kind = translate(l.kind, dx * step, dy * step)));
+      return;
+    }
+    const tool = toolByKey(key);
+    if (tool) {
+      editor.tool = tool.id;
+      if (tool.id !== "select") editor.selectedId = null;
+    }
+  }
+
+  const zoomPercent = $derived(Math.round(editor.zoom * editor.ratio * 100));
+</script>
+
+<svelte:window onkeydown={onKeyDown} />
+
+<div class="editor">
+  <header>
+    <div class="capture">
+      <button title={t("capture.region")} onclick={() => api.startCapture("region")}>
+        <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
+      </button>
+      <button title={t("capture.window")} onclick={() => api.startCapture("window")}>
+        <Icon d="M3 5h18v14H3zM3 9h18" />
+      </button>
+      <button title={t("capture.screen")} onclick={() => api.startCapture("screen")}>
+        <Icon d="M3 4h18v12H3zM8 20h8M12 16v4" />
+      </button>
+    </div>
+    <PropertiesBar />
+    <div class="actions">
+      <button title="{t('editor.undo')} (⌘Z)" disabled={!editor.canUndo} onclick={() => editor.undo()}>
+        <Icon d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3" />
+      </button>
+      <button title="{t('editor.redo')} (⇧⌘Z)" disabled={!editor.canRedo} onclick={() => editor.redo()}>
+        <Icon d="M15 14l5-5-5-5M20 9H9a5 5 0 000 10h3" />
+      </button>
+      <span class="sep"></span>
+      <button title={t("editor.zoom_out")} onclick={() => editor.zoomAt(0.8)}><Icon d="M5 12h14" /></button>
+      <button class="zoom" title={t("editor.zoom_fit")} onclick={() => editor.fit()}>{zoomPercent}%</button>
+      <button title={t("editor.zoom_in")} onclick={() => editor.zoomAt(1.25)}><Icon d="M5 12h14M12 5v14" /></button>
+      <span class="sep"></span>
+      <button class="text" title="⌘C" onclick={() => editor.copy()} disabled={!editor.doc}>{t("editor.copy")}</button>
+      <button class="text" title="⌘S" onclick={() => editor.exportAs("png")} disabled={!editor.doc}>PNG</button>
+      <button class="text" title="⇧⌘S" onclick={() => editor.exportAs("jpg")} disabled={!editor.doc}>JPG</button>
+      <button
+        title={t("layers.title")}
+        class:on={editor.layersPanel}
+        onclick={() => (editor.layersPanel = !editor.layersPanel)}
+      >
+        <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <Toolbar />
+    {#if editor.doc}
+      <Canvas />
+    {:else}
+      <div class="start">
+        <h1>FMShot</h1>
+        <p>{t("start.hint")}</p>
+        <div class="start-buttons">
+          <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>
+          <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>⌥⌘3</kbd></button>
+          <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>⇧⌘1</kbd></button>
+        </div>
+      </div>
+    {/if}
+    {#if editor.layersPanel && editor.doc}
+      <LayersPanel />
+    {/if}
+  </main>
+
+  <GalleryStrip />
+
+  {#if editor.message}
+    <div class="toast" role="status">{editor.message}</div>
+  {/if}
+</div>
+
+<style>
+  .editor {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 6px var(--space-3);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
+  }
+  header :global(.props) {
+    flex: 1;
+  }
+  .capture,
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+  }
+  header button {
+    display: grid;
+    place-items: center;
+    min-width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  header button:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  header button:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  header button.text {
+    padding: 0 8px;
+  }
+  header button.zoom {
+    min-width: 52px;
+    font-variant-numeric: tabular-nums;
+  }
+  header button.on {
+    background: var(--hover);
+  }
+  .sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 6px;
+  }
+  main {
+    display: flex;
+    min-height: 0;
+  }
+  main > :global(.canvas) {
+    flex: 1;
+  }
+  .start {
+    flex: 1;
+    display: grid;
+    place-content: center;
+    text-align: center;
+    gap: var(--space-3);
+    background: var(--canvas-bg);
+  }
+  .start h1 {
+    margin: 0;
+    font-size: 32px;
+  }
+  .start p {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .start-buttons {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: center;
+    margin-top: var(--space-3);
+  }
+  .start-buttons button {
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  kbd {
+    margin-left: 6px;
+    color: var(--text-muted);
+    font-family: inherit;
+  }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 112px;
+    transform: translateX(-50%);
+    padding: 8px 16px;
+    border-radius: 8px;
+    background: rgb(30 30 30 / 0.92);
+    color: #fff;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);
+    z-index: 30;
+    max-width: 80vw;
+  }
+</style>

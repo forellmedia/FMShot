@@ -24,6 +24,8 @@ export default defineConfig(() => ({
           port: 1421,
         }
       : undefined,
+    // Schriften liegen beim Renderer (crates/fmshot-render/fonts).
+    fs: { allow: ["..", "../../crates/fmshot-render/fonts"] },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

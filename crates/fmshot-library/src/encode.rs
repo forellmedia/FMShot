@@ -22,6 +22,26 @@ pub fn encode_png(image: &RgbaImage, scale_factor: f32) -> Result<Vec<u8>, png::
     Ok(out)
 }
 
+/// JPEG für den Export. Durchsichtige Stellen werden auf Weiss gesetzt.
+pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>, String> {
+    let mut rgb = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
+    for px in image.data().as_chunks::<4>().0 {
+        let a = px[3] as u32;
+        for c in &px[..3] {
+            rgb.push(((*c as u32 * a + 255 * (255 - a) + 127) / 255) as u8);
+        }
+    }
+    let mut out = Vec::new();
+    let enc = jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100));
+    let (w, h) = (image.width(), image.height());
+    if w > u16::MAX as u32 || h > u16::MAX as u32 {
+        return Err("Bild ist für JPEG zu gross (max. 65535 px)".into());
+    }
+    enc.encode(&rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Verkleinert auf höchstens `max` Pixel an der längsten Kante (Flächenmittel).
 /// Kleinere Bilder bleiben unverändert.
 pub fn thumbnail(image: &RgbaImage, max: u32) -> RgbaImage {
@@ -84,6 +104,12 @@ mod tests {
         let t = thumbnail(&RgbaImage::filled(1000, 500, [10, 20, 30, 255]), 320);
         assert_eq!((t.width(), t.height()), (320, 160));
         assert_eq!(t.pixel(100, 100), Some([10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn jpeg_beginnt_mit_signatur() {
+        let jpg = encode_jpeg(&RgbaImage::filled(8, 8, [10, 20, 30, 128]), 90).unwrap();
+        assert_eq!(&jpg[..2], &[0xFF, 0xD8]);
     }
 
     #[test]

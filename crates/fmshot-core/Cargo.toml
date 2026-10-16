@@ -11,8 +11,13 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# TypeScript-Typen für das Frontend (tauri-specta)
+specta = ["dep:specta"]
+
 [dependencies]
 serde.workspace = true
+specta = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]

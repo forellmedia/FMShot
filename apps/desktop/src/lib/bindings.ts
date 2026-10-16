@@ -8,6 +8,30 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	/**  Version und Plattform – für „Über FMShot“ und „Fehler melden“. */
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
+	/**  Neueste Aufnahmen zuerst. */
+	listCaptures: (limit: number) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("list_captures", { limit })),
+	getCapture: (id: string) => typedError<CaptureInfo, string>(__TAURI_INVOKE("get_capture", { id })),
+	loadDocument: (id: string) => typedError<Document_Serialize, string>(__TAURI_INVOKE("load_document", { id })),
+	/**
+	 *  Speichert das Dokument sofort; das Vorschaubild wird im Hintergrund neu
+	 *  gezeichnet.
+	 */
+	saveDocument: (id: string, document: Document_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_document", { id, document })),
+	/**  Rechnet das Dokument flach und legt es in die Zwischenablage. */
+	copyDocument: (id: string, document: Document_Deserialize) => typedError<null, string>(__TAURI_INVOKE("copy_document", { id, document })),
+	/**
+	 *  Fragt nach dem Ziel und schreibt PNG oder JPG. Gibt den Pfad zurück
+	 *  (`None` = abgebrochen).
+	 */
+	exportDocument: (id: string, document: Document_Deserialize, format: ExportFormat) => typedError<string | null, string>(__TAURI_INVOKE("export_document", { id, document, format })),
+	/**  Legt ein hineingezogenes Bild (PNG-Bytes) bei der Aufnahme ab. */
+	addAsset: (id: string, png: number[]) => typedError<string, string>(__TAURI_INVOKE("add_asset", { id, png })),
+	deleteCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_capture", { id })),
+	setStarred: (id: string, starred: boolean) => typedError<null, string>(__TAURI_INVOKE("set_starred", { id, starred })),
+	/**  Zeigt die Originaldatei im Finder / Explorer. */
+	revealCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("reveal_capture", { id })),
+	/**  Aufnahme aus der Oberfläche starten (z. B. Knopf im Editor). */
+	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),
 	/**  Prüft, ob eine neuere Version veröffentlicht ist. */
 	checkForUpdate: () => typedError<{
 	version: string,
@@ -25,6 +49,184 @@ export type AppInfo = {
 	/**  `macos`, `windows` oder `linux` */
 	platform: string,
 	arch: string,
+};
+
+/**  Der Bereich, der exportiert wird. */
+export type Artboard = {
+	rect: Rect,
+	/**  `None` = transparent. */
+	background: Fill | null,
+};
+
+/**  Woher die Pixel einer Bild-Ebene kommen. */
+export type AssetRef = 
+/**  Originalaufnahme. */
+{ source: "original" } | 
+/**  Hineingezogenes Bild (Hash des Inhalts). */
+{ source: "asset"; hash: string };
+
+/**  Eine Aufnahme für Galerie und Editor. */
+export type CaptureInfo = {
+	id: string,
+	/**  Unix-Zeit in Millisekunden */
+	createdAt: number | null,
+	mode: string,
+	width: number,
+	height: number,
+	scaleFactor: number | null,
+	starred: boolean,
+	/**  Absolute Pfade – im Frontend über `convertFileSrc` laden. */
+	originalPath: string,
+	thumbnailPath: string,
+	/**  Monatsordner; hineingezogene Bilder liegen als `<id>_asset_<hash>.png` darin. */
+	dir: string,
+};
+
+export type CaptureMode = "region" | "window" | "screen";
+
+/**  Farbe mit gerader (nicht vormultiplizierter) Deckkraft. */
+export type Color = {
+	r: number,
+	g: number,
+	b: number,
+	a: number,
+};
+
+/**
+ *  Ein FMShot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ * 
+ *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
+ *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
+ *  kommen – damit Strichstärken und Schriftgrössen überall gleich wirken.
+ */
+export type Document = Document_Serialize | Document_Deserialize;
+
+/**
+ *  Ein FMShot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ * 
+ *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
+ *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
+ *  kommen – damit Strichstärken und Schriftgrössen überall gleich wirken.
+ */
+export type Document_Deserialize = {
+	schema_version: number,
+	pixel_ratio?: number | null,
+	artboard: Artboard,
+	/**  Reihenfolge = Zeichenreihenfolge; das erste Element liegt ganz unten. */
+	layers: Layer_Deserialize[],
+};
+
+/**
+ *  Ein FMShot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ * 
+ *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
+ *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
+ *  kommen – damit Strichstärken und Schriftgrössen überall gleich wirken.
+ */
+export type Document_Serialize = {
+	schema_version: number,
+	pixel_ratio: number | null,
+	artboard: Artboard,
+	/**  Reihenfolge = Zeichenreihenfolge; das erste Element liegt ganz unten. */
+	layers: Layer_Serialize[],
+};
+
+export type ExportFormat = "png" | "jpg";
+
+/**  Flächenfüllung. */
+export type Fill = { type: "solid"; color: Color } | 
+/**  Linearer Verlauf; `angle` in Grad, 0 = von links nach rechts. */
+{ type: "linear_gradient"; from: Color; to: Color; angle: number | null };
+
+export type Layer = Layer_Serialize | Layer_Deserialize;
+
+export type LayerId = number;
+
+export type LayerKind = { type: "image"; asset: AssetRef; 
+/**  Ziel-Rechteck auf der Leinwand (Position und Grösse nach Skalierung). */
+bounds: Rect; 
+/**  Zuschnitt in Pixeln des Quellbilds; `None` = ganzes Bild. */
+crop?: Rect | null; 
+/**  Pixelgrösse des Quellbilds. */
+source_size: Size; corner_radius?: number | null; shadow?: Shadow | null } | { type: "rectangle"; bounds: Rect; stroke: Stroke; fill?: Color | null; corner_radius?: number | null } | { type: "ellipse"; bounds: Rect; stroke: Stroke; fill?: Color | null } | { type: "line"; from: Point; to: Point; stroke: Stroke } | { type: "arrow"; from: Point; to: Point; stroke: Stroke } | 
+/**  Freihand-Linie. */
+{ type: "pen"; points: Point[]; stroke: Stroke } | 
+/**  Textmarker: halbdurchsichtige Fläche, die den Inhalt einfärbt. */
+{ type: "highlight"; bounds: Rect; color: Color } | 
+/**  Text in einem Kasten; `bounds.width` bestimmt den Zeilenumbruch. */
+{ type: "text"; bounds: Rect; text: string; style: TextStyle } | 
+/**  Sprechblase mit Spitze, die auf `tail` zeigt. */
+{ type: "callout"; bounds: Rect; tail: Point; text: string; style: TextStyle; fill: Color } | 
+/**  Nummerierter Kreis ①②③. */
+{ type: "step"; center: Point; radius: number | null; number: number; fill: Color; text_color: Color } | { type: "blur"; bounds: Rect; radius: number | null } | { type: "pixelate"; bounds: Rect; block: number | null } | 
+/**  Alles ausser `bounds` wird abgedunkelt. */
+{ type: "spotlight"; bounds: Rect; 
+/**  0.0 bis 1.0 */
+dim: number | null } | 
+/**  Kreisrunde Lupe: zeigt `source` vergrössert in `bounds`. */
+{ type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke };
+
+export type Layer_Deserialize = {
+	id: LayerId,
+	name?: string | null,
+	visible: boolean,
+	locked: boolean,
+	/**  0.0 bis 1.0 */
+	opacity: number | null,
+	/**  Drehung in Grad um den Mittelpunkt der Ebene. */
+	rotation?: number | null,
+	kind: LayerKind,
+};
+
+export type Layer_Serialize = {
+	id: LayerId,
+	name?: string | null,
+	visible: boolean,
+	locked: boolean,
+	/**  0.0 bis 1.0 */
+	opacity: number | null,
+	/**  Drehung in Grad um den Mittelpunkt der Ebene. */
+	rotation: number | null,
+	kind: LayerKind,
+};
+
+/**  Punkt in Dokument-Koordinaten (Pixel des Originalbilds). */
+export type Point = {
+	x: number | null,
+	y: number | null,
+};
+
+export type Rect = {
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	height: number | null,
+};
+
+/**  Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund). */
+export type Shadow = {
+	color: Color,
+	blur: number | null,
+	offset_y: number | null,
+};
+
+export type Size = {
+	width: number | null,
+	height: number | null,
+};
+
+export type Stroke = {
+	color: Color,
+	width: number | null,
+};
+
+/**  Schrift einer Text-Ebene. */
+export type TextStyle = {
+	size: number | null,
+	color: Color,
+	bold?: boolean,
+	/**  Hinterlegung hinter dem Text; `None` = ohne. */
+	background?: Color | null,
 };
 
 export type UpdateInfo = {

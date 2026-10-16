@@ -78,7 +78,11 @@ impl Library {
             .map_err(|e| LibraryError::Encode(e.to_string()))?;
         write_atomic(&dir.join(original_file(&id)), &png)?;
 
-        let doc = Document::from_capture(capture.image.width(), capture.image.height());
+        let doc = Document::from_capture_scaled(
+            capture.image.width(),
+            capture.image.height(),
+            capture.scale_factor,
+        );
         write_atomic(
             &dir.join(document_file(&id)),
             &serde_json::to_vec_pretty(&doc)?,
@@ -114,6 +118,16 @@ impl Library {
     pub fn load_document(&self, id: &str) -> Result<Document> {
         let rec = self.get(id)?;
         Ok(serde_json::from_slice(&fs::read(rec.document_path())?)?)
+    }
+
+    /// Bytes der Originalaufnahme (PNG).
+    pub fn read_original(&self, id: &str) -> Result<Vec<u8>> {
+        Ok(fs::read(self.get(id)?.original_path())?)
+    }
+
+    /// Bytes eines hineingezogenen Bildes (PNG).
+    pub fn read_asset(&self, id: &str, hash: &str) -> Result<Vec<u8>> {
+        Ok(fs::read(self.get(id)?.asset_path(hash))?)
     }
 
     /// Speichert das Dokument und – falls übergeben – ein neues Vorschaubild.

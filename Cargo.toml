@@ -14,6 +14,7 @@ repository = "https://github.com/forellmedia/FMShot"
 [workspace.dependencies]
 fmshot-core = { path = "crates/fmshot-core" }
 fmshot-render = { path = "crates/fmshot-render" }
+fmshot-render-wasm = { path = "crates/fmshot-render-wasm" }
 fmshot-capture = { path = "crates/fmshot-capture" }
 fmshot-clipboard = { path = "crates/fmshot-clipboard" }
 fmshot-stitch = { path = "crates/fmshot-stitch" }
@@ -26,6 +27,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 thiserror = "2"
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 

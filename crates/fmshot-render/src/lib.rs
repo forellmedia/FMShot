@@ -2,11 +2,24 @@
 //!
 //! Derselbe Code läuft nativ (Export, Auto-Export, Vorschaubilder, CLI) und als
 //! WASM im Editor – damit ein Dokument überall gleich aussieht (ADR 0002).
+//!
+//! Der Editor zeichnet nur den sichtbaren Ausschnitt in Bildschirmauflösung
+//! ([`RenderOptions::region`], [`RenderOptions::scale`]) und kann sich auf
+//! einen Teil der Ebenen beschränken ([`RenderOptions::layers`]), um beim
+//! Ziehen nur die aktive Ebene neu zu zeichnen.
 
-use fmshot_core::{AssetRef, Color, Document, Layer, LayerKind, Point, Rect, RgbaImage, Stroke};
-use tiny_skia::{
-    FillRule, FilterQuality, IntRect, Paint, PathBuilder, Pixmap, PixmapPaint, Transform,
-};
+mod codec;
+mod effects;
+mod shapes;
+mod text;
+
+use std::ops::Range;
+
+use fmshot_core::{AssetRef, Document, Fill, Layer, LayerId, LayerKind, Rect, RgbaImage};
+use tiny_skia::{Pixmap, Transform};
+
+pub use codec::{CodecError, decode_png};
+pub use text::TextMetrics;
 
 /// Liefert die Pixel der Bild-Ebenen. Die Bibliothek lädt sie von der Platte,
 /// der Editor hält sie im Speicher.
@@ -14,359 +27,279 @@ pub trait AssetSource {
     fn image(&self, asset: &AssetRef) -> Option<&RgbaImage>;
 }
 
+impl AssetSource for std::collections::HashMap<AssetRef, RgbaImage> {
+    fn image(&self, asset: &AssetRef) -> Option<&RgbaImage> {
+        self.get(asset)
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RenderError {
-    #[error("Zeichenfläche ist leer oder zu gross ({width}×{height})")]
-    InvalidArtboard { width: u32, height: u32 },
+    #[error("Ausgabe ist leer oder zu gross ({width}×{height})")]
+    InvalidSize { width: u32, height: u32 },
     #[error("Bild {0:?} fehlt")]
     MissingAsset(AssetRef),
 }
 
-/// Rechnet das Dokument flach – Ergebnis hat die Grösse der Zeichenfläche.
-pub fn render(doc: &Document, assets: &dyn AssetSource) -> Result<RgbaImage, RenderError> {
-    let board = doc.artboard.rect;
-    let width = board.width.ceil().max(0.0) as u32;
-    let height = board.height.ceil().max(0.0) as u32;
-    let mut pixmap =
-        Pixmap::new(width, height).ok_or(RenderError::InvalidArtboard { width, height })?;
-
-    if let Some(bg) = doc.artboard.background {
-        pixmap.fill(skia_color(bg, 1.0));
-    }
-
-    let to_board = Transform::from_translate(-board.x, -board.y);
-    for layer in doc.layers.iter().filter(|l| l.visible && l.opacity > 0.0) {
-        draw_layer(&mut pixmap, layer, to_board, assets)?;
-    }
-
-    Ok(to_rgba_image(&pixmap))
+/// Was und wie gezeichnet wird.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderOptions {
+    /// Ausschnitt in Dokument-Koordinaten.
+    pub region: Rect,
+    /// Ausgabepixel pro Dokument-Pixel (z. B. 0.5 für halbe Grösse).
+    pub scale: f32,
+    /// Welche Ebenen (Indizes in `doc.layers`).
+    pub layers: Range<usize>,
+    /// Hintergrund der Zeichenfläche zeichnen?
+    pub background: bool,
+    /// Diese Ebene auslassen (z. B. Text, der gerade bearbeitet wird).
+    pub skip: Option<LayerId>,
 }
 
-fn draw_layer(
-    pixmap: &mut Pixmap,
-    layer: &Layer,
-    to_board: Transform,
-    assets: &dyn AssetSource,
-) -> Result<(), RenderError> {
-    let b = layer.kind.bounds();
-    let transform = if layer.rotation != 0.0 {
-        to_board.pre_concat(Transform::from_rotate_at(
-            layer.rotation,
-            b.x + b.width / 2.0,
-            b.y + b.height / 2.0,
-        ))
-    } else {
-        to_board
-    };
-    let opacity = layer.opacity.clamp(0.0, 1.0);
-
-    match &layer.kind {
-        LayerKind::Image {
-            asset,
-            bounds,
-            crop,
-            ..
-        } => {
-            let image = assets
-                .image(asset)
-                .ok_or_else(|| RenderError::MissingAsset(asset.clone()))?;
-            draw_image(pixmap, image, *bounds, *crop, opacity, transform);
-        }
-        LayerKind::Rectangle {
-            bounds,
-            stroke,
-            fill,
-            corner_radius,
-        } => {
-            if let Some(path) = rect_path(*bounds, *corner_radius) {
-                fill_and_stroke(pixmap, &path, *fill, stroke, opacity, transform);
-            }
-        }
-        LayerKind::Ellipse {
-            bounds,
-            stroke,
-            fill,
-        } => {
-            if let Some(path) = skia_rect(*bounds).and_then(PathBuilder::from_oval) {
-                fill_and_stroke(pixmap, &path, *fill, stroke, opacity, transform);
-            }
-        }
-        LayerKind::Line { from, to, stroke } => {
-            if let Some(path) = line_path(*from, *to) {
-                stroke_path(pixmap, &path, stroke, opacity, transform);
-            }
-        }
-        LayerKind::Arrow { from, to, stroke } => {
-            draw_arrow(pixmap, *from, *to, stroke, opacity, transform);
+impl RenderOptions {
+    /// Ganze Zeichenfläche in Originalgrösse – für Export und Zwischenablage.
+    pub fn full(doc: &Document) -> Self {
+        Self {
+            region: doc.artboard.rect,
+            scale: 1.0,
+            layers: 0..doc.layers.len(),
+            background: true,
+            skip: None,
         }
     }
-    Ok(())
+
+    /// Ganze Zeichenfläche, verkleinert auf höchstens `max` Pixel Kantenlänge.
+    pub fn fit(doc: &Document, max: u32) -> Self {
+        let r = doc.artboard.rect;
+        let longest = r.width.max(r.height).max(1.0);
+        Self {
+            scale: (max as f32 / longest).min(1.0),
+            ..Self::full(doc)
+        }
+    }
+
+    /// Ausgabegrösse in Pixeln.
+    pub fn output_size(&self) -> (u32, u32) {
+        (
+            (self.region.width * self.scale).ceil().max(0.0) as u32,
+            (self.region.height * self.scale).ceil().max(0.0) as u32,
+        )
+    }
 }
 
-fn draw_image(
-    pixmap: &mut Pixmap,
-    image: &RgbaImage,
-    bounds: Rect,
-    crop: Option<Rect>,
-    opacity: f32,
-    transform: Transform,
-) {
-    let Some(mut source) = to_pixmap(image) else {
-        return;
-    };
-    let crop = crop.unwrap_or(Rect::new(
-        0.0,
-        0.0,
-        image.width() as f32,
-        image.height() as f32,
-    ));
-    if let Some(cropped) = IntRect::from_xywh(
-        crop.x.round() as i32,
-        crop.y.round() as i32,
-        crop.width.round().max(1.0) as u32,
-        crop.height.round().max(1.0) as u32,
-    )
-    .and_then(|r| source.clone_rect(r))
-    {
-        source = cropped;
+/// Zeichnet Dokumente. Hält die Schriften (teuer zu laden) – einmal anlegen
+/// und wiederverwenden.
+pub struct Renderer {
+    text: text::TextEngine,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self::new()
     }
-    let sx = bounds.width / source.width() as f32;
-    let sy = bounds.height / source.height() as f32;
-    let paint = PixmapPaint {
-        opacity,
-        quality: if sx == 1.0 && sy == 1.0 {
-            FilterQuality::Nearest
+}
+
+impl Renderer {
+    pub fn new() -> Self {
+        Self {
+            text: text::TextEngine::new(),
+        }
+    }
+
+    /// Rechnet das ganze Dokument flach (Grösse der Zeichenfläche).
+    pub fn render(
+        &mut self,
+        doc: &Document,
+        assets: &dyn AssetSource,
+    ) -> Result<RgbaImage, RenderError> {
+        self.render_with(doc, assets, &RenderOptions::full(doc))
+    }
+
+    pub fn render_with(
+        &mut self,
+        doc: &Document,
+        assets: &dyn AssetSource,
+        opts: &RenderOptions,
+    ) -> Result<RgbaImage, RenderError> {
+        let (width, height) = opts.output_size();
+        let mut pixmap =
+            Pixmap::new(width, height).ok_or(RenderError::InvalidSize { width, height })?;
+
+        // Dokument → Ausgabepixel
+        let base = Transform::from_scale(opts.scale, opts.scale)
+            .pre_translate(-opts.region.x, -opts.region.y);
+
+        if opts.background
+            && let Some(fill) = &doc.artboard.background
+        {
+            shapes::fill_rect(&mut pixmap, doc.artboard.rect, fill, base);
+        }
+
+        let end = opts.layers.end.min(doc.layers.len());
+        let start = opts.layers.start.min(end);
+        for layer in doc.layers[start..end]
+            .iter()
+            .filter(|l| l.visible && l.opacity > 0.0 && Some(l.id) != opts.skip)
+        {
+            self.draw_layer(&mut pixmap, layer, base, opts.scale, assets)?;
+        }
+
+        Ok(codec::to_rgba_image(&pixmap))
+    }
+
+    /// Misst einen Text (in Dokument-Pixeln) – für die Grösse von Textkästen.
+    pub fn measure_text(
+        &mut self,
+        text: &str,
+        style: &fmshot_core::TextStyle,
+        max_width: Option<f32>,
+    ) -> TextMetrics {
+        self.text.measure(text, style, max_width)
+    }
+
+    fn draw_layer(
+        &mut self,
+        pixmap: &mut Pixmap,
+        layer: &Layer,
+        base: Transform,
+        scale: f32,
+        assets: &dyn AssetSource,
+    ) -> Result<(), RenderError> {
+        let b = layer.kind.bounds();
+        let t = if layer.rotation != 0.0 {
+            base.pre_concat(Transform::from_rotate_at(
+                layer.rotation,
+                b.x + b.width / 2.0,
+                b.y + b.height / 2.0,
+            ))
         } else {
-            FilterQuality::Bicubic
-        },
-        ..PixmapPaint::default()
-    };
-    let t = transform
-        .pre_translate(bounds.x, bounds.y)
-        .pre_scale(sx, sy);
-    pixmap.draw_pixmap(0, 0, source.as_ref(), &paint, t, None);
-}
+            base
+        };
+        let opacity = layer.opacity.clamp(0.0, 1.0);
 
-fn draw_arrow(
-    pixmap: &mut Pixmap,
-    from: Point,
-    to: Point,
-    stroke: &Stroke,
-    opacity: f32,
-    transform: Transform,
-) {
-    let (dx, dy) = (to.x - from.x, to.y - from.y);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < f32::EPSILON {
-        return;
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    // Spitze wächst mit der Strichbreite, ist aber nie länger als der halbe Pfeil.
-    let head_len = (stroke.width * 4.0).max(10.0).min(len / 2.0);
-    let head_half = head_len * 0.6;
-    let base = Point::new(to.x - ux * head_len, to.y - uy * head_len);
-
-    if let Some(shaft) = line_path(from, base) {
-        stroke_path(pixmap, &shaft, stroke, opacity, transform);
-    }
-    let mut pb = PathBuilder::new();
-    pb.move_to(to.x, to.y);
-    pb.line_to(base.x - uy * head_half, base.y + ux * head_half);
-    pb.line_to(base.x + uy * head_half, base.y - ux * head_half);
-    pb.close();
-    if let Some(head) = pb.finish() {
-        let mut paint = Paint::default();
-        paint.set_color(skia_color(stroke.color, opacity));
-        paint.anti_alias = true;
-        pixmap.fill_path(&head, &paint, FillRule::Winding, transform, None);
-    }
-}
-
-fn fill_and_stroke(
-    pixmap: &mut Pixmap,
-    path: &tiny_skia::Path,
-    fill: Option<Color>,
-    stroke: &Stroke,
-    opacity: f32,
-    transform: Transform,
-) {
-    if let Some(fill) = fill {
-        let mut paint = Paint::default();
-        paint.set_color(skia_color(fill, opacity));
-        paint.anti_alias = true;
-        pixmap.fill_path(path, &paint, FillRule::Winding, transform, None);
-    }
-    stroke_path(pixmap, path, stroke, opacity, transform);
-}
-
-fn stroke_path(
-    pixmap: &mut Pixmap,
-    path: &tiny_skia::Path,
-    stroke: &Stroke,
-    opacity: f32,
-    transform: Transform,
-) {
-    if stroke.width <= 0.0 {
-        return;
-    }
-    let mut paint = Paint::default();
-    paint.set_color(skia_color(stroke.color, opacity));
-    paint.anti_alias = true;
-    let style = tiny_skia::Stroke {
-        width: stroke.width,
-        line_cap: tiny_skia::LineCap::Round,
-        line_join: tiny_skia::LineJoin::Round,
-        ..tiny_skia::Stroke::default()
-    };
-    pixmap.stroke_path(path, &paint, &style, transform, None);
-}
-
-fn line_path(from: Point, to: Point) -> Option<tiny_skia::Path> {
-    let mut pb = PathBuilder::new();
-    pb.move_to(from.x, from.y);
-    pb.line_to(to.x, to.y);
-    pb.finish()
-}
-
-fn rect_path(r: Rect, radius: f32) -> Option<tiny_skia::Path> {
-    let rect = skia_rect(r)?;
-    let radius = radius.min(r.width / 2.0).min(r.height / 2.0);
-    if radius <= 0.0 {
-        return Some(PathBuilder::from_rect(rect));
-    }
-    // Abgerundete Ecken über kubische Bézierkurven (Kreis-Näherung).
-    const K: f32 = 0.552_284_8;
-    let (x0, y0, x1, y1) = (r.x, r.y, r.right(), r.bottom());
-    let c = radius * K;
-    let mut pb = PathBuilder::new();
-    pb.move_to(x0 + radius, y0);
-    pb.line_to(x1 - radius, y0);
-    pb.cubic_to(x1 - radius + c, y0, x1, y0 + radius - c, x1, y0 + radius);
-    pb.line_to(x1, y1 - radius);
-    pb.cubic_to(x1, y1 - radius + c, x1 - radius + c, y1, x1 - radius, y1);
-    pb.line_to(x0 + radius, y1);
-    pb.cubic_to(x0 + radius - c, y1, x0, y1 - radius + c, x0, y1 - radius);
-    pb.line_to(x0, y0 + radius);
-    pb.cubic_to(x0, y0 + radius - c, x0 + radius - c, y0, x0 + radius, y0);
-    pb.close();
-    pb.finish()
-}
-
-fn skia_rect(r: Rect) -> Option<tiny_skia::Rect> {
-    tiny_skia::Rect::from_xywh(r.x, r.y, r.width, r.height)
-}
-
-fn skia_color(c: Color, opacity: f32) -> tiny_skia::Color {
-    let a = (c.a as f32 / 255.0) * opacity;
-    tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (a * 255.0).round() as u8)
-}
-
-/// RGBA mit gerader Deckkraft → vormultiplizierte Pixmap.
-fn to_pixmap(image: &RgbaImage) -> Option<Pixmap> {
-    let mut data = image.data().to_vec();
-    for px in data.as_chunks_mut::<4>().0 {
-        let a = px[3] as u16;
-        if a != 255 {
-            for c in &mut px[..3] {
-                *c = ((*c as u16 * a + 127) / 255) as u8;
+        match &layer.kind {
+            LayerKind::Image {
+                asset,
+                bounds,
+                crop,
+                corner_radius,
+                shadow,
+                ..
+            } => {
+                let image = assets
+                    .image(asset)
+                    .ok_or_else(|| RenderError::MissingAsset(asset.clone()))?;
+                if let Some(shadow) = shadow {
+                    effects::shadow(pixmap, *bounds, *corner_radius, shadow, t, scale);
+                }
+                shapes::image(pixmap, image, *bounds, *crop, *corner_radius, opacity, t);
             }
+            LayerKind::Rectangle {
+                bounds,
+                stroke,
+                fill,
+                corner_radius,
+            } => shapes::rectangle(pixmap, *bounds, stroke, *fill, *corner_radius, opacity, t),
+            LayerKind::Ellipse {
+                bounds,
+                stroke,
+                fill,
+            } => shapes::ellipse(pixmap, *bounds, stroke, *fill, opacity, t),
+            LayerKind::Line { from, to, stroke } => {
+                shapes::line(pixmap, *from, *to, stroke, opacity, t)
+            }
+            LayerKind::Arrow { from, to, stroke } => {
+                shapes::arrow(pixmap, *from, *to, stroke, opacity, t)
+            }
+            LayerKind::Pen { points, stroke } => shapes::pen(pixmap, points, stroke, opacity, t),
+            LayerKind::Highlight { bounds, color } => {
+                shapes::highlight(pixmap, *bounds, *color, opacity, t)
+            }
+            LayerKind::Text {
+                bounds,
+                text,
+                style,
+            } => self
+                .text
+                .draw_box(pixmap, *bounds, text, style, None, opacity, base, scale),
+            LayerKind::Callout {
+                bounds,
+                tail,
+                text,
+                style,
+                fill,
+            } => {
+                shapes::callout_bubble(pixmap, *bounds, *tail, *fill, opacity, t);
+                let pad = style.size * 0.5;
+                let inner = Rect::new(
+                    bounds.x + pad,
+                    bounds.y + pad,
+                    (bounds.width - 2.0 * pad).max(1.0),
+                    (bounds.height - 2.0 * pad).max(1.0),
+                );
+                self.text
+                    .draw_box(pixmap, inner, text, style, None, opacity, base, scale);
+            }
+            LayerKind::Step {
+                center,
+                radius,
+                number,
+                fill,
+                text_color,
+            } => {
+                shapes::circle(pixmap, *center, *radius, *fill, opacity, t);
+                let style = fmshot_core::TextStyle {
+                    size: radius * 1.1,
+                    color: *text_color,
+                    bold: true,
+                    background: None,
+                };
+                self.text.draw_centered(
+                    pixmap,
+                    *center,
+                    &number.to_string(),
+                    &style,
+                    opacity,
+                    base,
+                    scale,
+                );
+            }
+            LayerKind::Blur { bounds, radius } => {
+                effects::blur(pixmap, *bounds, radius * scale, base)
+            }
+            LayerKind::Pixelate { bounds, block } => {
+                effects::pixelate(pixmap, *bounds, block * scale, base)
+            }
+            LayerKind::Spotlight { bounds, dim } => {
+                effects::spotlight(pixmap, *bounds, *dim * opacity, base)
+            }
+            LayerKind::Magnifier {
+                bounds,
+                source,
+                stroke,
+            } => effects::magnifier(pixmap, *bounds, *source, stroke, base),
         }
+        Ok(())
     }
-    let size = tiny_skia::IntSize::from_wh(image.width(), image.height())?;
-    Pixmap::from_vec(data, size)
 }
 
-/// Vormultiplizierte Pixmap → RGBA mit gerader Deckkraft.
-fn to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
-    let mut data = Vec::with_capacity(pixmap.data().len());
-    for px in pixmap.pixels() {
-        let c = px.demultiply();
-        data.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+/// Liegt über der Ebene `index` ein Effekt (Weichzeichnen usw.)? Dann kann
+/// der Editor die Ebenen darüber nicht getrennt zwischenspeichern.
+pub fn has_effect_above(doc: &Document, index: usize) -> bool {
+    doc.layers
+        .iter()
+        .skip(index + 1)
+        .any(|l| l.visible && l.kind.is_effect())
+}
+
+/// Hintergrund, wie ihn das Werkzeug „Hintergrund“ vorschlägt.
+pub fn default_background() -> Fill {
+    Fill::LinearGradient {
+        from: fmshot_core::Color::rgb(0x6a, 0x5a, 0xf9),
+        to: fmshot_core::Color::rgb(0xf9, 0x5a, 0x9a),
+        angle: 135.0,
     }
-    RgbaImage::new(pixmap.width(), pixmap.height(), data)
-        .expect("Pixmap liefert immer passende Länge")
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use fmshot_core::Size;
-
-    struct OnlyOriginal(RgbaImage);
-
-    impl AssetSource for OnlyOriginal {
-        fn image(&self, asset: &AssetRef) -> Option<&RgbaImage> {
-            matches!(asset, AssetRef::Original).then_some(&self.0)
-        }
-    }
-
-    const BLUE: [u8; 4] = [0, 0, 255, 255];
-
-    #[test]
-    fn screenshot_ohne_ebenen_bleibt_pixelgleich() {
-        let original = RgbaImage::filled(40, 30, BLUE);
-        let doc = Document::from_capture(40, 30);
-        let out = render(&doc, &OnlyOriginal(original.clone())).unwrap();
-        assert_eq!(out, original);
-    }
-
-    #[test]
-    fn gefuelltes_rechteck_landet_an_richtiger_stelle() {
-        let mut doc = Document::from_capture(40, 30);
-        doc.push_layer(LayerKind::Rectangle {
-            bounds: Rect::new(10.0, 10.0, 10.0, 10.0),
-            stroke: Stroke {
-                color: Color::BLACK,
-                width: 0.0,
-            },
-            fill: Some(Color::WHITE),
-            corner_radius: 0.0,
-        });
-        let out = render(&doc, &OnlyOriginal(RgbaImage::filled(40, 30, BLUE))).unwrap();
-        assert_eq!(out.pixel(15, 15), Some([255, 255, 255, 255]));
-        assert_eq!(out.pixel(5, 5), Some(BLUE));
-    }
-
-    #[test]
-    fn verschobene_zeichenflaeche_verschiebt_ausgabe() {
-        let mut doc = Document::from_capture(40, 30);
-        doc.artboard.rect = Rect::new(-10.0, 0.0, 50.0, 30.0);
-        doc.artboard.background = Some(Color::WHITE);
-        let out = render(&doc, &OnlyOriginal(RgbaImage::filled(40, 30, BLUE))).unwrap();
-        assert_eq!(out.width(), 50);
-        assert_eq!(out.pixel(5, 5), Some([255, 255, 255, 255]));
-        assert_eq!(out.pixel(15, 5), Some(BLUE));
-    }
-
-    #[test]
-    fn fehlendes_bild_ist_ein_fehler() {
-        let mut doc = Document::from_capture(10, 10);
-        doc.push_layer(LayerKind::Image {
-            asset: AssetRef::Asset("fehlt".into()),
-            bounds: Rect::new(0.0, 0.0, 5.0, 5.0),
-            crop: None,
-            source_size: Size::new(5.0, 5.0),
-        });
-        let err = render(&doc, &OnlyOriginal(RgbaImage::filled(10, 10, BLUE))).unwrap_err();
-        assert_eq!(
-            err,
-            RenderError::MissingAsset(AssetRef::Asset("fehlt".into()))
-        );
-    }
-
-    #[test]
-    fn pfeil_zeichnet_spitze_am_ziel() {
-        let mut doc = Document::from_capture(100, 40);
-        doc.push_layer(LayerKind::Arrow {
-            from: Point::new(10.0, 20.0),
-            to: Point::new(90.0, 20.0),
-            stroke: Stroke {
-                color: Color::BLACK,
-                width: 4.0,
-            },
-        });
-        let out = render(&doc, &OnlyOriginal(RgbaImage::filled(100, 40, BLUE))).unwrap();
-        assert_eq!(out.pixel(85, 20), Some([0, 0, 0, 255]));
-        assert_eq!(out.pixel(85, 5), Some(BLUE));
-    }
-}
+mod tests;

@@ -21,23 +21,24 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 fmshot-capture.workspace = true
 fmshot-clipboard.workspace = true
-fmshot-core.workspace = true
+fmshot-core = { workspace = true, features = ["specta"] }
 fmshot-hotkeys.workspace = true
 fmshot-library.workspace = true
 fmshot-overlay.workspace = true
+fmshot-render.workspace = true
 log = "0.4"
 sys-locale = "0.3"
 tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true
 # tauri-specta ist nur als Release Candidate verfügbar – Versionen fest pinnen.
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta.workspace = true
 specta-typescript = "0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }

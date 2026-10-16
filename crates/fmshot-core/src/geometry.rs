@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Punkt in Dokument-Koordinaten (Pixel des Originalbilds).
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -14,6 +15,7 @@ impl Point {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Size {
     pub width: f32,
     pub height: f32,
@@ -26,6 +28,7 @@ impl Size {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -66,6 +69,7 @@ impl Rect {
 
 /// Farbe mit gerader (nicht vormultiplizierter) Deckkraft.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Color {
     pub r: u8,
     pub g: u8,
