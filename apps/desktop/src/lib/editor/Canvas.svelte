@@ -29,6 +29,7 @@
   } from "./model";
   import { measureText, render, renderer } from "./renderer";
   import { LAYER_MARKER } from "./clipboard";
+  import { snap, type Guides } from "./snap";
 
   let container: HTMLDivElement;
   let baseCanvas: HTMLCanvasElement;
@@ -43,6 +44,8 @@
   let spaceDown = $state(false);
   let cropRect = $state<Rect | null>(null);
   let hoverHandle = $state<string | null>(null);
+  /** Hilfslinien beim Einrasten (Dokument-Koordinaten). */
+  let guides = $state<Guides | null>(null);
 
   /** Laufende Zieh-Aktion. */
   type Drag =
@@ -519,8 +522,21 @@
       }
       case "move": {
         const { id, start, orig } = drag;
-        const dx = p.x - start.x;
-        const dy = p.y - start.y;
+        let dx = p.x - start.x;
+        let dy = p.y - start.y;
+        // Einrasten an Zeichenfläche und anderen Ebenen (⌘ gedrückt = aus).
+        if (!e.metaKey && editor.doc) {
+          const targets = [
+            editor.doc.artboard.rect,
+            ...editor.doc.layers.filter((l) => l.id !== id && l.visible).map((l) => bounds(l.kind)),
+          ];
+          const s = snap(bounds(translate(orig, dx, dy)), targets, 6 / editor.zoom);
+          dx += s.dx;
+          dy += s.dy;
+          guides = s.guides.x.length || s.guides.y.length ? s.guides : null;
+        } else {
+          guides = null;
+        }
         editor.preview((d) => {
           const l = d.layers.find((l) => l.id === id);
           if (l) l.kind = translate(orig, dx, dy);
@@ -541,6 +557,7 @@
   function onPointerUp() {
     const d = drag;
     drag = null;
+    guides = null;
     if (!d) return;
     switch (d.kind) {
       case "crop": {
@@ -920,6 +937,14 @@
         ><title>{b.text}</title></rect>
       {/each}
     {/if}
+    {#if guides}
+      {#each guides.x as gx (gx)}
+        <line class="guide" x1={sx(gx)} x2={sx(gx)} y1="0" y2={height} />
+      {/each}
+      {#each guides.y as gy (gy)}
+        <line class="guide" y1={sy(gy)} y2={sy(gy)} x1="0" x2={width} />
+      {/each}
+    {/if}
     {#if cropView}
       <rect class="crop" x={cropView.x} y={cropView.y} width={cropView.w} height={cropView.h} />
     {/if}
@@ -1002,6 +1027,10 @@
   .canvas.drop {
     outline: 3px dashed var(--selection);
     outline-offset: -6px;
+  }
+  .guide {
+    stroke: #ff3d7f;
+    stroke-width: 1;
   }
   .crop {
     fill: rgb(255 255 255 / 0.08);
