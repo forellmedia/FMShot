@@ -264,7 +264,7 @@ fn skia_color(c: Color, opacity: f32) -> tiny_skia::Color {
 /// RGBA mit gerader Deckkraft → vormultiplizierte Pixmap.
 fn to_pixmap(image: &RgbaImage) -> Option<Pixmap> {
     let mut data = image.data().to_vec();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let a = px[3] as u16;
         if a != 255 {
             for c in &mut px[..3] {
