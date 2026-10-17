@@ -41,12 +41,6 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
         Action::CaptureText => capture::start(app, capture::Mode::Text),
         Action::OpenGallery => show_main_window(app),
-        Action::CaptureScroll => {
-            let mode = match crate::settings::get(app).scroll_mode {
-                fmshot_settings::ScrollMode::Manual => capture::Mode::Scroll,
-                fmshot_settings::ScrollMode::Auto => capture::Mode::ScrollAuto,
-            };
-            capture::start(app, mode)
-        }
+        Action::CaptureScroll => capture::start(app, capture::Mode::scroll(app)),
     }
 }

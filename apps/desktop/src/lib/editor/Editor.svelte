@@ -120,6 +120,12 @@
       <button title={t("capture.screen")} onclick={() => api.startCapture("screen")}>
         <Icon d="M3 4h18v12H3zM8 20h8M12 16v4" />
       </button>
+      <button title={t("capture.scroll")} onclick={() => api.startCapture("scroll")}>
+        <Icon d="M6 3h12v9H6zM12 15v6M9 18l3 3 3-3" />
+      </button>
+      <button title={t("capture.text")} onclick={() => api.startCapture("text")}>
+        <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M9 9h6M12 9v6" />
+      </button>
     </div>
     <PropertiesBar bind:contentWidth={propsWidth} />
     <div class="actions" bind:clientWidth={actionsWidth}>
@@ -240,6 +246,7 @@
           <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>
           <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>⌥⌘3</kbd></button>
           <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>⇧⌘1</kbd></button>
+          <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>⌥⌘4</kbd></button>
         </div>
       </div>
     {/if}

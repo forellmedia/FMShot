@@ -57,6 +57,14 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// Scroll-Aufnahme so, wie in den Einstellungen gewählt (von Hand/automatisch).
+    pub fn scroll(app: &AppHandle) -> Mode {
+        match crate::settings::get(app).scroll_mode {
+            fmshot_settings::ScrollMode::Manual => Mode::Scroll,
+            fmshot_settings::ScrollMode::Auto => Mode::ScrollAuto,
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Mode::Region => "region",

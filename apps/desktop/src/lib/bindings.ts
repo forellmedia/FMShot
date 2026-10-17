@@ -134,7 +134,7 @@ export type CaptureInfo = {
 	dir: string,
 };
 
-export type CaptureMode = "region" | "window" | "screen";
+export type CaptureMode = "region" | "window" | "screen" | "scroll" | "text";
 
 /**  Farbe mit gerader (nicht vormultiplizierter) Deckkraft. */
 export type Color = {

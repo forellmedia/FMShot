@@ -76,6 +76,8 @@ pub enum CaptureMode {
     Region,
     Window,
     Screen,
+    Scroll,
+    Text,
 }
 
 fn library(app: &AppHandle) -> std::sync::Arc<Library> {
@@ -335,6 +337,8 @@ pub fn start_capture(app: AppHandle, mode: CaptureMode) {
         CaptureMode::Region => capture::Mode::Region,
         CaptureMode::Window => capture::Mode::Window,
         CaptureMode::Screen => capture::Mode::Screen,
+        CaptureMode::Scroll => capture::Mode::scroll(&app),
+        CaptureMode::Text => capture::Mode::Text,
     };
     // Fenster erst verstecken, damit es nicht im Bild ist.
     crate::tray::hide_main_window(&app);
