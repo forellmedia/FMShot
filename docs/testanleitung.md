@@ -232,4 +232,3 @@ Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
   (erst mit der Video-Aufnahme nötig). Exportierte PNG-Dateien tragen 72 dpi
   × Skalierung (macOS-Basis) – unter Windows wären 96 dpi richtig.
 - Signatur-/Updater-Secrets auf GitHub (Issue #2) – danach erster Release.
-- Eigenes Menüleisten-Symbol (noch das App-Symbol).
