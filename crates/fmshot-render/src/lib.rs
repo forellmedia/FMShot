@@ -231,9 +231,26 @@ impl Renderer {
             LayerKind::Line { from, to, stroke } => {
                 shapes::line(pixmap, *from, *to, stroke, opacity, t)
             }
-            LayerKind::Arrow { from, to, stroke } => {
-                shapes::arrow(pixmap, *from, *to, stroke, opacity, t)
-            }
+            LayerKind::Arrow {
+                from,
+                to,
+                stroke,
+                head,
+                head_size,
+                control,
+            } => shapes::arrow(
+                pixmap,
+                *from,
+                *to,
+                shapes::ArrowShape {
+                    stroke,
+                    head: *head,
+                    head_size: *head_size,
+                    control: *control,
+                },
+                opacity,
+                t,
+            ),
             LayerKind::Pen { points, stroke } => shapes::pen(pixmap, points, stroke, opacity, t),
             LayerKind::Highlight { bounds, color } => {
                 shapes::highlight(pixmap, *bounds, *color, opacity, t)
@@ -242,6 +259,7 @@ impl Renderer {
                 bounds,
                 text,
                 style,
+                ..
             } => self
                 .text
                 .draw_box(pixmap, *bounds, text, style, None, opacity, t, scale),
@@ -276,6 +294,7 @@ impl Renderer {
                     color: *text_color,
                     bold: true,
                     background: None,
+                    ..Default::default()
                 };
                 self.text.draw_centered(
                     pixmap,
@@ -293,14 +312,28 @@ impl Renderer {
             LayerKind::Pixelate { bounds, block } => {
                 effects::pixelate(pixmap, *bounds, block * scale, base)
             }
-            LayerKind::Spotlight { bounds, dim } => {
-                effects::spotlight(pixmap, *bounds, *dim * opacity, base)
-            }
+            LayerKind::Spotlight {
+                bounds,
+                dim,
+                corner_radius,
+                feather,
+            } => effects::spotlight(
+                pixmap,
+                effects::SpotlightShape {
+                    bounds: *bounds,
+                    dim: *dim * opacity,
+                    corner_radius: *corner_radius,
+                    feather: *feather,
+                },
+                base,
+                scale,
+            ),
             LayerKind::Magnifier {
                 bounds,
                 source,
                 stroke,
-            } => effects::magnifier(pixmap, *bounds, *source, stroke, base),
+                handle,
+            } => effects::magnifier(pixmap, *bounds, *source, stroke, *handle, base),
         }
         Ok(())
     }

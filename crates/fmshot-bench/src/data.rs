@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use fmshot_core::{
-    AssetRef, Color, Document, LayerKind, Point, Rect, RgbaImage, Stroke, TextStyle,
+    ArrowHead, AssetRef, Color, Document, LayerKind, Point, Rect, RgbaImage, Stroke, TextStyle,
 };
 use fmshot_library::{Library, NewCapture};
 
@@ -56,10 +56,7 @@ fn page(width: u32, height: u32, offset: u32) -> RgbaImage {
 /// Anmerkungen wie in einer typischen Anleitung.
 pub fn annotate(doc: &mut Document) {
     let red = Color::rgb(0xe5, 0x39, 0x35);
-    let stroke = Stroke {
-        color: red,
-        width: 6.0,
-    };
+    let stroke = Stroke::new(red, 6.0);
     for i in 0..4 {
         let y = 200.0 + i as f32 * 380.0;
         doc.push_layer(LayerKind::Rectangle {
@@ -72,6 +69,9 @@ pub fn annotate(doc: &mut Document) {
             from: Point::new(1600.0, y + 300.0),
             to: Point::new(1100.0, y + 80.0),
             stroke,
+            head: ArrowHead::Filled,
+            head_size: 1.0,
+            control: None,
         });
         doc.push_layer(LayerKind::Step {
             center: Point::new(150.0, y),
@@ -89,7 +89,9 @@ pub fn annotate(doc: &mut Document) {
             color: red,
             bold: true,
             background: Some(Color::WHITE),
+            ..Default::default()
         },
+        fixed_width: false,
     });
     doc.push_layer(LayerKind::Highlight {
         bounds: Rect::new(200.0, 1500.0, 1400.0, 60.0),

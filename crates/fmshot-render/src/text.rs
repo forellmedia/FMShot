@@ -6,8 +6,8 @@
 //! cosmic-text automatisch ausweicht.
 
 use cosmic_text::fontdb::{Database, Source};
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
-use fmshot_core::{Point, Rect, TextStyle};
+use cosmic_text::{Align, Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+use fmshot_core::{Point, Rect, TextAlign, TextStyle, VerticalAlign};
 use tiny_skia::{Pixmap, Transform};
 
 use crate::shapes::{paint, rect_path};
@@ -72,7 +72,13 @@ impl TextEngine {
                 },
             )
         });
-        buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
+        // Ausrichtung nur mit fester Breite sinnvoll (sonst ist jede Zeile ihr eigener Kasten).
+        let align = match (wrap, style.align) {
+            (Some(_), TextAlign::Center) => Some(Align::Center),
+            (Some(_), TextAlign::Right) => Some(Align::Right),
+            _ => None,
+        };
+        buffer.set_rich_text(spans, &attrs, Shaping::Advanced, align);
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
     }
@@ -107,7 +113,7 @@ impl TextEngine {
         }
     }
 
-    /// Text in einem Kasten (oben links ausgerichtet, Umbruch an der Breite).
+    /// Text in einem Kasten: Umbruch an der Breite, ausgerichtet nach `style`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_box(
         &mut self,
@@ -121,7 +127,7 @@ impl TextEngine {
         scale: f32,
     ) {
         if let Some(bg) = style.background
-            && let Some(path) = rect_path(bounds, style.size * 0.25)
+            && let Some(path) = rect_path(bounds, style.corner_radius.unwrap_or(style.size * 0.25))
         {
             pixmap.fill_path(
                 &path,
@@ -132,8 +138,21 @@ impl TextEngine {
             );
         }
         let pad = Self::padding(style);
-        let origin = Point::new(bounds.x + pad, bounds.y + pad);
         let wrap = (bounds.width - 2.0 * pad).max(1.0);
+        // Senkrecht: freien Platz oben, verteilt oder unten lassen.
+        let free = match style.valign {
+            VerticalAlign::Top => 0.0,
+            valign => {
+                let used = self.measure(text, style, Some(wrap)).height;
+                let room = (bounds.height - 2.0 * pad - used).max(0.0);
+                if valign == VerticalAlign::Middle {
+                    room / 2.0
+                } else {
+                    room
+                }
+            }
+        };
+        let origin = Point::new(bounds.x + pad, bounds.y + pad + free);
         self.draw_at(
             pixmap,
             origin,

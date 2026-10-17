@@ -91,6 +91,8 @@ pub struct Settings {
     pub auto_export: AutoExport,
     /// Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie.
     pub retention_days: Option<u32>,
+    /// Format beim Speichern aus dem Editor (⌘S).
+    pub save_format: ImageFormat,
 }
 
 impl Default for Settings {
@@ -105,6 +107,7 @@ impl Default for Settings {
             replace_mac_system_shortcuts: false,
             auto_export: AutoExport::default(),
             retention_days: None,
+            save_format: ImageFormat::Png,
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Formen: Rechtecke, Pfeile, Freihand, Bilder …
 
-use fmshot_core::{Color, Fill, Point, Rect, RgbaImage, Stroke};
+use fmshot_core::{ArrowHead, Color, Fill, LineStyle, Point, Rect, RgbaImage, Stroke};
 use tiny_skia::{
     BlendMode, FillRule, FilterQuality, GradientStop, IntRect, LinearGradient, Mask, Paint, Path,
     PathBuilder, Pixmap, PixmapPaint, SpreadMode, Transform,
@@ -68,6 +68,19 @@ fn stroke_style(width: f32) -> tiny_skia::Stroke {
     }
 }
 
+/// Strichmuster (Strich, Lücke) für gestrichelt/gepunktet. Mit runden Enden
+/// wirkt jeder Strich um eine Strichbreite länger, die Lücke entsprechend kürzer.
+fn dash_pattern(style: LineStyle, width: f32) -> Option<tiny_skia::StrokeDash> {
+    let (on, off) = match style {
+        LineStyle::Dashed => (width * 2.5, width * 3.0),
+        // Strich der Länge ~0: Die runden Enden ergeben einen Punkt.
+        LineStyle::Dotted => (0.001, width * 2.0),
+        LineStyle::Solid | LineStyle::Double => return None,
+    };
+    tiny_skia::StrokeDash::new(vec![on, off], 0.0)
+}
+
+/// Strich in der gewählten Linienart.
 pub(crate) fn stroke_path(
     pixmap: &mut Pixmap,
     path: &Path,
@@ -75,15 +88,48 @@ pub(crate) fn stroke_path(
     opacity: f32,
     t: Transform,
 ) {
-    if stroke.width > 0.0 {
-        pixmap.stroke_path(
-            path,
-            &paint(stroke.color, opacity),
-            &stroke_style(stroke.width),
-            t,
-            None,
-        );
+    if stroke.width <= 0.0 {
+        return;
     }
+    if stroke.style == LineStyle::Double {
+        double_stroke(pixmap, path, stroke, opacity, t);
+        return;
+    }
+    let style = tiny_skia::Stroke {
+        dash: dash_pattern(stroke.style, stroke.width),
+        ..stroke_style(stroke.width)
+    };
+    pixmap.stroke_path(path, &paint(stroke.color, opacity), &style, t, None);
+}
+
+/// Doppellinie: dreifach breiter Strich, die Mitte wieder ausgeschnitten.
+/// Auf eigener Fläche, damit das Ausschneiden das Bild darunter nicht trifft.
+fn double_stroke(pixmap: &mut Pixmap, path: &Path, stroke: &Stroke, opacity: f32, t: Transform) {
+    let Some(mut layer) = Pixmap::new(pixmap.width(), pixmap.height()) else {
+        return;
+    };
+    let butt = |width| tiny_skia::Stroke {
+        line_cap: tiny_skia::LineCap::Butt,
+        ..stroke_style(width)
+    };
+    layer.stroke_path(
+        path,
+        &paint(stroke.color, 1.0),
+        &butt(stroke.width * 3.0),
+        t,
+        None,
+    );
+    let clear = Paint {
+        blend_mode: BlendMode::Clear,
+        anti_alias: true,
+        ..Paint::default()
+    };
+    layer.stroke_path(path, &clear, &butt(stroke.width), t, None);
+    let p = PixmapPaint {
+        opacity,
+        ..PixmapPaint::default()
+    };
+    pixmap.draw_pixmap(0, 0, layer.as_ref(), &p, Transform::identity(), None);
 }
 
 fn fill_path(pixmap: &mut Pixmap, path: &Path, color: Color, opacity: f32, t: Transform) {
@@ -246,35 +292,115 @@ pub(crate) fn line(
     }
 }
 
+/// Wie der Pfeil aussieht.
+pub(crate) struct ArrowShape<'a> {
+    pub stroke: &'a Stroke,
+    pub head: ArrowHead,
+    /// Grösse der Spitze relativ zur Standardgrösse.
+    pub head_size: f32,
+    /// Kontrollpunkt eines gebogenen Pfeils.
+    pub control: Option<Point>,
+}
+
+/// Schaft von `from` bis `cut` Pixel vor `to`, gerade oder über `control`
+/// gebogen. Die Kurve wird dabei abgeschnitten, nicht verformt.
+fn shaft_path(from: Point, to: Point, control: Option<Point>, cut: f32) -> Option<Path> {
+    let Some(c) = control else {
+        let len = (to.x - from.x).hypot(to.y - from.y).max(f32::EPSILON);
+        let k = (1.0 - cut / len).max(0.0);
+        return line_path(
+            from,
+            Point::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k),
+        );
+    };
+    let at = |t: f32| {
+        let u = 1.0 - t;
+        Point::new(
+            u * u * from.x + 2.0 * u * t * c.x + t * t * to.x,
+            u * u * from.y + 2.0 * u * t * c.y + t * t * to.y,
+        )
+    };
+    // Parameter, bei dem die Kurve `cut` vom Ende entfernt ist (Bisektion).
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        let p = at(mid);
+        if (to.x - p.x).hypot(to.y - p.y) > cut {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // De Casteljau: Teilkurve von 0 bis t hat den Kontrollpunkt from + t·(c − from).
+    let t = lo;
+    let end = at(t);
+    let ctrl = Point::new(from.x + (c.x - from.x) * t, from.y + (c.y - from.y) * t);
+    let mut pb = PathBuilder::new();
+    pb.move_to(from.x, from.y);
+    pb.quad_to(ctrl.x, ctrl.y, end.x, end.y);
+    pb.finish()
+}
+
 pub(crate) fn arrow(
     pixmap: &mut Pixmap,
     from: Point,
     to: Point,
-    stroke: &Stroke,
+    shape: ArrowShape,
     opacity: f32,
     t: Transform,
 ) {
-    let (dx, dy) = (to.x - from.x, to.y - from.y);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < f32::EPSILON {
+    let ArrowShape {
+        stroke,
+        head,
+        head_size,
+        control,
+    } = shape;
+    let len = (to.x - from.x).hypot(to.y - from.y);
+    // Richtung der Spitze: bei einer Kurve die Tangente am Ende (vom Kontrollpunkt her).
+    let towards = control.unwrap_or(from);
+    let (dx, dy) = (to.x - towards.x, to.y - towards.y);
+    let dir = dx.hypot(dy);
+    if len < f32::EPSILON || dir < f32::EPSILON {
         return;
     }
-    let (ux, uy) = (dx / len, dy / len);
+    let (ux, uy) = (dx / dir, dy / dir);
     // Spitze wächst mit der Strichbreite, ist aber nie länger als der halbe Pfeil.
-    let head_len = (stroke.width * 4.0).max(10.0).min(len / 2.0);
+    let head_len = ((stroke.width * 4.0).max(10.0) * head_size.clamp(0.3, 4.0)).min(len / 2.0);
     let head_half = head_len * 0.6;
     let base = Point::new(to.x - ux * head_len, to.y - uy * head_len);
+    let left = Point::new(base.x - uy * head_half, base.y + ux * head_half);
+    let right = Point::new(base.x + uy * head_half, base.y - ux * head_half);
 
-    if let Some(shaft) = line_path(from, base) {
-        stroke_path(pixmap, &shaft, stroke, opacity, t);
-    }
-    let mut pb = PathBuilder::new();
-    pb.move_to(to.x, to.y);
-    pb.line_to(base.x - uy * head_half, base.y + ux * head_half);
-    pb.line_to(base.x + uy * head_half, base.y - ux * head_half);
-    pb.close();
-    if let Some(head) = pb.finish() {
-        fill_path(pixmap, &head, stroke.color, opacity, t);
+    match head {
+        ArrowHead::Filled => {
+            if let Some(shaft) = shaft_path(from, to, control, head_len) {
+                stroke_path(pixmap, &shaft, stroke, opacity, t);
+            }
+            let mut pb = PathBuilder::new();
+            pb.move_to(to.x, to.y);
+            pb.line_to(left.x, left.y);
+            pb.line_to(right.x, right.y);
+            pb.close();
+            if let Some(path) = pb.finish() {
+                fill_path(pixmap, &path, stroke.color, opacity, t);
+            }
+        }
+        ArrowHead::Open => {
+            // Schaft bis kurz vor die Spitze, damit sich die runden Enden
+            // nicht über die Spitze hinaus wölben.
+            if let Some(shaft) = shaft_path(from, to, control, stroke.width * 0.5) {
+                stroke_path(pixmap, &shaft, stroke, opacity, t);
+            }
+            // Die Spitze bleibt immer durchgezogen.
+            let solid = Stroke::new(stroke.color, stroke.width);
+            let mut pb = PathBuilder::new();
+            pb.move_to(left.x, left.y);
+            pb.line_to(to.x, to.y);
+            pb.line_to(right.x, right.y);
+            if let Some(path) = pb.finish() {
+                stroke_path(pixmap, &path, &solid, opacity, t);
+            }
+        }
     }
 }
 

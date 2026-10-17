@@ -39,7 +39,13 @@
   }
 
   function apply(p: Style) {
-    editor.style = { ...p };
+    // Ältere Vorlagen kennen nicht alle Felder: mit dem aktuellen Stil auffüllen.
+    const saved = p as Partial<Style> & { textBackground?: unknown };
+    editor.style = {
+      ...editor.style,
+      ...saved,
+      textBackground: typeof saved.textBackground === "object" ? saved.textBackground : editor.style.textBackground,
+    };
     const sel = editor.selected;
     if (!sel || sel.locked) return;
     const r = editor.ratio;

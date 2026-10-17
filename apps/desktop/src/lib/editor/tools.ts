@@ -20,7 +20,14 @@ export type ToolId =
   | "crop"
   | "background";
 
-export type Tool = { id: ToolId; key: string; label: MessageKey; icon: string };
+export type Tool = {
+  id: ToolId;
+  key: string;
+  label: MessageKey;
+  icon: string;
+  /** Nicht in der Werkzeugleiste (nur per Taste oder über ein anderes Werkzeug). */
+  hidden?: boolean;
+};
 
 export const TOOLS: Tool[] = [
   { id: "select", key: "v", label: "tool.select", icon: "M5 3l13 8-6 1.5L9 19z" },
@@ -35,11 +42,17 @@ export const TOOLS: Tool[] = [
   { id: "highlight", key: "h", label: "tool.highlight", icon: "M4 15h16v4H4zM8 5l8 0 0 10-8 0z" },
   { id: "spotlight", key: "s", label: "tool.spotlight", icon: "M3 3h18v18H3zM8 8h8v8H8z" },
   { id: "magnifier", key: "m", label: "tool.magnifier", icon: "M10 4a6 6 0 110 12 6 6 0 010-12zM15 15l5 5" },
-  { id: "blur", key: "u", label: "tool.blur", icon: "M12 3c4 5 6 8 6 11a6 6 0 01-12 0c0-3 2-6 6-11z" },
-  { id: "pixelate", key: "x", label: "tool.pixelate", icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" },
+  // „Unkenntlich machen“: ein Knopf für Weichzeichnen und Verpixeln, Art oben wählbar.
+  { id: "blur", key: "u", label: "tool.obscure", icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" },
+  { id: "pixelate", key: "x", label: "tool.pixelate", icon: "", hidden: true },
   { id: "crop", key: "c", label: "tool.crop", icon: "M7 3v14h14M3 7h14v14" },
   { id: "background", key: "g", label: "tool.background", icon: "M3 3h18v18H3zM7 7h10v10H7z" },
 ];
+
+/** Ist `tool` gerade aktiv? Der Knopf „Unkenntlich machen“ steht für beide Arten. */
+export function isActive(tool: Tool, current: ToolId): boolean {
+  return tool.id === current || (tool.id === "blur" && current === "pixelate");
+}
 
 export function toolByKey(key: string): Tool | undefined {
   return TOOLS.find((t) => t.key === key.toLowerCase());

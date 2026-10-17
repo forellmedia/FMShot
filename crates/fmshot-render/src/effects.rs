@@ -3,10 +3,10 @@
 //!
 //! Effekte arbeiten achsenparallel im Ausgabebild (Drehung wird ignoriert).
 
-use fmshot_core::{Rect, Shadow, Stroke};
+use fmshot_core::{Corner, Rect, Shadow, Stroke};
 use tiny_skia::{
-    FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, SpreadMode,
-    Transform,
+    BlendMode, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint,
+    SpreadMode, Transform,
 };
 
 use crate::shapes::{paint, rect_path, stroke_path};
@@ -143,31 +143,67 @@ pub(crate) fn pixelate(pixmap: &mut Pixmap, bounds: Rect, block: f32, t: Transfo
     }
 }
 
-/// Dunkelt alles ausser `bounds` ab.
-pub(crate) fn spotlight(pixmap: &mut Pixmap, bounds: Rect, dim: f32, t: Transform) {
-    let (w, h) = (pixmap.width() as f32, pixmap.height() as f32);
-    let mut pb = PathBuilder::new();
-    pb.push_rect(tiny_skia::Rect::from_xywh(0.0, 0.0, w, h).expect("Ausgabe ist nicht leer"));
-    if let Some(hole) = rect_path(bounds, 0.0).and_then(|p| p.transform(t)) {
-        pb.push_path(&hole);
-    }
-    if let Some(path) = pb.finish() {
-        let mut p = Paint::default();
-        p.set_color(
-            tiny_skia::Color::from_rgba(0.0, 0.0, 0.0, dim.clamp(0.0, 1.0))
-                .unwrap_or(tiny_skia::Color::BLACK),
-        );
-        p.anti_alias = true;
-        pixmap.fill_path(&path, &p, FillRule::EvenOdd, Transform::identity(), None);
-    }
+/// Wie das Spotlight aussieht (Grössen in Dokument-Pixeln).
+pub(crate) struct SpotlightShape {
+    pub bounds: Rect,
+    /// 0.0 bis 1.0
+    pub dim: f32,
+    pub corner_radius: f32,
+    /// Breite des weichen Übergangs.
+    pub feather: f32,
 }
 
-/// Runde Lupe: zeigt `source` vergrössert in `bounds`.
+/// Dunkelt alles ausser `bounds` ab. `scale` = Ausgabe-Pixel pro Dokument-Pixel.
+pub(crate) fn spotlight(pixmap: &mut Pixmap, shape: SpotlightShape, t: Transform, scale: f32) {
+    let SpotlightShape {
+        bounds,
+        dim,
+        corner_radius,
+        feather,
+    } = shape;
+    let Some(mut shade) = Pixmap::new(pixmap.width(), pixmap.height()) else {
+        return;
+    };
+    shade.fill(
+        tiny_skia::Color::from_rgba(0.0, 0.0, 0.0, dim.clamp(0.0, 1.0))
+            .unwrap_or(tiny_skia::Color::BLACK),
+    );
+    if let Some(hole) = rect_path(bounds, corner_radius) {
+        let clear = Paint {
+            blend_mode: BlendMode::Clear,
+            anti_alias: true,
+            ..Paint::default()
+        };
+        shade.fill_path(&hole, &clear, FillRule::Winding, t, None);
+        if feather > 0.0 {
+            // Nur um den Rand weichzeichnen – weiter aussen ist alles gleich dunkel.
+            let reach = feather * 2.0;
+            let around = Rect::new(
+                bounds.x - reach,
+                bounds.y - reach,
+                bounds.width + 2.0 * reach,
+                bounds.height + 2.0 * reach,
+            );
+            blur(&mut shade, around, feather * scale, t);
+        }
+    }
+    pixmap.draw_pixmap(
+        0,
+        0,
+        shade.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+}
+
+/// Runde Lupe: zeigt `source` vergrössert in `bounds`, auf Wunsch mit Griff.
 pub(crate) fn magnifier(
     pixmap: &mut Pixmap,
     bounds: Rect,
     source: Rect,
     stroke: &Stroke,
+    handle: Option<Corner>,
     t: Transform,
 ) {
     let snapshot = pixmap.clone();
@@ -206,9 +242,32 @@ pub(crate) fn magnifier(
     pixmap.fill_path(&oval, &p, FillRule::Winding, Transform::identity(), None);
     let scale = t.sx.abs().max(0.01);
     let device_stroke = Stroke {
-        color: stroke.color,
         width: stroke.width * scale,
+        ..*stroke
     };
+    if let Some(corner) = handle {
+        let (rx, ry) = (tw.abs() / 2.0, th.abs() / 2.0);
+        let (cx, cy) = (pts[2].x + tw / 2.0, pts[2].y + th / 2.0);
+        let (sx, sy) = match corner {
+            Corner::TopLeft => (-1.0, -1.0),
+            Corner::TopRight => (1.0, -1.0),
+            Corner::BottomLeft => (-1.0, 1.0),
+            Corner::BottomRight => (1.0, 1.0),
+        };
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        // Vom Rand nach aussen, etwa drei Viertel des Radius lang.
+        let mut pb = PathBuilder::new();
+        pb.move_to(cx + sx * d * rx, cy + sy * d * ry);
+        pb.line_to(cx + sx * d * rx * 1.75, cy + sy * d * ry * 1.75);
+        if let Some(path) = pb.finish() {
+            let grip = Stroke {
+                width: (device_stroke.width * 2.5).max(rx.min(ry) * 0.16),
+                style: fmshot_core::LineStyle::Solid,
+                ..device_stroke
+            };
+            stroke_path(pixmap, &path, &grip, 1.0, Transform::identity());
+        }
+    }
     stroke_path(pixmap, &oval, &device_stroke, 1.0, Transform::identity());
 }
 

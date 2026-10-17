@@ -9,8 +9,8 @@ mod geometry;
 mod image;
 
 pub use document::{
-    Artboard, AssetRef, Document, Fill, Layer, LayerId, LayerKind, SCHEMA_VERSION, Shadow, Stroke,
-    TextStyle,
+    ArrowHead, Artboard, AssetRef, Corner, Document, Fill, Layer, LayerId, LayerKind, LineStyle,
+    SCHEMA_VERSION, Shadow, Stroke, TextAlign, TextStyle, VerticalAlign,
 };
 pub use geometry::{Color, Point, Rect, Size};
 pub use image::{ImageError, RgbaImage};

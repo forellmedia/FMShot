@@ -4,7 +4,7 @@
   // Ebene einmal gezeichnet und zwischengespeichert; pro Mausbewegung wird
   // nur die aktive Ebene neu gezeichnet (ADR 0002).
 
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { WasmRenderer } from "$lib/wasm/fmshot_render";
   import { fileBytes, isTauri } from "$lib/api";
   import { editor } from "./state.svelte";
@@ -15,6 +15,8 @@
     clone,
     groupIds,
     hasBoxHandles,
+    arrowMid,
+    controlThrough,
     hitTest,
     intersects,
     keepInPlace,
@@ -57,6 +59,8 @@
   let spaceDown = $state(false);
   let cropRect = $state<Rect | null>(null);
   let hoverHandle = $state<string | null>(null);
+  /** Zeichenwerkzeug über einer verschiebbaren Ebene (Mauszeiger „verschieben“). */
+  let hoverMovable = $state(false);
   /** Hilfslinien beim Einrasten (Dokument-Koordinaten). */
   let guides = $state<Guides | null>(null);
 
@@ -72,6 +76,7 @@
     | { kind: "pen"; id: number; before: string }
     | { kind: "pan"; start: Point; panX: number; panY: number }
     | { kind: "crop"; start: Point }
+    | { kind: "textbox"; start: Point }
     | { kind: "marquee"; start: Point; add: boolean };
   let drag: Drag | null = null;
   let frame = 0;
@@ -196,6 +201,13 @@
     scheduleRender();
   });
 
+  // Zeichenfläche geändert (Zuschneiden, Präsentation …): Ansicht neu begrenzen.
+  $effect(() => {
+    void editor.doc?.artboard.rect;
+    void editor.revision;
+    untrack(() => editor.setPan(editor.panX, editor.panY));
+  });
+
   // Bilder der Aufnahme in den Renderer laden.
   $effect(() => {
     void editor.revision;
@@ -240,6 +252,7 @@
       cache.invalidate();
       editor.viewport = { width, height };
       if (first) editor.fit();
+      else editor.setPan(editor.panX, editor.panY);
       renderNow();
     });
     ro.observe(container);
@@ -266,9 +279,17 @@
   /** Griffe im eigenen (ungedrehten) Koordinatensystem der Ebene. */
   function handlesOf(layer: Layer): Handle[] {
     const k = layer.kind;
-    if (k.type === "line" || k.type === "arrow") {
+    if (k.type === "line") {
       return [
         { name: "from", x: k.from.x, y: k.from.y },
+        { name: "to", x: k.to.x, y: k.to.y },
+      ];
+    }
+    if (k.type === "arrow") {
+      const mid = arrowMid(k);
+      return [
+        { name: "from", x: k.from.x, y: k.from.y },
+        { name: "mid", x: mid.x, y: mid.y },
         { name: "to", x: k.to.x, y: k.to.y },
       ];
     }
@@ -310,8 +331,11 @@
   }
 
   function handleAt(p: Point): string | null {
-    const tol = 7 / editor.zoom;
-    const near = (h: Handle) => Math.abs(h.x - p.x) <= tol && Math.abs(h.y - p.y) <= tol;
+    // Mittelgriff des Pfeils liegt auf der Linie: etwas grosszügiger treffen.
+    const near = (h: Handle) => {
+      const tol = (h.name === "mid" ? 10 : 7) / editor.zoom;
+      return Math.abs(h.x - p.x) <= tol && Math.abs(h.y - p.y) <= tol;
+    };
     const sel = editor.selected;
     if (sel) {
       if (sel.locked) return null;
@@ -332,7 +356,15 @@
       const local = rotatePoint(p, -rotation, pivot(orig));
       return keepInPlace(orig, applyHandle(orig, handle, local, shift), rotation);
     }
-    if (orig.type === "line" || orig.type === "arrow") {
+    if (orig.type === "arrow") {
+      // Mitte ziehen biegt den Pfeil; nahe der Geraden rastet er gerade ein.
+      if (handle === "mid") return { ...orig, control: controlThrough(orig.from, orig.to, p, 6 / editor.zoom) };
+      // Ende ziehen: Biegung wandert zur Hälfte mit, damit die Form bleibt.
+      const end = handle === "from" ? orig.from : orig.to;
+      const control = orig.control && { x: orig.control.x + (p.x - end.x) / 2, y: orig.control.y + (p.y - end.y) / 2 };
+      return handle === "from" ? { ...orig, from: p, control } : { ...orig, to: p, control };
+    }
+    if (orig.type === "line") {
       return handle === "from" ? { ...orig, from: p } : { ...orig, to: p };
     }
     if (orig.type === "callout" && handle === "tail") return { ...orig, tail: p };
@@ -355,26 +387,37 @@
 
   // --- Ebenen anlegen -----------------------------------------------------------
 
+  /** Neue Nummern: so gross wie die vorhandenen. */
+  function stepRadius(): number {
+    const existing = editor.doc?.layers.find((l) => l.kind.type === "step");
+    return existing && existing.kind.type === "step" ? existing.kind.radius : px(editor.style.stepRadius);
+  }
+
   function newKind(tool: string, p: Point): LayerKind | null {
     const s = editor.style;
-    const stroke = { color: s.color, width: px(s.strokeWidth) };
+    const stroke = { color: s.color, width: px(s.strokeWidth), style: s.lineStyle };
     const box = { x: p.x, y: p.y, width: 0, height: 0 };
     const textStyle = {
       size: px(s.fontSize),
       color: s.color,
       bold: s.bold,
       background: null,
+      corner_radius: null,
+      align: "left" as const,
+      valign: "top" as const,
     };
     switch (tool) {
       case "arrow":
+        return { type: "arrow", from: p, to: p, stroke, head: s.arrowHead, head_size: s.arrowHeadSize, control: null };
       case "line":
-        return { type: tool, from: p, to: p, stroke };
+        return { type: "line", from: p, to: p, stroke };
       case "rectangle":
         return { type: "rectangle", bounds: box, stroke, fill: s.fill ? s.color : null, corner_radius: px(4) };
       case "ellipse":
         return { type: "ellipse", bounds: box, stroke, fill: s.fill ? s.color : null };
       case "pen":
-        return { type: "pen", points: [p], stroke };
+        // Freihand immer durchgezogen.
+        return { type: "pen", points: [p], stroke: { ...stroke, style: "solid" } };
       case "highlight":
         return { type: "highlight", bounds: box, color: s.highlightColor };
       case "blur":
@@ -382,9 +425,21 @@
       case "pixelate":
         return { type: "pixelate", bounds: box, block: px(s.pixelBlock) };
       case "spotlight":
-        return { type: "spotlight", bounds: box, dim: s.spotlightDim };
+        return {
+          type: "spotlight",
+          bounds: box,
+          dim: s.spotlightDim,
+          corner_radius: px(s.spotlightRadius),
+          feather: px(s.spotlightFeather),
+        };
       case "magnifier":
-        return { type: "magnifier", bounds: box, source: box, stroke: { color: s.color, width: px(3) } };
+        return {
+          type: "magnifier",
+          bounds: box,
+          source: box,
+          stroke: { color: s.color, width: px(3), style: "solid" },
+          handle: s.magnifierHandle,
+        };
       case "callout":
         return {
           type: "callout",
@@ -398,15 +453,18 @@
         return {
           type: "step",
           center: p,
-          radius: px(14),
-          number: nextStepNumber(editor.doc!),
+          radius: stepRadius(),
+          number: nextStepNumber(editor.doc!, s.stepStart),
           fill: s.color,
           text_color: { r: 255, g: 255, b: 255, a: 255 },
         };
       case "text": {
         const style = {
           ...textStyle,
-          background: s.textBackground ? { r: 255, g: 255, b: 255, a: 230 } : null,
+          background: s.textBackground,
+          corner_radius: px(s.textRadius),
+          align: s.textAlign,
+          valign: s.textValign,
         };
         const pad = textPadding(style);
         return {
@@ -414,10 +472,26 @@
           bounds: { x: p.x, y: p.y - (style.size * LINE_HEIGHT) / 2 - pad, width: px(40), height: style.size * LINE_HEIGHT + 2 * pad },
           text: "",
           style,
+          fixed_width: false,
         };
       }
     }
     return null;
+  }
+
+  /** Text anlegen und bearbeiten: im aufgezogenen Kasten `box` oder frei an `p`. */
+  function createText(p: Point, box: Rect | null) {
+    const kind = newKind("text", p);
+    if (!kind || kind.type !== "text" || !editor.doc) return;
+    if (box) {
+      kind.bounds = { ...box, height: Math.max(box.height, kind.bounds.height) };
+      kind.fixed_width = true;
+    }
+    const before = editor.snapshot();
+    const layer = newLayer(editor.doc, kind);
+    editor.preview((d) => d.layers.push(layer));
+    editor.finishPreview(before);
+    startEditing(layer.id, before);
   }
 
   /** Aufgezogenes Rechteck (Shift = Quadrat). */
@@ -516,7 +590,9 @@
         rotation: rotationOf(sel),
         before: editor.snapshot(),
       };
-      beginSession(layerIndex(sel.id));
+      // Nummern sind gleich gross: andere ändern sich mit – alles neu zeichnen.
+      if (sel.kind.type === "step") beginSlowSession();
+      else beginSession(layerIndex(sel.id));
       return;
     }
 
@@ -558,6 +634,22 @@
       }
     }
 
+    // Text: Kasten aufziehen (oder nur klicken, dann wächst er mit).
+    if (tool === "text") {
+      drag = { kind: "textbox", start: p };
+      marquee = { x: p.x, y: p.y, width: 0, height: 0 };
+      return;
+    }
+
+    // Zeichenwerkzeug über der Auswahl oder einer Ebene derselben Art:
+    // verschieben statt neu zeichnen (z. B. eine eben gezeichnete Lupe).
+    const movable = movableAt(p);
+    if (movable) {
+      if (!editor.selectedIds.includes(movable.id)) editor.select(movable.id);
+      startMove(p);
+      return;
+    }
+
     const kind = newKind(tool, p);
     if (!kind) return;
     const before = editor.snapshot();
@@ -569,13 +661,23 @@
       editor.finishPreview(before);
       return;
     }
-    if (tool === "text") {
-      editor.finishPreview(before);
-      startEditing(layer.id, before);
-      return;
-    }
     drag = tool === "pen" ? { kind: "pen", id: layer.id, before } : { kind: "create", id: layer.id, start: p, before };
     beginSession(editor.doc.layers.length - 1);
+  }
+
+  /** Gleiche Art wie das Werkzeug? „Unkenntlich machen“ umfasst beide Effekte. */
+  function sameKind(type: LayerKind["type"], tool: string): boolean {
+    if (tool === "blur" || tool === "pixelate") return type === "blur" || type === "pixelate";
+    return type === tool;
+  }
+
+  /** Ebene, die ein Zeichenwerkzeug an `p` verschieben würde (statt neu zu zeichnen). */
+  function movableAt(p: Point): Layer | null {
+    const tool = editor.tool;
+    if (tool === "select" || tool === "crop" || tool === "background") return null;
+    const hit = topLayerAt(p);
+    if (!hit || hit.kind.type === "image") return null;
+    return editor.selectedIds.includes(hit.id) || sameKind(hit.kind.type, tool) ? hit : null;
   }
 
   /** Alle ausgewählten (nicht gesperrten) Ebenen verschieben. */
@@ -601,15 +703,18 @@
     const p = toDoc(e);
     if (!drag) {
       hoverHandle = handleAt(p);
+      hoverMovable = !hoverHandle && !!movableAt(p);
       return;
     }
     switch (drag.kind) {
       case "pan":
-        editor.panX = drag.panX - (e.clientX - drag.start.x) / editor.zoom;
-        editor.panY = drag.panY - (e.clientY - drag.start.y) / editor.zoom;
+        editor.setPan(drag.panX - (e.clientX - drag.start.x) / editor.zoom, drag.panY - (e.clientY - drag.start.y) / editor.zoom);
         return;
       case "crop":
         cropRect = rectFromPoints(drag.start, p);
+        return;
+      case "textbox":
+        marquee = rectFromPoints(drag.start, p);
         return;
       case "create": {
         const { id, start } = drag;
@@ -660,7 +765,13 @@
         const { id, handle, orig, rotation } = drag;
         editor.preview((d) => {
           const l = d.layers.find((l) => l.id === id);
-          if (l) l.kind = applyHandle(orig, handle, p, e.shiftKey, rotation);
+          if (!l) return;
+          const k = applyHandle(orig, handle, p, e.shiftKey, rotation);
+          // Breite von Hand gesetzt: Text bricht ab jetzt darin um.
+          l.kind = k.type === "text" ? { ...k, fixed_width: true } : k;
+          if (k.type === "step") {
+            for (const o of d.layers) if (o.kind.type === "step" && !o.locked) o.kind.radius = k.radius;
+          }
         });
         return;
       }
@@ -700,6 +811,12 @@
     guides = null;
     if (!d) return;
     switch (d.kind) {
+      case "textbox": {
+        const r = marquee;
+        marquee = null;
+        createText(d.start, r && r.width > px(12) ? r : null);
+        break;
+      }
       case "crop": {
         const r = cropRect;
         cropRect = null;
@@ -854,8 +971,7 @@
       // Pinch (Trackpad) und ⌘ + Mausrad zoomen.
       editor.zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
     } else {
-      editor.panX += e.deltaX / editor.zoom;
-      editor.panY += e.deltaY / editor.zoom;
+      editor.setPan(editor.panX + e.deltaX / editor.zoom, editor.panY + e.deltaY / editor.zoom);
     }
   }
 
@@ -886,11 +1002,15 @@
       const k = l.kind;
       if (k.type === "text") {
         const pad = textPadding(k.style);
-        const free = measureText(w, value, k.style.size, k.style.bold);
-        const inner = Math.max(k.bounds.width - 2 * pad, free.width + 2);
+        const box = k.bounds.width - 2 * pad;
+        const inner = k.fixed_width
+          ? Math.max(1, box)
+          : Math.max(box, measureText(w, value, k.style.size, k.style.bold).width + 2);
         const wrapped = measureText(w, value, k.style.size, k.style.bold, inner);
         k.text = value;
-        k.bounds = { ...k.bounds, width: inner + 2 * pad, height: wrapped.height + 2 * pad };
+        // Aufgezogener Kasten wird nur höher, nie niedriger als gezogen.
+        const height = wrapped.height + 2 * pad;
+        k.bounds = { ...k.bounds, width: inner + 2 * pad, height: k.fixed_width ? Math.max(height, k.bounds.height) : height };
       } else if (k.type === "callout") {
         const pad = k.style.size * 0.5;
         const inner = Math.max(1, k.bounds.width - 2 * pad);
@@ -946,6 +1066,7 @@
       fontSize: k.style.size * editor.zoom,
       bold: k.style.bold,
       color: toCss(k.style.color),
+      align: k.type === "text" && k.fixed_width ? k.style.align : "left",
       text: k.text,
     };
   });
@@ -1043,6 +1164,7 @@
       return map[hoverHandle] ?? "move";
     }
     if (editor.tool === "select") return "default";
+    if (hoverMovable || drag?.kind === "move") return "move";
     if (editor.tool === "text") return "text";
     return "crosshair";
   });
@@ -1183,6 +1305,7 @@
       style:font-weight={editing.bold ? 700 : 400}
       style:color={editing.color}
       style:line-height={LINE_HEIGHT}
+      style:text-align={editing.align}
       style:transform={editing.rotation ? `rotate(${editing.rotation}deg)` : null}
       style:transform-origin="{editing.originX}px {editing.originY}px"
       oninput={onTextInput}

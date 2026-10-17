@@ -164,6 +164,7 @@ const mock = (() => {
       replace_mac_system_shortcuts: false,
       auto_export: { enabled: false, folder: null, pattern: "FMShot {date} {time}", format: "png" },
       retention_days: null,
+      save_format: "png",
     } as Settings,
     hotkeys: [
       { action: "capture_region", shortcut: "Primary+Shift+2", label: "⇧⌘2", conflict: false },

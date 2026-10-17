@@ -192,6 +192,19 @@
             {/if}
           {/if}
         {:else if tab === "saving"}
+          <label class="row">
+            <span>{t("settings.save_format")}</span>
+            <select
+              value={settings.save_format ?? "png"}
+              onchange={(e) => {
+                settings!.save_format = e.currentTarget.value as "png" | "jpg";
+                save();
+              }}
+            >
+              <option value="png">PNG</option>
+              <option value="jpg">JPEG</option>
+            </select>
+          </label>
           <label class="row check">
             <input
               type="checkbox"

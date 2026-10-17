@@ -17,7 +17,7 @@ import {
   type LayerKind,
 } from "./model";
 
-const stroke = { color: { r: 0, g: 0, b: 0, a: 255 }, width: 2 };
+const stroke = { color: { r: 0, g: 0, b: 0, a: 255 }, width: 2, style: "solid" as const };
 const rect = (id: number, x = 0, group?: number): Layer => ({
   id,
   visible: true,

@@ -123,6 +123,7 @@ impl WasmRenderer {
             color: fmshot_core::Color::BLACK,
             bold,
             background: None,
+            ..Default::default()
         };
         let m = self
             .renderer

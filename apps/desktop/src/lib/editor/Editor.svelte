@@ -48,7 +48,7 @@
         d: () => editor.duplicate(),
         a: () => editor.selectAll(),
         g: () => (e.shiftKey ? editor.ungroupSelection() : editor.groupSelection()),
-        s: () => editor.exportAs(e.shiftKey ? "jpg" : "png"),
+        s: () => editor.save(),
         "0": () => editor.fit(),
         "1": () => editor.actualSize(),
         "=": () => editor.zoomAt(1.25),
@@ -86,8 +86,7 @@
     }
     const tool = toolByKey(key);
     if (tool) {
-      editor.tool = tool.id;
-      if (tool.id !== "select") editor.selectedId = null;
+      editor.setTool(tool.id);
     }
   }
 
@@ -154,25 +153,13 @@
         </button>
         <span class="sep"></span>
       {/if}
-      <button class="text" title="⌘C" onclick={() => editor.copy()} disabled={!editor.doc}>{t("editor.copy")}</button>
+      <button title="{t('editor.copy')} (⌘C)" aria-label={t("editor.copy")} onclick={() => editor.copy()} disabled={!editor.doc}>
+        <Icon d="M9 9h10v10H9zM5 15V5h10" />
+      </button>
+      <button title="{t('editor.save')} (⌘S)" aria-label={t("editor.save")} onclick={() => editor.save()} disabled={!editor.doc}>
+        <Icon d="M12 4v11M7 10l5 5 5-5M5 19h14" />
+      </button>
       {#if compact}
-        <Dropdown align="right">
-          {#snippet label()}{t("editor.save")} ▾{/snippet}
-          {#snippet children(close)}
-            {#each [["png", "⌘S"], ["jpg", "⇧⌘S"]] as const as [format, keys] (format)}
-              <button
-                class="item"
-                disabled={!editor.doc}
-                onclick={() => {
-                  editor.exportAs(format);
-                  close();
-                }}
-              >
-                {format.toUpperCase()} <kbd>{keys}</kbd>
-              </button>
-            {/each}
-          {/snippet}
-        </Dropdown>
         <Dropdown align="right" title={t("editor.more")}>
           {#snippet label()}<Icon d="M5 12h.5M12 12h.5M19 12h.5" />{/snippet}
           {#snippet children(close)}
@@ -218,8 +205,6 @@
           {/snippet}
         </Dropdown>
       {:else}
-        <button class="text" title="⌘S" onclick={() => editor.exportAs("png")} disabled={!editor.doc}>PNG</button>
-        <button class="text" title="⇧⌘S" onclick={() => editor.exportAs("jpg")} disabled={!editor.doc}>JPG</button>
         <button
           title={t("layers.title")}
           class:on={editor.layersPanel}
@@ -325,9 +310,6 @@
   header button:disabled {
     opacity: 0.35;
     cursor: default;
-  }
-  header button.text {
-    padding: 0 8px;
   }
   header button.zoom {
     min-width: 52px;

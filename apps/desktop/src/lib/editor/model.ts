@@ -10,9 +10,23 @@ export type Color = { r: number; g: number; b: number; a: number };
 export type Point = { x: number; y: number };
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Size = { width: number; height: number };
-export type Stroke = { color: Color; width: number };
+export type LineStyle = "solid" | "dashed" | "dotted" | "double";
+export type ArrowHead = "filled" | "open";
+export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
+export type Stroke = { color: Color; width: number; style: LineStyle };
 export type Shadow = { color: Color; blur: number; offset_y: number };
-export type TextStyle = { size: number; color: Color; bold: boolean; background: Color | null };
+export type TextAlign = "left" | "center" | "right";
+export type VerticalAlign = "top" | "middle" | "bottom";
+export type TextStyle = {
+  size: number;
+  color: Color;
+  bold: boolean;
+  background: Color | null;
+  /** Eckenradius der Hinterlegung; `null` = ein Viertel der Schriftgrösse. */
+  corner_radius: number | null;
+  align: TextAlign;
+  valign: VerticalAlign;
+};
 export type Fill =
   | { type: "solid"; color: Color }
   | { type: "linear_gradient"; from: Color; to: Color; angle: number };
@@ -31,16 +45,25 @@ export type LayerKind =
   | { type: "rectangle"; bounds: Rect; stroke: Stroke; fill: Color | null; corner_radius: number }
   | { type: "ellipse"; bounds: Rect; stroke: Stroke; fill: Color | null }
   | { type: "line"; from: Point; to: Point; stroke: Stroke }
-  | { type: "arrow"; from: Point; to: Point; stroke: Stroke }
+  | {
+      type: "arrow";
+      from: Point;
+      to: Point;
+      stroke: Stroke;
+      head: ArrowHead;
+      head_size: number;
+      /** Kontrollpunkt eines gebogenen Pfeils; `null` = gerade. */
+      control: Point | null;
+    }
   | { type: "pen"; points: Point[]; stroke: Stroke }
   | { type: "highlight"; bounds: Rect; color: Color }
-  | { type: "text"; bounds: Rect; text: string; style: TextStyle }
+  | { type: "text"; bounds: Rect; text: string; style: TextStyle; fixed_width: boolean }
   | { type: "callout"; bounds: Rect; tail: Point; text: string; style: TextStyle; fill: Color }
   | { type: "step"; center: Point; radius: number; number: number; fill: Color; text_color: Color }
   | { type: "blur"; bounds: Rect; radius: number }
   | { type: "pixelate"; bounds: Rect; block: number }
-  | { type: "spotlight"; bounds: Rect; dim: number }
-  | { type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke };
+  | { type: "spotlight"; bounds: Rect; dim: number; corner_radius: number; feather: number }
+  | { type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke; handle: Corner | null };
 
 export type LayerType = LayerKind["type"];
 
@@ -67,6 +90,28 @@ export type Doc = {
 const _compatible = (d: Doc): Document_Deserialize => d;
 void _compatible;
 
+/** Felder, die ältere Aufnahmen noch nicht haben, mit den Standardwerten füllen. */
+function withDefaults(k: LayerKind) {
+  if ("stroke" in k) k.stroke.style ??= "solid";
+  if (k.type === "arrow") {
+    k.head ??= "filled";
+    k.head_size ||= 1;
+    k.control ??= null;
+  } else if (k.type === "spotlight") {
+    k.corner_radius ??= 0;
+    k.feather ??= 0;
+  } else if (k.type === "magnifier") {
+    k.handle ??= null;
+  } else if (k.type === "text") {
+    k.fixed_width ??= false;
+  }
+  if (k.type === "text" || k.type === "callout") {
+    k.style.corner_radius ??= null;
+    k.style.align ??= "left";
+    k.style.valign ??= "top";
+  }
+}
+
 /** Dokument aus dem Backend (Zahlen können laut Typ `null` sein). */
 export function fromBackend(raw: unknown): Doc {
   const doc = raw as Doc;
@@ -74,6 +119,7 @@ export function fromBackend(raw: unknown): Doc {
   for (const l of doc.layers) {
     l.rotation ||= 0;
     l.opacity ??= 1;
+    withDefaults(l.kind);
   }
   return doc;
 }
@@ -148,11 +194,49 @@ function distToSegment(p: Point, a: Point, b: Point): number {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+// --- Gebogene Pfeile (quadratische Kurve from → control → to) -----------------
+
+/** Punkt der Kurve bei `t` (0 … 1). */
+export function quadAt(a: Point, c: Point, b: Point, t: number): Point {
+  const u = 1 - t;
+  return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y };
+}
+
+/** Mitte des Pfeils (auf der Kurve) – dort sitzt der Griff zum Biegen. */
+export function arrowMid(k: { from: Point; to: Point; control: Point | null }): Point {
+  const straight = { x: (k.from.x + k.to.x) / 2, y: (k.from.y + k.to.y) / 2 };
+  return k.control ? quadAt(k.from, k.control, k.to, 0.5) : straight;
+}
+
+/** Kontrollpunkt, damit die Kurve durch `mid` geht; nahe der Geraden `null`. */
+export function controlThrough(from: Point, to: Point, mid: Point, snap: number): Point | null {
+  const straight = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  if (distToSegment(mid, from, to) <= snap) return null;
+  return { x: 2 * mid.x - straight.x, y: 2 * mid.y - straight.y };
+}
+
+/** Umschliessendes Rechteck der Kurve (wie `quad_bounds` in fmshot-core). */
+function quadBounds(a: Point, c: Point, b: Point): Rect {
+  const xs = [a.x, b.x];
+  const ys = [a.y, b.y];
+  const extreme = (a: number, c: number, b: number, out: number[]) => {
+    const d = a - 2 * c + b;
+    const t = Math.abs(d) > 1e-9 ? (a - c) / d : -1;
+    if (t > 0 && t < 1) out.push((1 - t) ** 2 * a + 2 * (1 - t) * t * c + t * t * b);
+  };
+  extreme(a.x, c.x, b.x, xs);
+  extreme(a.y, c.y, b.y, ys);
+  const x0 = Math.min(...xs);
+  const y0 = Math.min(...ys);
+  return { x: x0, y: y0, width: Math.max(...xs) - x0, height: Math.max(...ys) - y0 };
+}
+
 /** Umschliessendes Rechteck (ohne Strichbreite) – wie `LayerKind::bounds`. */
 export function bounds(kind: LayerKind): Rect {
   switch (kind.type) {
-    case "line":
     case "arrow":
+      return kind.control ? quadBounds(kind.from, kind.control, kind.to) : rectFromPoints(kind.from, kind.to);
+    case "line":
       return rectFromPoints(kind.from, kind.to);
     case "pen": {
       if (kind.points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
@@ -255,8 +339,12 @@ export function keepInPlace(orig: LayerKind, changed: LayerKind, rotation: numbe
 /** Dreht eine Ebene um `deg` Grad um den Punkt `c` (Gruppe drehen). */
 export function rotateAround(layer: Layer, deg: number, c: Point): Layer {
   const k = layer.kind;
-  if (k.type === "line" || k.type === "arrow") {
+  if (k.type === "line") {
     return { ...layer, kind: { ...k, from: rotatePoint(k.from, deg, c), to: rotatePoint(k.to, deg, c) } };
+  }
+  if (k.type === "arrow") {
+    const control = k.control && rotatePoint(k.control, deg, c);
+    return { ...layer, kind: { ...k, from: rotatePoint(k.from, deg, c), to: rotatePoint(k.to, deg, c), control } };
   }
   const p = pivot(k);
   const q = rotatePoint(p, deg, c);
@@ -271,8 +359,20 @@ export function hitTest(layer: Layer, point: Point, tol: number): boolean {
   const p = toLocal(layer, point);
   const sw = "stroke" in k ? k.stroke.width / 2 : 0;
   switch (k.type) {
-    case "line":
     case "arrow":
+      if (k.control) {
+        // Kurve in kurzen Stücken prüfen.
+        const c = k.control;
+        let prev = k.from;
+        for (let i = 1; i <= 24; i++) {
+          const next = quadAt(k.from, c, k.to, i / 24);
+          if (distToSegment(p, prev, next) <= tol + sw) return true;
+          prev = next;
+        }
+        return false;
+      }
+      return distToSegment(p, k.from, k.to) <= tol + sw;
+    case "line":
       return distToSegment(p, k.from, k.to) <= tol + sw;
     case "pen":
       for (let i = 1; i < k.points.length; i++) {
@@ -302,8 +402,9 @@ export function translate(kind: LayerKind, dx: number, dy: number): LayerKind {
   const mr = (r: Rect): Rect => ({ ...r, x: r.x + dx, y: r.y + dy });
   switch (kind.type) {
     case "line":
-    case "arrow":
       return { ...kind, from: mv(kind.from), to: mv(kind.to) };
+    case "arrow":
+      return { ...kind, from: mv(kind.from), to: mv(kind.to), control: kind.control && mv(kind.control) };
     case "pen":
       return { ...kind, points: kind.points.map(mv) };
     case "step":
@@ -329,6 +430,9 @@ export function withBounds(kind: LayerKind, r: Rect): LayerKind {
       const sy = old.height ? r.height / old.height : 1;
       const map = (p: Point): Point => ({ x: r.x + (p.x - old.x) * sx, y: r.y + (p.y - old.y) * sy });
       if (kind.type === "pen") return { ...kind, points: kind.points.map(map) };
+      if (kind.type === "arrow") {
+        return { ...kind, from: map(kind.from), to: map(kind.to), control: kind.control && map(kind.control) };
+      }
       return { ...kind, from: map(kind.from), to: map(kind.to) };
     }
     case "step": {
@@ -358,8 +462,10 @@ export function nextLayerId(doc: Doc): number {
   return doc.layers.reduce((m, l) => Math.max(m, l.id), 0) + 1;
 }
 
-export function nextStepNumber(doc: Doc): number {
-  return doc.layers.reduce((m, l) => (l.kind.type === "step" ? Math.max(m, l.kind.number) : m), 0) + 1;
+/** Nächste Nummer: nach der höchsten vorhandenen, frühestens `start`. */
+export function nextStepNumber(doc: Doc, start = 1): number {
+  const max = doc.layers.reduce((m, l) => (l.kind.type === "step" ? Math.max(m, l.kind.number) : m), 0);
+  return Math.max(max + 1, start);
 }
 
 // --- Gruppen -------------------------------------------------------------------
@@ -457,3 +563,13 @@ export function textPadding(style: TextStyle): number {
 }
 
 export const LINE_HEIGHT = 1.25;
+
+/** Hintergründe für „Präsentation“; der erste ist der Standard. */
+export const BACKGROUNDS: Fill[] = [
+  { type: "linear_gradient", from: rgb(0x6a, 0x5a, 0xf9), to: rgb(0xf9, 0x5a, 0x9a), angle: 135 },
+  { type: "linear_gradient", from: rgb(0x22, 0xc1, 0xc3), to: rgb(0xfd, 0xbb, 0x2d), angle: 135 },
+  { type: "linear_gradient", from: rgb(0x0f, 0x20, 0x27), to: rgb(0x2c, 0x53, 0x64), angle: 135 },
+  { type: "linear_gradient", from: rgb(0xff, 0x9a, 0x9e), to: rgb(0xfa, 0xd0, 0xc4), angle: 135 },
+  { type: "solid", color: rgb(0xf2, 0xf2, 0xf5) },
+  { type: "solid", color: rgb(0x1c, 0x1c, 0x1e) },
+];

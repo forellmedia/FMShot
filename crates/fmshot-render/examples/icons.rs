@@ -52,10 +52,7 @@ fn main() {
         &doc,
         LayerKind::Ellipse {
             bounds: Rect::new(452.0, 452.0, 120.0, 120.0),
-            stroke: Stroke {
-                color: Color::WHITE,
-                width: 0.0,
-            },
+            stroke: Stroke::new(Color::WHITE, 0.0),
             fill: Some(Color::rgb(0xff, 0x4d, 0x4d)),
         },
     ));
@@ -77,10 +74,7 @@ fn main() {
         &tray,
         LayerKind::Ellipse {
             bounds: Rect::new(14.0, 14.0, 8.0, 8.0),
-            stroke: Stroke {
-                color: Color::BLACK,
-                width: 0.0,
-            },
+            stroke: Stroke::new(Color::BLACK, 0.0),
             fill: Some(Color::BLACK),
         },
     ));
@@ -109,7 +103,7 @@ fn layer(doc: &Document, kind: LayerKind) -> fmshot_core::Layer {
 
 /// Vier Sucher-Ecken (wie das Werkzeug „Bereich“).
 fn corners(doc: &mut Document, r: Rect, len: f32, width: f32, color: Color) {
-    let stroke = Stroke { color, width };
+    let stroke = Stroke::new(color, width);
     let (x0, y0, x1, y1) = (r.x, r.y, r.right(), r.bottom());
     let pts = [
         [(x0, y0 + len), (x0, y0), (x0 + len, y0)],

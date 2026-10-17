@@ -20,12 +20,18 @@ import {
   ungroupLayers,
   union,
   visualBounds,
+  type ArrowHead,
   type Color,
+  type Corner,
   type Doc,
   type Fill,
+  BACKGROUNDS,
   type Layer,
   type LayerKind,
+  type LineStyle,
   type Point,
+  type TextAlign,
+  type VerticalAlign,
   type Rect,
   PALETTE,
   HIGHLIGHT_YELLOW,
@@ -34,19 +40,42 @@ import { findSensitive } from "./redact";
 import type { ToolId } from "./tools";
 
 const MAX_HISTORY = 200;
+/** Freier Rand neben der Zeichenfläche beim Verschieben (CSS-Pixel). */
+const PAN_MARGIN = 40;
 const SAVE_DELAY_MS = 400;
 
 /** Stil für neue Ebenen. Grössen in Bildschirmpunkten (× pixel_ratio = Pixel). */
 export type Style = {
   color: Color;
   strokeWidth: number;
+  /** Linienart für Linie, Pfeil, Rechteck, Ellipse. */
+  lineStyle: LineStyle;
+  arrowHead: ArrowHead;
+  /** Grösse der Pfeilspitze, 1 = normal. */
+  arrowHeadSize: number;
   fill: boolean;
   fontSize: number;
   bold: boolean;
-  textBackground: boolean;
+  /** Hinterlegung neuer Texte; `null` = ohne. */
+  textBackground: Color | null;
+  /** Eckenradius der Hinterlegung in Punkten. */
+  textRadius: number;
+  textAlign: TextAlign;
+  textValign: VerticalAlign;
+  /** Radius neuer Nummern in Punkten (alle Nummern sind gleich gross). */
+  stepRadius: number;
+  /** Erste Nummer, wenn noch keine da ist (oder höher als die höchste). */
+  stepStart: number;
+  /** Zuletzt gewählte Art von „Unkenntlich machen“. */
+  obscure: "blur" | "pixelate";
   blurRadius: number;
   pixelBlock: number;
   spotlightDim: number;
+  /** Spotlight: Eckenradius und weicher Rand in Punkten. */
+  spotlightRadius: number;
+  spotlightFeather: number;
+  /** Lupengriff; `null` = nur Kreis. */
+  magnifierHandle: Corner | null;
   highlightColor: Color;
 };
 
@@ -61,13 +90,25 @@ export class Editor {
   style = $state<Style>({
     color: PALETTE[0],
     strokeWidth: 3,
+    lineStyle: "solid",
+    arrowHead: "filled",
+    arrowHeadSize: 1.6,
     fill: false,
     fontSize: 18,
     bold: true,
-    textBackground: false,
+    textBackground: null,
+    textRadius: 6,
+    textAlign: "left",
+    textValign: "top",
+    stepRadius: 14,
+    stepStart: 1,
+    obscure: "blur",
     blurRadius: 8,
     pixelBlock: 8,
     spotlightDim: 0.55,
+    spotlightRadius: 0,
+    spotlightFeather: 0,
+    magnifierHandle: "bottom_right",
     highlightColor: HIGHLIGHT_YELLOW,
   });
   /** CSS-Pixel pro Dokument-Pixel. */
@@ -85,6 +126,7 @@ export class Editor {
   /** Suchbegriff der Galerie (Volltext über erkannten Text). */
   query = $state("");
   settingsOpen = $state(false);
+  /** Galerie im Vollbild offen. */
   /** Kopierte Ebenen für ⌘V. */
   private layerClipboard: Layer[] = [];
   /** Zählt jede Änderung am Dokument – die Leinwand zeichnet dann neu. */
@@ -232,8 +274,28 @@ export class Editor {
     const dx = this.panX + sx / this.zoom;
     const dy = this.panY + sy / this.zoom;
     this.zoom = z;
-    this.panX = dx - sx / z;
-    this.panY = dy - sy / z;
+    this.setPan(dx - sx / z, dy - sy / z);
+  }
+
+  /**
+   * Ansicht verschieben – begrenzt, damit die Zeichenfläche nie aus dem
+   * Fenster rutscht: Passt sie ganz hinein, bleibt sie mittig; sonst bleibt
+   * neben ihr höchstens ein schmaler Rand frei.
+   */
+  setPan(x: number, y: number) {
+    const r = this.doc?.artboard.rect;
+    if (!r) {
+      this.panX = x;
+      this.panY = y;
+      return;
+    }
+    const margin = PAN_MARGIN / this.zoom;
+    const clamp = (pan: number, start: number, size: number, view: number) =>
+      size + 2 * margin <= view
+        ? start + size / 2 - view / 2
+        : Math.min(Math.max(pan, start - margin), start + size + margin - view);
+    this.panX = clamp(x, r.x, r.width, this.viewport.width / this.zoom);
+    this.panY = clamp(y, r.y, r.height, this.viewport.height / this.zoom);
   }
 
   /** 100 % = ein Bildschirmpunkt pro Punkt der Aufnahme. */
@@ -528,10 +590,26 @@ export class Editor {
   }
 
   /** Hintergrund/Rahmen: Rand, Verlauf, runde Ecken und Schatten. */
+  /** Werkzeug wählen. „Präsentation“ legt gleich einen Hintergrund an. */
+  setTool(id: ToolId) {
+    this.tool = id;
+    if (id === "blur" || id === "pixelate") this.style.obscure = id;
+    if (id !== "select") this.selectedId = null;
+    if (id === "background" && this.doc && !this.doc.artboard.background) this.applyBackground(BACKGROUNDS[0]);
+  }
+
+  /** Grösse aller Nummern (Pixel) – Nummern sind immer gleich gross. */
+  setStepRadius(radius: number) {
+    this.commit((d) => {
+      for (const l of d.layers) if (l.kind.type === "step" && !l.locked) l.kind.radius = radius;
+    });
+  }
+
   applyBackground(fill: Fill, paddingPt = 48) {
     this.commit((d) => {
       const pad = paddingPt * d.pixel_ratio;
-      const content = d.layers.filter((l) => l.visible).map(visualBounds).reduce(union);
+      const visible = d.layers.filter((l) => l.visible);
+      const content = visible.length ? visible.map(visualBounds).reduce(union) : d.artboard.rect;
       d.artboard.rect = {
         x: content.x - pad,
         y: content.y - pad,
@@ -634,6 +712,12 @@ export class Editor {
     } catch (e) {
       this.flash(String(e));
     }
+  }
+
+  /** Speichern im Format aus den Einstellungen (⌘S). */
+  async save() {
+    const format = (await api.getSettings()).save_format ?? "png";
+    await this.exportAs(format);
   }
 
   async exportAs(format: "png" | "jpg") {

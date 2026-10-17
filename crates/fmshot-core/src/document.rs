@@ -111,15 +111,61 @@ pub enum AssetRef {
 pub struct Stroke {
     pub color: Color,
     pub width: f32,
+    #[serde(default)]
+    pub style: LineStyle,
+}
+
+impl Stroke {
+    /// Durchgezogener Strich.
+    pub fn new(color: Color, width: f32) -> Self {
+        Self {
+            color,
+            width,
+            style: LineStyle::Solid,
+        }
+    }
 }
 
 impl Default for Stroke {
     fn default() -> Self {
-        Self {
-            color: Color::ACCENT,
-            width: 4.0,
-        }
+        Self::new(Color::ACCENT, 4.0)
     }
+}
+
+/// Linienart eines Strichs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum LineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    /// Zwei parallele Linien.
+    Double,
+}
+
+/// Form der Pfeilspitze.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHead {
+    /// Gefülltes Dreieck.
+    #[default]
+    Filled,
+    /// Nur zwei Striche.
+    Open,
+}
+
+/// Ecke, z. B. Richtung des Lupengriffs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 
 /// Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund).
@@ -142,6 +188,50 @@ pub struct TextStyle {
     /// Hinterlegung hinter dem Text; `None` = ohne.
     #[serde(default)]
     pub background: Option<Color>,
+    /// Eckenradius der Hinterlegung; `None` = ein Viertel der Schriftgrösse.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    #[serde(default)]
+    pub align: TextAlign,
+    /// Senkrechte Lage im Kasten (wenn er höher ist als der Text).
+    #[serde(default)]
+    pub valign: VerticalAlign,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            size: 16.0,
+            color: Color::BLACK,
+            bold: false,
+            background: None,
+            corner_radius: None,
+            align: TextAlign::Left,
+            valign: VerticalAlign::Top,
+        }
+    }
+}
+
+/// Waagrechte Ausrichtung von Text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Senkrechte Ausrichtung von Text in seinem Kasten.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalAlign {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,6 +275,15 @@ pub enum LayerKind {
         from: Point,
         to: Point,
         stroke: Stroke,
+        #[serde(default)]
+        head: ArrowHead,
+        /// Grösse der Spitze relativ zur Standardgrösse (1.0).
+        #[serde(default = "one")]
+        head_size: f32,
+        /// Kontrollpunkt eines gebogenen Pfeils (quadratische Kurve);
+        /// `None` = gerade.
+        #[serde(default)]
+        control: Option<Point>,
     },
     /// Freihand-Linie.
     Pen {
@@ -201,6 +300,10 @@ pub enum LayerKind {
         bounds: Rect,
         text: String,
         style: TextStyle,
+        /// Breite fest (aufgezogener Kasten): Text bricht um, statt dass der
+        /// Kasten beim Tippen breiter wird.
+        #[serde(default)]
+        fixed_width: bool,
     },
     /// Sprechblase mit Spitze, die auf `tail` zeigt.
     Callout {
@@ -231,13 +334,48 @@ pub enum LayerKind {
         bounds: Rect,
         /// 0.0 bis 1.0
         dim: f32,
+        #[serde(default)]
+        corner_radius: f32,
+        /// Breite des weichen Übergangs zwischen hell und dunkel.
+        #[serde(default)]
+        feather: f32,
     },
     /// Kreisrunde Lupe: zeigt `source` vergrössert in `bounds`.
     Magnifier {
         bounds: Rect,
         source: Rect,
         stroke: Stroke,
+        /// Griff wie bei einer echten Lupe; `None` = nur der Kreis.
+        #[serde(default)]
+        handle: Option<Corner>,
     },
+}
+
+/// Umschliessendes Rechteck einer quadratischen Kurve von `a` über `c` nach `b`.
+fn quad_bounds(a: Point, c: Point, b: Point) -> Rect {
+    // Extremwert je Achse bei t = (a − c) / (a − 2c + b), falls 0 < t < 1.
+    let extreme = |a: f32, c: f32, b: f32| {
+        let d = a - 2.0 * c + b;
+        let t = if d.abs() > f32::EPSILON {
+            (a - c) / d
+        } else {
+            -1.0
+        };
+        (t > 0.0 && t < 1.0).then(|| (1.0 - t).powi(2) * a + 2.0 * (1.0 - t) * t * c + t * t * b)
+    };
+    let mut xs = vec![a.x, b.x];
+    let mut ys = vec![a.y, b.y];
+    xs.extend(extreme(a.x, c.x, b.x));
+    ys.extend(extreme(a.y, c.y, b.y));
+    let (x0, x1) = (
+        xs.iter().copied().fold(f32::MAX, f32::min),
+        xs.iter().copied().fold(f32::MIN, f32::max),
+    );
+    let (y0, y1) = (
+        ys.iter().copied().fold(f32::MAX, f32::min),
+        ys.iter().copied().fold(f32::MIN, f32::max),
+    );
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
 }
 
 impl LayerKind {
@@ -256,6 +394,12 @@ impl LayerKind {
             LayerKind::Callout { bounds, tail, .. } => {
                 bounds.union(&Rect::new(tail.x, tail.y, 0.0, 0.0))
             }
+            LayerKind::Arrow {
+                from,
+                to,
+                control: Some(c),
+                ..
+            } => quad_bounds(*from, *c, *to),
             LayerKind::Line { from, to, .. } | LayerKind::Arrow { from, to, .. } => Rect::new(
                 from.x.min(to.x),
                 from.y.min(to.y),
@@ -499,6 +643,9 @@ mod tests {
             from: Point::new(10.0, 10.0),
             to: Point::new(100.0, 50.0),
             stroke: Stroke::default(),
+            head: ArrowHead::default(),
+            head_size: 1.0,
+            control: None,
         });
         doc.push_layer(LayerKind::Text {
             bounds: Rect::new(0.0, 0.0, 100.0, 20.0),
@@ -508,7 +655,9 @@ mod tests {
                 color: Color::BLACK,
                 bold: true,
                 background: None,
+                ..Default::default()
             },
+            fixed_width: false,
         });
         doc.push_layer(LayerKind::Image {
             asset: AssetRef::Asset("abc123".into()),
@@ -527,5 +676,36 @@ mod tests {
         assert_eq!(doc, back);
         assert!(json.contains("\"type\": \"arrow\""));
         assert!(json.contains("\"source\": \"asset\""));
+    }
+
+    /// Aufnahmen von vor den Linienarten usw. laden mit den alten Werten.
+    #[test]
+    fn alte_ebenen_ohne_neue_felder() {
+        let stroke = r#"{"color":{"r":0,"g":0,"b":0,"a":255},"width":2}"#;
+        let arrow: LayerKind = serde_json::from_str(&format!(
+            r#"{{"type":"arrow","from":{{"x":0,"y":0}},"to":{{"x":9,"y":9}},"stroke":{stroke}}}"#
+        ))
+        .unwrap();
+        let LayerKind::Arrow {
+            stroke,
+            head,
+            head_size,
+            ..
+        } = arrow
+        else {
+            panic!("kein Pfeil");
+        };
+        assert_eq!(stroke.style, LineStyle::Solid);
+        assert_eq!(head, ArrowHead::Filled);
+        assert_eq!(head_size, 1.0);
+
+        let spot: LayerKind = serde_json::from_str(
+            r#"{"type":"spotlight","bounds":{"x":0,"y":0,"width":9,"height":9},"dim":0.5}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            spot,
+            LayerKind::Spotlight { corner_radius, feather, .. } if corner_radius == 0.0 && feather == 0.0
+        ));
     }
 }

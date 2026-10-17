@@ -13,7 +13,9 @@ fn bild_mit_text(text: &str) -> RgbaImage {
             color: Color::BLACK,
             bold: false,
             background: None,
+            ..Default::default()
         },
+        fixed_width: false,
     });
     let assets = HashMap::from([(
         fmshot_core::AssetRef::Original,

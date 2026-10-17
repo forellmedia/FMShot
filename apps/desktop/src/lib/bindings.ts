@@ -86,6 +86,13 @@ export type AppInfo = {
 	arch: string,
 };
 
+/**  Form der Pfeilspitze. */
+export type ArrowHead = 
+/**  Gefülltes Dreieck. */
+"filled" | 
+/**  Nur zwei Striche. */
+"open";
+
 /**  Der Bereich, der exportiert wird. */
 export type Artboard = {
 	rect: Rect,
@@ -143,6 +150,9 @@ export type Color = {
 	b: number,
 	a: number,
 };
+
+/**  Ecke, z. B. Richtung des Lupengriffs. */
+export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
 export type Diagnostics = {
 	version: string,
@@ -223,13 +233,25 @@ bounds: Rect;
 /**  Zuschnitt in Pixeln des Quellbilds; `None` = ganzes Bild. */
 crop?: Rect | null; 
 /**  Pixelgrösse des Quellbilds. */
-source_size: Size; corner_radius?: number | null; shadow?: Shadow | null } | { type: "rectangle"; bounds: Rect; stroke: Stroke; fill?: Color | null; corner_radius?: number | null } | { type: "ellipse"; bounds: Rect; stroke: Stroke; fill?: Color | null } | { type: "line"; from: Point; to: Point; stroke: Stroke } | { type: "arrow"; from: Point; to: Point; stroke: Stroke } | 
+source_size: Size; corner_radius?: number | null; shadow?: Shadow | null } | { type: "rectangle"; bounds: Rect; stroke: Stroke; fill?: Color | null; corner_radius?: number | null } | { type: "ellipse"; bounds: Rect; stroke: Stroke; fill?: Color | null } | { type: "line"; from: Point; to: Point; stroke: Stroke } | { type: "arrow"; from: Point; to: Point; stroke: Stroke; head?: ArrowHead; 
+/**  Grösse der Spitze relativ zur Standardgrösse (1.0). */
+head_size?: number | null; 
+/**
+ *  Kontrollpunkt eines gebogenen Pfeils (quadratische Kurve);
+ *  `None` = gerade.
+ */
+control?: Point | null } | 
 /**  Freihand-Linie. */
 { type: "pen"; points: Point[]; stroke: Stroke } | 
 /**  Textmarker: halbdurchsichtige Fläche, die den Inhalt einfärbt. */
 { type: "highlight"; bounds: Rect; color: Color } | 
 /**  Text in einem Kasten; `bounds.width` bestimmt den Zeilenumbruch. */
-{ type: "text"; bounds: Rect; text: string; style: TextStyle } | 
+{ type: "text"; bounds: Rect; text: string; style: TextStyle; 
+/**
+ *  Breite fest (aufgezogener Kasten): Text bricht um, statt dass der
+ *  Kasten beim Tippen breiter wird.
+ */
+fixed_width?: boolean } | 
 /**  Sprechblase mit Spitze, die auf `tail` zeigt. */
 { type: "callout"; bounds: Rect; tail: Point; text: string; style: TextStyle; fill: Color } | 
 /**  Nummerierter Kreis ①②③. */
@@ -237,9 +259,13 @@ source_size: Size; corner_radius?: number | null; shadow?: Shadow | null } | { t
 /**  Alles ausser `bounds` wird abgedunkelt. */
 { type: "spotlight"; bounds: Rect; 
 /**  0.0 bis 1.0 */
-dim: number | null } | 
+dim: number | null; corner_radius?: number | null; 
+/**  Breite des weichen Übergangs zwischen hell und dunkel. */
+feather?: number | null } | 
 /**  Kreisrunde Lupe: zeigt `source` vergrössert in `bounds`. */
-{ type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke };
+{ type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke; 
+/**  Griff wie bei einer echten Lupe; `None` = nur der Kreis. */
+handle?: Corner | null };
 
 export type Layer_Deserialize = {
 	id: LayerId,
@@ -284,6 +310,11 @@ export type Layer_Serialize = {
 	group?: number | null,
 	kind: LayerKind,
 };
+
+/**  Linienart eines Strichs. */
+export type LineStyle = "solid" | "dashed" | "dotted" | 
+/**  Zwei parallele Linien. */
+"double";
 
 /**  Ein erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = {
@@ -330,6 +361,8 @@ export type Settings = {
 	auto_export?: AutoExport,
 	/**  Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie. */
 	retention_days?: number | null,
+	/**  Format beim Speichern aus dem Editor (⌘S). */
+	save_format?: ImageFormat,
 };
 
 /**  Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund). */
@@ -347,7 +380,11 @@ export type Size = {
 export type Stroke = {
 	color: Color,
 	width: number | null,
+	style?: LineStyle,
 };
+
+/**  Waagrechte Ausrichtung von Text. */
+export type TextAlign = "left" | "center" | "right";
 
 /**  Schrift einer Text-Ebene. */
 export type TextStyle = {
@@ -356,6 +393,11 @@ export type TextStyle = {
 	bold?: boolean,
 	/**  Hinterlegung hinter dem Text; `None` = ohne. */
 	background?: Color | null,
+	/**  Eckenradius der Hinterlegung; `None` = ein Viertel der Schriftgrösse. */
+	corner_radius?: number | null,
+	align?: TextAlign,
+	/**  Senkrechte Lage im Kasten (wenn er höher ist als der Text). */
+	valign?: VerticalAlign,
 };
 
 export type UpdateInfo = {
@@ -364,6 +406,9 @@ export type UpdateInfo = {
 	/**  Release-Notizen aus GitHub */
 	notes: string | null,
 };
+
+/**  Senkrechte Ausrichtung von Text in seinem Kasten. */
+export type VerticalAlign = "top" | "middle" | "bottom";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
