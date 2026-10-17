@@ -102,9 +102,14 @@ pub fn start(app: &AppHandle, mode: Mode) {
         return;
     }
     if !state.capturer.has_permission() {
-        state.capturer.request_permission();
         release(app);
-        show_permission_dialog(app);
+        // macOS zeigt sein eigenes Fenster nur bei der ersten Anfrage. Dann
+        // genügt das; erst danach braucht es den eigenen Hinweis.
+        if first_permission_request(app) {
+            state.capturer.request_permission();
+        } else {
+            show_permission_dialog(app);
+        }
         return;
     }
     if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
@@ -440,6 +445,22 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Erste Anfrage nach der Bildschirmaufnahme-Freigabe? Merkt sie sich in
+/// einer Markierungsdatei im Konfigurationsordner.
+fn first_permission_request(app: &AppHandle) -> bool {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return true;
+    };
+    let marker = dir.join("screen-permission-requested");
+    if marker.exists() {
+        return false;
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, b"")) {
+        log::warn!("Freigabe-Markierung: {e}");
+    }
+    true
 }
 
 fn show_permission_dialog(app: &AppHandle) {
