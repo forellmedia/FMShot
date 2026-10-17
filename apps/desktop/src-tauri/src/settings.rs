@@ -71,6 +71,9 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     if let Err(e) = crate::tray::create(&app) {
         log::error!("Tray-Menü: {e}");
     }
+    if let Err(e) = crate::menu::create(&app) {
+        log::error!("App-Menü: {e}");
+    }
     Ok(())
 }
 

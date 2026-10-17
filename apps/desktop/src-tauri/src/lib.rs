@@ -6,6 +6,7 @@ mod commands;
 mod editor;
 mod hotkeys;
 mod i18n;
+mod menu;
 mod scroll;
 mod services;
 mod settings;
@@ -95,6 +96,7 @@ pub fn run() {
             app.manage(services::Services::new());
             app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
+            menu::create(app.handle())?;
             hotkeys::register(app.handle());
             services::start(app.handle());
             // Erster Start mit Argumenten (z. B. aus der Kommandozeile).
@@ -102,6 +104,7 @@ pub fn run() {
             handle_args(app.handle(), &argv);
             Ok(())
         })
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             // Fenster schliessen = verstecken; die App läuft im Tray weiter.
             if let WindowEvent::CloseRequested { api, .. } = event {
