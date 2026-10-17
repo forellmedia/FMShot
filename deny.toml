@@ -18,6 +18,14 @@ ignore = [
   # Nur „unmaintained“: ttf-parser kommt über fontdb (cosmic-text) und liest
   # ausschliesslich die mitgelieferte Schrift Inter, keine fremden Dateien.
   { id = "RUSTSEC-2026-0192", reason = "über fontdb, liest nur mitgelieferte Schriften" },
+  # zip 4.6 kommt über tauri-plugin-updater 2.14 (neueste stabile Version;
+  # zip >= 9 erst ab Updater 3.0-alpha). Die Lücken betreffen das Entpacken
+  # fremder Archive. Der Updater entpackt nur unsere eigenen Release-Archive,
+  # und zwar erst nach geprüfter minisign-Signatur. Entfernen, sobald der
+  # Updater eine neuere zip-Version mitbringt.
+  { id = "RUSTSEC-2026-0367", reason = "zip über Updater, nur signierte eigene Archive" },
+  { id = "RUSTSEC-2026-0368", reason = "zip über Updater, nur signierte eigene Archive" },
+  { id = "RUSTSEC-2026-0369", reason = "zip über Updater, nur signierte eigene Archive" },
 ]
 
 [licenses]
