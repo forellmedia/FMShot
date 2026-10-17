@@ -153,7 +153,7 @@
   "settings.report_hint": "Öffnet ein vorausgefülltes GitHub-Issue mit Version, System und Log – ohne Screenshots. Du siehst alles, bevor du es abschickst.",
   "settings.diagnostics": "Messwerte",
   "settings.no_timings": "Noch keine Aufnahme gemacht.",
-  "settings.licenses": "Schrift Inter: SIL Open Font License. Weitere Bibliotheken: siehe docs/drittanbieter.md.",
+  "settings.licenses": "Schrift Inter: SIL Open Font License. Emoji: Twemoji © Twitter, Inc. u. a., CC BY 4.0 (Schrift: Mozilla, Apache-2.0). Weitere Bibliotheken: siehe docs/drittanbieter.md.",
   "hotkey.capture_region": "Bereich",
   "hotkey.capture_screen": "Vollbild",
   "hotkey.capture_window": "Fenster",

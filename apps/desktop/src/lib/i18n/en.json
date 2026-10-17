@@ -153,7 +153,7 @@
   "settings.report_hint": "Opens a prefilled GitHub issue with version, system and log – no screenshots. You see everything before sending.",
   "settings.diagnostics": "Timings",
   "settings.no_timings": "No capture yet.",
-  "settings.licenses": "Inter font: SIL Open Font License. Other libraries: see docs/drittanbieter.md.",
+  "settings.licenses": "Inter font: SIL Open Font License. Emoji: Twemoji © Twitter, Inc. et al., CC BY 4.0 (font: Mozilla, Apache-2.0). Other libraries: see docs/drittanbieter.md.",
   "hotkey.capture_region": "Region",
   "hotkey.capture_screen": "Full screen",
   "hotkey.capture_window": "Window",

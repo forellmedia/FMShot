@@ -1,8 +1,9 @@
 //! Text mit cosmic-text und der mitgelieferten Schrift Inter (OFL).
 //!
-//! Nur Inter wird geladen – nativ und im WASM dieselbe Schrift, damit Text
-//! überall gleich umbricht. Inter deckt Latein, Griechisch und Kyrillisch ab;
-//! Emoji folgen später.
+//! Nur mitgelieferte Schriften werden geladen – nativ und im WASM dieselben,
+//! damit Text überall gleich umbricht. Inter deckt Latein, Griechisch und
+//! Kyrillisch ab; Emoji kommen farbig aus Twemoji (COLR, CC-BY 4.0), auf die
+//! cosmic-text automatisch ausweicht.
 
 use cosmic_text::fontdb::{Database, Source};
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
@@ -13,6 +14,10 @@ use crate::shapes::{paint, rect_path};
 
 static INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
 static INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
+static TWEMOJI: &[u8] = include_bytes!("../fonts/Twemoji.Mozilla.ttf");
+
+/// Familienname der eingebetteten Emoji-Schrift.
+const EMOJI_FAMILY: &str = "Twemoji Mozilla";
 
 /// Zeilenhöhe relativ zur Schriftgrösse.
 const LINE_HEIGHT: f32 = 1.25;
@@ -35,6 +40,7 @@ impl TextEngine {
         let mut db = Database::new();
         db.load_font_source(Source::Binary(std::sync::Arc::new(INTER_REGULAR)));
         db.load_font_source(Source::Binary(std::sync::Arc::new(INTER_BOLD)));
+        db.load_font_source(Source::Binary(std::sync::Arc::new(TWEMOJI)));
         db.set_sans_serif_family("Inter");
         Self {
             fonts: FontSystem::new_with_locale_and_db("de-CH".into(), db),
@@ -55,7 +61,18 @@ impl TextEngine {
             } else {
                 Weight::NORMAL
             });
-        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        let emoji = attrs.clone().family(Family::Name(EMOJI_FAMILY));
+        let spans = split_emoji(text).into_iter().map(|(part, is_emoji)| {
+            (
+                part,
+                if is_emoji {
+                    emoji.clone()
+                } else {
+                    attrs.clone()
+                },
+            )
+        });
+        buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
     }
@@ -173,7 +190,10 @@ impl TextEngine {
         }
         let mut buffer = self.layout(text, style, size, wrap.map(|w| w * scale + 1.0));
         let c = style.color;
-        let color = cosmic_text::Color::rgba(c.r, c.g, c.b, ((c.a as f32) * opacity) as u8);
+        // Deckkraft erst beim Mischen: farbige Emoji bringen eigene Farben mit
+        // und ignorieren die Textfarbe samt Alpha.
+        let color = cosmic_text::Color::rgba(c.r, c.g, c.b, c.a);
+        let opacity = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
         let (pw, ph) = (pixmap.width() as i32, pixmap.height() as i32);
         let stride = pw as usize * 4;
         let data = pixmap.data_mut();
@@ -182,7 +202,7 @@ impl TextEngine {
             &mut self.cache,
             color,
             |x, y, w, h, col| {
-                let a = col.a() as u32;
+                let a = col.a() as u32 * opacity / 255;
                 if a == 0 {
                     return;
                 }
@@ -213,5 +233,60 @@ impl TextEngine {
                 }
             },
         );
+    }
+}
+
+/// Zerlegt Text in Abschnitte aus Emoji und übrigem Text. Emoji-Folgen
+/// werden ausdrücklich in Twemoji gesetzt: Inter enthält einige Zeichen wie
+/// ❤ selbst und würde sie sonst schwarz statt farbig zeichnen, obwohl U+FE0F
+/// die Emoji-Darstellung verlangt.
+fn split_emoji(text: &str) -> Vec<(&str, bool)> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut out: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0;
+    let mut current: Option<bool> = None;
+    for (i, cluster) in text.grapheme_indices(true) {
+        let e = is_emoji_cluster(cluster);
+        if current.is_some_and(|c| c != e) {
+            out.push((&text[start..i], current.unwrap_or(false)));
+            start = i;
+        }
+        current = Some(e);
+    }
+    if start < text.len() {
+        out.push((&text[start..], current.unwrap_or(false)));
+    }
+    out
+}
+
+/// Ein Graphem gilt als Emoji, wenn es die Emoji-Darstellung verlangt
+/// (U+FE0F, Tastenkappe U+20E3, ZWJ-Folge) oder aus den Emoji-Blöcken ab
+/// U+1F000 stammt (inkl. Flaggen aus Regional-Indikatoren).
+fn is_emoji_cluster(cluster: &str) -> bool {
+    cluster
+        .chars()
+        .any(|c| matches!(c, '\u{FE0F}' | '\u{20E3}' | '\u{200D}') || c as u32 >= 0x1F000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emoji_abschnitte() {
+        assert_eq!(split_emoji("Hallo"), vec![("Hallo", false)]);
+        assert_eq!(
+            split_emoji("Ja ❤️ und 👍🏽!"),
+            vec![
+                ("Ja ", false),
+                ("❤️", true),
+                (" und ", false),
+                ("👍🏽", true),
+                ("!", false)
+            ]
+        );
+        assert_eq!(split_emoji("❤"), vec![("❤", false)]);
+        assert_eq!(split_emoji("🇨🇭1️⃣"), vec![("🇨🇭1️⃣", true)]);
+        assert_eq!(split_emoji(""), vec![]);
     }
 }

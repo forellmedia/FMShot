@@ -171,6 +171,35 @@ fn text_wird_gezeichnet_und_gemessen() {
 }
 
 #[test]
+fn emoji_werden_farbig_gezeichnet() {
+    let mut r = Renderer::new();
+    let style = TextStyle {
+        size: 32.0,
+        color: Color::WHITE,
+        bold: false,
+        background: None,
+    };
+    let m = r.measure_text("🎉", &style, None);
+    assert!(m.width > 16.0, "Emoji ohne Breite: {m:?}");
+
+    let mut doc = Document::from_capture(80, 60);
+    doc.push_layer(LayerKind::Text {
+        bounds: Rect::new(5.0, 5.0, 70.0, 50.0),
+        text: "🎉".into(),
+        style,
+    });
+    let out = r.render(&doc, &assets(80, 60)).unwrap();
+    // Weisser Text auf Blau ergibt nur Blau/Weiss-Mischungen (R == G);
+    // farbige Emoji-Pixel weichen davon ab.
+    let colored = (0..80)
+        .flat_map(|x| (0..60).map(move |y| (x, y)))
+        .filter_map(|(x, y)| out.pixel(x, y))
+        .filter(|p| (p[0] as i32 - p[1] as i32).abs() > 40)
+        .count();
+    assert!(colored > 30, "nur {colored} farbige Pixel");
+}
+
+#[test]
 fn verpixeln_macht_bloecke_einfarbig() {
     let mut doc = Document::from_capture(16, 16);
     doc.push_layer(LayerKind::Pixelate {
