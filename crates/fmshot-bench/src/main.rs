@@ -142,7 +142,7 @@ fn main() {
     let last = doc.layers.len() - 1;
     add(
         "Editor: aktive Ebene beim Ziehen",
-        40,
+        60,
         measure(
             31,
             || (),
