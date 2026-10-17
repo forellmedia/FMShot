@@ -12,5 +12,13 @@
   / Kreuzkorrelation, fixe Kopf-/Fusszeilen) und wird mit gespeicherten
   Bildfolgen getestet.
 
+### Nachtrag (Windows)
+Der Bildstrom ist vorerst `BitBlt` des Ausschnitts im Takt der Scroll-Schleife
+(wenige Millisekunden pro Bild). Das läuft auch in VMs mit einfachem
+Grafiktreiber, wo Desktop Duplication oft fehlt. Desktop Duplication bzw.
+Windows Graphics Capture folgen mit der Video-Aufnahme. Automatisch gescrollt
+wird mit `SendInput` (Mausrad, 120 Einheiten ≈ 100 logische Pixel); Windows
+verlangt dafür keine Freigabe.
+
 ## Folgen
 Die Bildstrom-Backends sind gleichzeitig die Grundlage der späteren Video-Aufnahme.

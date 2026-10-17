@@ -2,7 +2,10 @@
 //!
 //! - macOS: PNG mit Auflösungsangabe als `NSImage` – Retina-Aufnahmen werden
 //!   beim Einfügen in Punktgrösse dargestellt, nicht doppelt so gross.
-//! - Windows / Linux: `arboard` (Rohpixel).
+//! - Windows: PNG (mit Auflösung, für Office & Co.) und `CF_DIBV5` (mit
+//!   Alpha und DPI, für alle anderen) – Aufnahmen mit 150 % Skalierung landen
+//!   in Word in richtiger Grösse.
+//! - Linux: `arboard` (Rohpixel).
 
 use fmshot_core::RgbaImage;
 
@@ -19,7 +22,9 @@ pub enum ClipboardError {
 pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardError> {
     #[cfg(target_os = "macos")]
     return macos::copy_image(image, scale_factor);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::copy_image(image, scale_factor);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = scale_factor;
         let data = arboard::ImageData {
@@ -37,11 +42,16 @@ pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardE
 pub fn copy_text(text: &str) -> Result<(), ClipboardError> {
     #[cfg(target_os = "macos")]
     return macos::copy_text(text);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::copy_text(text);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(text.to_owned()))
         .map_err(|e| ClipboardError::Unavailable(e.to_string()))
 }
+
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "macos")]
 mod macos {

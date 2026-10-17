@@ -4,18 +4,22 @@
 //! - Windows: Windows.Media.Ocr
 //! - Linux: Tesseract (zur Laufzeit geladen)
 //!
-//! Windows und Linux folgen; dort liefert [`platform_engine`] vorerst `None`.
+//! Linux folgt; dort liefert [`platform_engine`] vorerst `None`.
 
 use fmshot_core::{Rect, RgbaImage};
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// Die Texterkennung der aktuellen Plattform, falls vorhanden.
 pub fn platform_engine() -> Option<Box<dyn OcrEngine>> {
     #[cfg(target_os = "macos")]
     return Some(Box::new(macos::VisionOcr));
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::WindowsOcr::new().map(|e| Box::new(e) as Box<dyn OcrEngine>);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     None
 }
 

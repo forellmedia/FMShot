@@ -1331,6 +1331,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-screen-capture-kit",
  "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]
@@ -1351,6 +1352,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]
@@ -1429,6 +1431,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-vision",
  "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]
@@ -1437,6 +1440,7 @@ version = "0.1.0"
 dependencies = [
  "dispatch2",
  "fmshot-core",
+ "log",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -1444,6 +1448,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]

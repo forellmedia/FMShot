@@ -7,7 +7,9 @@
 //! Aufnahmezeit des Systems.
 //!
 //! - macOS: `NSPanel` + Core-Animation-Ebenen (GPU, kein Kopieren pro Bild)
-//! - Windows / Linux: folgen
+//! - Windows: Popup-Fenster mit GDI, neu gezeichnet werden nur geänderte
+//!   Rechtecke (ADR 0003, Nachtrag Windows)
+//! - Linux: folgt
 
 use std::sync::Arc;
 
@@ -15,6 +17,8 @@ use fmshot_core::RgbaImage;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// Was im Overlay ausgewählt wird.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +63,8 @@ pub enum OverlayError {
     NoScreens,
     #[error("Overlay ist auf dieser Plattform noch nicht umgesetzt")]
     NotImplemented,
+    #[error("Overlay: {0}")]
+    Backend(String),
 }
 
 pub type DoneCallback = Box<dyn FnOnce(OverlayResult)>;
@@ -67,27 +73,29 @@ pub type DoneCallback = Box<dyn FnOnce(OverlayResult)>;
 pub struct OverlayHandle {
     #[cfg(target_os = "macos")]
     inner: macos::Handle,
+    #[cfg(target_os = "windows")]
+    inner: windows::Handle,
 }
 
 impl OverlayHandle {
     /// Reicht das eingefrorene Bild eines Monitors nach (physische Pixel).
     pub fn set_frozen(&self, display_id: u32, image: Arc<RgbaImage>) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.set_frozen(display_id, image);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = (display_id, image);
     }
 
     /// Schliesst das Overlay ohne Ergebnis (z. B. wenn die Aufnahme scheitert).
     pub fn cancel(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.cancel();
     }
 
     pub fn is_open(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         return self.inner.is_open();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         false
     }
 }
@@ -103,7 +111,9 @@ pub fn open(
 ) -> Result<OverlayHandle, OverlayError> {
     #[cfg(target_os = "macos")]
     return macos::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (mode, windows, on_done);
         Err(OverlayError::NotImplemented)
@@ -121,19 +131,21 @@ pub enum ScrollAction {
 pub struct ScrollUi {
     #[cfg(target_os = "macos")]
     inner: macos::ScrollUi,
+    #[cfg(target_os = "windows")]
+    inner: windows::ScrollUi,
 }
 
 impl ScrollUi {
     /// Statuszeile, z. B. „Scrollen … 2400 px“.
     pub fn set_status(&self, text: &str) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.set_status(text);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = text;
     }
 
     pub fn close(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.close();
     }
 }
@@ -149,7 +161,10 @@ pub fn open_scroll_ui(
     #[cfg(target_os = "macos")]
     return macos::open_scroll_ui(display_id, rect, labels, on_action)
         .map(|inner| ScrollUi { inner });
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::open_scroll_ui(display_id, rect, labels, on_action)
+        .map(|inner| ScrollUi { inner });
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (display_id, rect, labels, on_action);
         Err(OverlayError::NotImplemented)
@@ -190,7 +205,9 @@ pub fn show_preview(
 ) -> Result<(), OverlayError> {
     #[cfg(target_os = "macos")]
     return macos::show_preview(image, file, placement, labels, on_action);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::show_preview(image, file, placement, labels, on_action);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (image, file, placement, labels, on_action);
         Err(OverlayError::NotImplemented)
@@ -202,7 +219,9 @@ pub fn show_preview(
 pub fn show_toast(text: &str) {
     #[cfg(target_os = "macos")]
     macos::show_toast(text);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    windows::show_toast(text);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = text;
 }
 

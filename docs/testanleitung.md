@@ -1,8 +1,11 @@
-# Testanleitung (macOS)
+# Testanleitung
 
-Stand: Nacht vom 16. auf den 17. Oktober 2026. Alles ist für **macOS**
-umgesetzt; Windows und Linux bauen in der CI, nehmen aber noch nicht auf
-(siehe „Noch offen“).
+Stand: 17. Oktober 2026. Alles ist für **macOS** umgesetzt und getestet.
+**Windows** ist umgesetzt und baut in der CI, muss aber noch von Hand in der
+VM geprüft werden ([Abschnitt Windows](#windows-utm-vm-windows-11-arm)).
+Linux baut in der CI, nimmt aber noch nicht auf (siehe „Noch offen“).
+
+# macOS
 
 ## Vorbereitung
 
@@ -102,10 +105,122 @@ Alle Aufnahmemodi gibt es auch im Menüleisten-Symbol.
 - [ ] Info → Messwerte (Taste → Overlay in ms), „Fehler melden …“ öffnet
       ein vorausgefülltes GitHub-Issue
 
-## Noch offen
-- **Windows und Linux:** Aufnahme, Overlay, Texterkennung, Vorschau und
+# Windows (UTM-VM, Windows 11 ARM)
+
+Was neu ist: Aufnahme über GDI, eigenes Overlay (randlose Fenster, die nie
+den Fokus nehmen), Texterkennung mit Windows.Media.Ocr, Zwischenablage mit
+PNG + DIB (inkl. DPI), Vorschau mit Drag & Drop. Bisher nur gebaut und mit
+Unit-Tests geprüft – **noch nie auf einem echten Desktop gelaufen.**
+
+## Vorbereitung (einmalig in der VM)
+
+1. **Visual Studio 2022 Build Tools** mit „Desktopentwicklung mit C++“; unter
+   „Einzelne Komponenten“ zusätzlich *MSVC … ARM64/ARM64EC-Buildtools*.
+2. **Rust** über <https://rustup.rs> (wählt `aarch64-pc-windows-msvc`), dann
+   ```bash
+   rustup target add wasm32-unknown-unknown
+   cargo install wasm-bindgen-cli --version 0.2.129
+   ```
+3. **Node.js 22** (ARM64) und **Git für Windows**. Alle Befehle unten in
+   **Git Bash** ausführen (das WASM-Skript braucht `bash`).
+4. Repository in der VM klonen (nicht im geteilten Ordner bauen – zu langsam).
+
+```bash
+cd ~/FMShot/apps/desktop
+npm install
+npm run tauri build -- --bundles nsis
+```
+
+Installer: `target/release/bundle/nsis/FMShot_0.1.0_arm64-setup.exe`.
+Schneller zum Ausprobieren: `npm run tauri dev`.
+
+FMShot erscheint im Infobereich der Taskleiste (ggf. unter dem Pfeil ^).
+Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
+
+> **Druck-Taste:** Windows 11 öffnet damit das Snipping Tool. Für FMShot
+> unter *Einstellungen → Barrierefreiheit → Tastatur* „Mit der Druck-Taste
+> Bildschirmausschnitt öffnen“ ausschalten (danach FMShot neu starten).
+
+## Tastenkürzel
+
+| Aktion            | Kürzel |
+|-------------------|--------|
+| Bereich           | Strg+Umschalt+2 oder Druck |
+| Vollbild          | Strg+Umschalt+1 |
+| Fenster           | Strg+Umschalt+3 |
+| Scroll-Aufnahme   | Strg+Umschalt+4 (nochmals drücken = Fertig) |
+| Text erfassen     | Strg+Umschalt+5 |
+| Galerie / Editor  | Strg+Alt+G |
+
+## Checkliste
+
+### W1. Bereich (Strg+Umschalt+2)
+- [ ] Overlay erscheint sofort: Bildschirm leicht abgedunkelt, eingefroren,
+      **Fadenkreuz über den ganzen Monitor**
+- [ ] Die App darunter **behält den Fokus** (Titelleiste bleibt aktiv,
+      Taskleiste wechselt nicht)
+- [ ] Lupe neben dem Zeiger (Pixel scharf, rotes Kästchen = Pixel unter der
+      Maus), Pixelmasse beim Ziehen; Ziehen in jede Richtung
+- [ ] Nur klicken (ohne Ziehen) lässt das Overlay offen
+- [ ] **Esc** und **Rechtsklick** brechen ab; danach funktioniert Esc in
+      anderen Programmen wieder normal
+- [ ] Ziehen ruckelt nicht (auch bei grossen Bereichen)
+- [ ] Nach dem Loslassen: **Vorschau an der Maus** (Kopieren · Speichern ·
+      Bearbeiten · Text), nimmt keinen Fokus, verschwindet nach ~6 s (bleibt,
+      solange die Maus darauf ist)
+- [ ] Vorschau-Bild in den **Explorer**, in Outlook/Mail oder einen Browser
+      ziehen → Datei kommt an (wird kopiert, nicht verschoben)
+- [ ] Klick aufs Vorschau-Bild öffnet den Editor; ✕ schliesst
+
+### W2. Zwischenablage
+- [ ] Einfügen in **Paint** (Bild vollständig, Farben stimmen)
+- [ ] Einfügen in **Word**/WordPad/Outlook: bei *Anzeige → Skalierung 150 %*
+      in **normaler Grösse**, nicht 1,5-fach
+- [ ] „Text erfassen“ → Einfügen im Editor: Zeilenumbrüche stimmen
+
+### W3. Fenster (Strg+Umschalt+3) und Vollbild (Strg+Umschalt+1)
+- [ ] Bildschirm wird abgedunkelt, Fenster unter der Maus **blau
+      hervorgehoben** (laufender Bildschirm, nicht eingefroren)
+- [ ] Klick nimmt das Fenster auf – auch wenn ein anderes Fenster es teilweise
+      verdeckt; runde Ecken (Windows 11) durchsichtig; kein Schatten/Rand
+- [ ] Browser-Fenster (Edge) ist nicht schwarz
+- [ ] Vollbild nimmt den Monitor auf, auf dem die Maus ist
+- [ ] Ein offener FMShot-Editor ist **nicht** in der Aufnahme zu sehen
+
+### W4. Text erfassen (Strg+Umschalt+5)
+- [ ] Bereich mit Text → Hinweis „Text kopiert (n Zeichen)“ unten in der Mitte
+- [ ] Umlaute stimmen; auch ein einzelnes kleines Wort wird erkannt
+- [ ] Fehlt die Texterkennung: Deutsch unter *Zeit und Sprache → Sprache*
+      hinzufügen (oder PowerShell als Admin:
+      `Add-WindowsCapability -Online -Name "Language.OCR~~~de-DE~0.0.1.0"`)
+
+### W5. Scroll-Aufnahme (Strg+Umschalt+4)
+- [ ] Roter Rahmen um den Bereich, Leiste darunter; Mausrad und Klicks gehen
+      durch den Rahmen an die Seite
+- [ ] Langsam scrollen → Leiste zeigt die Höhe; „Fertig“ oder erneut
+      Strg+Umschalt+4 beendet; Ergebnis ohne doppelte Zeilen, ohne roten Rahmen
+- [ ] Einstellung „FMShot scrollt automatisch“: scrollt ohne Rückfrage selbst
+      (Edge, Explorer, Einstellungen-App)
+
+### W6. Skalierung und Monitore
+- [ ] *Anzeige → Skalierung* auf 125 % / 150 %: Auswahl hat die richtige
+      Pixelgrösse, Lupe/Schrift/Leisten sind entsprechend grösser
+- [ ] Mit zwei Monitoren (falls die VM das kann): Overlay auf beiden,
+      Fadenkreuz wechselt mit der Maus, Ziehen bleibt auf dem Start-Monitor
+
+### W7. Rest
+- [ ] Editor, Galerie und Einstellungen öffnen und zeigen die Aufnahmen
+- [ ] Ablage: `%APPDATA%\ch.forellmedia.fmshot\Library\2026\10\`
+- [ ] Info → Messwerte: „Taste → Overlay sichtbar“ unter 50 ms,
+      „Taste → Bildschirm eingefroren“ notieren
+
+# Noch offen
+- **Linux:** Aufnahme, Overlay, Texterkennung, Vorschau und
   Zwischenablage-Feinheiten fehlen noch (App startet, Aufnahme meldet
   „noch nicht umgesetzt“).
+- **Windows:** Bildstrom über Desktop Duplication / Windows Graphics Capture
+  (erst mit der Video-Aufnahme nötig). Exportierte PNG-Dateien tragen 72 dpi
+  × Skalierung (macOS-Basis) – unter Windows wären 96 dpi richtig.
 - Signatur-/Updater-Secrets auf GitHub (Issue #2) – danach erster Release.
 - Eigenes Menüleisten-Symbol (noch das App-Symbol).
 - Emoji im Text-Werkzeug (Schrift Inter hat keine Emoji).

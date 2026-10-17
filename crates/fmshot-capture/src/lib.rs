@@ -3,8 +3,15 @@
 //! Alle Plattformen implementieren [`ScreenCapturer`]. Der Rest der App kennt
 //! nur diesen Trait (ADR 0003, 0006).
 //! - macOS: ScreenCaptureKit (`SCScreenshotManager`, ab macOS 14)
-//! - Windows: DXGI Desktop Duplication / Windows Graphics Capture
+//! - Windows: GDI (`BitBlt`, `PrintWindow`), siehe ADR 0003 (Nachtrag Windows)
 //! - Linux: X11 bzw. xdg-desktop-portal + PipeWire unter Wayland
+//!
+//! **Globale Koordinaten** (Ursprung immer oben links am Hauptmonitor):
+//! - macOS: logische Punkte.
+//! - Windows: physische Pixel des virtuellen Desktops. Mit gemischten
+//!   Skalierungen gibt es dort kein durchgehendes logisches System;
+//!   [`Display::scale_factor`] ist deshalb 1.0, die Skalierung des Monitors
+//!   steht in [`Frame::scale_factor`].
 
 use fmshot_core::{Rect, RgbaImage};
 
@@ -20,9 +27,10 @@ mod windows;
 pub struct Display {
     pub id: u32,
     pub name: String,
-    /// Position und Grösse in logischen Punkten im globalen Koordinatensystem.
+    /// Position und Grösse in globalen Koordinaten (siehe oben).
     pub bounds: Rect,
-    /// Physische Pixel pro logischem Punkt (z. B. 2.0 bei Retina).
+    /// Physische Pixel pro globaler Einheit (z. B. 2.0 bei Retina, unter
+    /// Windows immer 1.0).
     pub scale_factor: f32,
     pub is_primary: bool,
 }
@@ -40,7 +48,7 @@ pub struct PixelRect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowInfo {
     pub id: u32,
-    /// Globale Punkte, Ursprung oben links am Hauptmonitor.
+    /// Globale Koordinaten (siehe oben).
     pub bounds: Rect,
     pub app_name: String,
     pub title: String,
@@ -50,6 +58,9 @@ pub struct WindowInfo {
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub display_id: u32,
+    /// Physische Pixel pro logischem Punkt des Monitors (Retina 2.0,
+    /// Windows mit 150 % 1.5) – bestimmt die Auflösung in PNG und
+    /// Zwischenablage.
     pub scale_factor: f32,
     pub image: RgbaImage,
 }
