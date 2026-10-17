@@ -321,7 +321,9 @@ export class Editor {
   }
 
   updateKind(id: number, patch: (k: LayerKind) => LayerKind) {
-    this.updateLayer(id, (l) => (l.kind = patch(clone(l.kind))));
+    // Snapshot statt structuredClone: `l.kind` ist ein `$state`-Proxy, den
+    // structuredClone nicht kopieren kann.
+    this.updateLayer(id, (l) => (l.kind = patch($state.snapshot(l.kind) as LayerKind)));
   }
 
   deleteSelected() {
