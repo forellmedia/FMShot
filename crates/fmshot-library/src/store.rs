@@ -168,6 +168,52 @@ impl Library {
         Ok(index::set_ocr_text(&self.lock(), id, text)?)
     }
 
+    /// Aufnahmen ohne Bildinhalt-Vektor des Modells `model` (ADR 0010).
+    pub fn pending_embeddings(&self, model: &str, limit: u32) -> Result<Vec<String>> {
+        Ok(index::pending_embeddings(&self.lock(), model, limit)?)
+    }
+
+    /// Vektor ablegen; ein leerer Vektor heisst „nicht berechenbar“. Die
+    /// Bibliothek kennt das Modell nicht, nur seine Kennung.
+    pub fn set_embedding(&self, id: &str, model: &str, vector: &[u8]) -> Result<()> {
+        Ok(index::set_embedding(&self.lock(), id, model, vector)?)
+    }
+
+    /// Alle Vektoren des Modells als (ID, Bytes).
+    pub fn embeddings(&self, model: &str) -> Result<Vec<(String, Vec<u8>)>> {
+        Ok(index::embeddings(&self.lock(), model)?)
+    }
+
+    /// Vektoren ohne aktuelle Stichwörter (`version` = Begriffsliste).
+    pub fn pending_tags(
+        &self,
+        model: &str,
+        version: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
+        Ok(index::pending_tags(&self.lock(), model, version, limit)?)
+    }
+
+    /// Stichwörter (Schlüssel, Wert) einer Aufnahme ersetzen.
+    pub fn set_tags(&self, id: &str, version: &str, tags: &[(&str, f32)]) -> Result<()> {
+        Ok(index::set_tags(&self.lock(), id, version, tags)?)
+    }
+
+    /// Stichwörter je Aufnahme, bestes zuerst; Aufnahmen ohne fehlen.
+    pub fn tags(&self, ids: &[String]) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        Ok(index::tags(&self.lock(), ids)?)
+    }
+
+    /// IDs, deren erkannter Text zur Suche passt.
+    pub fn text_matches(&self, text: &str) -> Result<Vec<String>> {
+        Ok(index::text_matches(&self.lock(), text)?)
+    }
+
+    /// (erledigt, alle) Aufnahmen für das Modell.
+    pub fn embedding_progress(&self, model: &str) -> Result<(u32, u32)> {
+        Ok(index::embedding_progress(&self.lock(), model)?)
+    }
+
     /// Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern filtern.
     pub fn query(&self, q: &CaptureQuery) -> Result<Vec<CaptureRecord>> {
         Ok(index::query(&self.lock(), &self.root, q)?)
@@ -470,6 +516,97 @@ mod tests {
                 "20261016-200122-944-0_thumb.webp",
             ]
         );
+    }
+
+    #[test]
+    fn vektoren_je_modell_mit_fortschritt_und_loeschen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let a = lib.save_capture(&capture(1_000)).unwrap();
+        let b = lib.save_capture(&capture(2_000)).unwrap();
+        assert_eq!(
+            lib.pending_embeddings("m1", 10).unwrap(),
+            vec![b.id.clone(), a.id.clone()]
+        );
+        assert_eq!(lib.embedding_progress("m1").unwrap(), (0, 2));
+
+        lib.set_embedding(&b.id, "m1", &[1, 2, 3, 4]).unwrap();
+        lib.set_embedding(&a.id, "m1", &[]).unwrap(); // nicht berechenbar
+        assert!(lib.pending_embeddings("m1", 10).unwrap().is_empty());
+        assert_eq!(lib.embedding_progress("m1").unwrap(), (2, 2));
+        assert_eq!(
+            lib.embeddings("m1").unwrap(),
+            vec![(b.id.clone(), vec![1, 2, 3, 4])]
+        );
+
+        // Neues Modell: alles neu berechnen; der Eintrag wird ersetzt.
+        assert_eq!(lib.pending_embeddings("m2", 10).unwrap().len(), 2);
+        lib.set_embedding(&b.id, "m2", &[9]).unwrap();
+        assert!(lib.embeddings("m1").unwrap().is_empty());
+
+        // Gelöschte Aufnahmen hinterlassen keinen Vektor, auch nachträglich nicht.
+        lib.delete(&b.id).unwrap();
+        lib.set_embedding(&b.id, "m2", &[9]).unwrap();
+        assert!(lib.embeddings("m2").unwrap().is_empty());
+        assert_eq!(lib.embedding_progress("m2").unwrap(), (0, 1));
+    }
+
+    #[test]
+    fn stichwoerter_und_suche_nach_bildinhalt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let wald = lib.save_capture(&capture(1_000)).unwrap();
+        let hund = lib.save_capture(&capture(2_000)).unwrap();
+        let text = lib.save_capture(&capture(3_000)).unwrap();
+        for r in [&wald, &hund] {
+            lib.set_embedding(&r.id, "m", &[1]).unwrap();
+        }
+        lib.set_ocr_text(&text.id, "Der Wald im Herbst").unwrap();
+
+        let pending = lib.pending_tags("m", "v1", 10).unwrap();
+        assert_eq!(pending.len(), 2);
+        lib.set_tags(&wald.id, "v1", &[("forest", -2.0), ("snow", -3.0)])
+            .unwrap();
+        lib.set_tags(&hund.id, "v1", &[("dog", -1.0)]).unwrap();
+        assert!(lib.pending_tags("m", "v1", 10).unwrap().is_empty());
+        assert_eq!(lib.pending_tags("m", "v2", 10).unwrap().len(), 2);
+
+        let tags = lib.tags(&[wald.id.clone(), text.id.clone()]).unwrap();
+        assert_eq!(tags[&wald.id], vec!["forest", "snow"]);
+        assert!(!tags.contains_key(&text.id));
+        assert_eq!(lib.text_matches("wald").unwrap(), vec![text.id.clone()]);
+
+        let ids = |q: CaptureQuery| -> Vec<String> {
+            lib.query(&CaptureQuery { limit: 50, ..q })
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
+        };
+        // Text ODER Bildinhalt ODER Stichwort
+        assert_eq!(
+            ids(CaptureQuery {
+                text: "Wald".into(),
+                content_ids: vec![hund.id.clone()],
+                text_tags: vec!["forest".into()],
+                ..Default::default()
+            }),
+            vec![text.id.clone(), hund.id.clone(), wald.id.clone()]
+        );
+        // Schnellfilter: nur mit Stichwort aus der Gruppe
+        assert_eq!(
+            ids(CaptureQuery {
+                any_tags: vec!["dog".into(), "cat".into()],
+                ..Default::default()
+            }),
+            vec![hund.id.clone()]
+        );
+
+        // Neuer Vektor macht die Stichwörter ungültig; Löschen räumt auf.
+        lib.set_embedding(&wald.id, "m", &[2]).unwrap();
+        assert_eq!(lib.pending_tags("m", "v1", 10).unwrap().len(), 1);
+        lib.delete(&hund.id).unwrap();
+        assert!(lib.tags(std::slice::from_ref(&hund.id)).unwrap().is_empty());
     }
 
     #[test]

@@ -14,6 +14,7 @@ crates/
   fmshot-capture   Bildschirmaufnahme (Einzelbild + Stream), je Plattform
   fmshot-stitch    Scroll-Bilder zusammensetzen – plattformunabhängig
   fmshot-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
+  fmshot-vision    Bildinhalt: Bild/Suchtext → Vektor (SigLIP 2, ONNX) – plattformunabhängig
   fmshot-library   Bibliothek: Dateien, SQLite-Index, Suche, Auto-Export
   fmshot-clipboard Zwischenablage (macOS: PNG mit Retina-Auflösung)
   fmshot-hotkeys   globale Tastenkombinationen
@@ -56,6 +57,8 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 
 ```bash
 cargo test --workspace                 # alle Rust-Tests
+./scripts/fetch-model.sh               # Bildmodell nach models/ (ADR 0010, braucht uv)
+cargo test -p fmshot-vision --release -- --ignored  # Bildinhalt mit echtem Modell
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                       # Lizenzen/Advisories
 cargo test -p fmshot-desktop           # erzeugt apps/desktop/src/lib/bindings.ts

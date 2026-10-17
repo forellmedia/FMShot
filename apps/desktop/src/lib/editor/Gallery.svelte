@@ -1,11 +1,11 @@
 <script lang="ts">
   // Galerie im Vollbild: alle Aufnahmen als Raster, nach Tagen gruppiert.
-  // Suche im erkannten Text, Zeitraum, Art, nur mit Stern, Sortierung.
-  // Gefiltert wird in der Bibliothek (fmshot-library), nicht hier.
+  // Suche im erkannten Text und im Bildinhalt (ADR 0010), Schnellfilter,
+  // Zeitraum, Art, nur mit Stern, Sortierung. Gefiltert wird im Backend.
 
   import { onMount } from "svelte";
-  import { api, fileUrl, type CaptureInfo } from "$lib/api";
-  import { locale, t } from "$lib/i18n";
+  import { api, fileUrl, on, type CaptureInfo, type ContentSearchStatus, type GalleryItem } from "$lib/api";
+  import { locale, t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
   import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
 
@@ -20,13 +20,19 @@
   let mode = $state<(typeof MODES)[number] | "">("");
   let starredOnly = $state(false);
   let oldestFirst = $state(false);
-  let results = $state<CaptureInfo[]>([]);
+  let filter = $state<string | null>(null);
+  let filters = $state<string[]>([]);
+  let status = $state<ContentSearchStatus | null>(null);
+  /** Bildinhalt-Erkennung eingeschaltet (Einstellungen). */
+  let contentOn = $state(false);
+
+  let results = $state<GalleryItem[]>([]);
   let loading = $state(true);
   let urls = $state<Record<string, string>>({});
   let searchInput: HTMLInputElement;
 
   const groups = $derived(
-    groupByDay(results, Date.now(), locale(), {
+    groupByDay(results.map((r) => ({ ...r, createdAt: r.capture.createdAt })), Date.now(), locale(), {
       today: t("gallery.today"),
       yesterday: t("gallery.yesterday"),
       unknown: t("gallery.unknown_date"),
@@ -47,10 +53,11 @@
         starredOnly,
         oldestFirst,
         limit: LIMIT,
+        group: filter,
       });
       if (mine !== request) return; // Eine neuere Suche läuft schon.
       results = found;
-      for (const c of found) {
+      for (const { capture: c } of found) {
         if (!urls[c.id]) fileUrl(c.thumbnailPath, editor.thumbVersion).then((u) => (urls[c.id] = u));
       }
     } catch (e) {
@@ -63,12 +70,41 @@
   // Neu suchen, sobald sich ein Filter ändert (Text leicht verzögert).
   let timer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
-    void [text, period, customFrom, customTo, mode, starredOnly, oldestFirst];
+    void [text, period, customFrom, customTo, mode, starredOnly, oldestFirst, filter];
     if (timer) clearTimeout(timer);
     timer = setTimeout(load, 150);
   });
 
-  onMount(() => searchInput.focus());
+  onMount(() => {
+    searchInput.focus();
+    api.contentGroups().then((g) => (filters = g));
+    api.getSettings().then((s) => (contentOn = s.content_search ?? true));
+    api.contentSearchStatus().then((s) => (status = s)).catch(() => {});
+    let stop: (() => void) | undefined;
+    on<ContentSearchStatus>("content-index-progress", (s) => (status = s)).then((f) => (stop = f));
+    // Neue Stichwörter: Ergebnis auffrischen.
+    let stopLib: (() => void) | undefined;
+    on("library-changed", () => load()).then((f) => (stopLib = f));
+    return () => {
+      stop?.();
+      stopLib?.();
+    };
+  });
+
+  const indexing = $derived(contentOn && status?.available && status.done < status.total);
+
+  function tagLabel(key: string) {
+    return t(`tag.${key}` as MessageKey);
+  }
+
+  /** Warum eine Aufnahme zur Suche passt – nur bei Suchtext. */
+  function reason(item: GalleryItem): string | null {
+    if (!text.trim() || item.matched.length === 0) return null;
+    const m = item.matched[0];
+    if (m === "text") return t("gallery.match.text");
+    if (m === "content") return t("gallery.match.content");
+    return t("gallery.match.tag", { tag: tagLabel(m) });
+  }
 
   async function open(c: CaptureInfo) {
     editor.galleryOpen = false;
@@ -85,7 +121,7 @@
     e.stopPropagation();
     await api.setStarred(c.id, !c.starred);
     c.starred = !c.starred;
-    if (starredOnly && !c.starred) results = results.filter((r) => r.id !== c.id);
+    if (starredOnly && !c.starred) results = results.filter((r) => r.capture.id !== c.id);
     void editor.refreshCaptures();
   }
 
@@ -135,11 +171,25 @@
     <button class="toggle" class:on={starredOnly} onclick={() => (starredOnly = !starredOnly)}>
       ★ {t("gallery.starred_only")}
     </button>
+    {#if indexing && status}
+      <span class="indexing">{t("gallery.indexing", { done: String(status.done), total: String(status.total) })}</span>
+    {/if}
     <span class="count">{loading ? "…" : results.length === 1 ? t("gallery.count_one") : t("gallery.count", { count: String(results.length) })}</span>
     <button class="close" title="{t('gallery.close')} (Esc)" aria-label={t("gallery.close")} onclick={() => (editor.galleryOpen = false)}>
       ✕
     </button>
   </header>
+
+  {#if filters.length && contentOn && status?.available}
+    <div class="filters" role="toolbar" aria-label={t("gallery.groups")}>
+      <button class="chip" class:on={filter === null} onclick={() => (filter = null)}>{t("gallery.groups.all")}</button>
+      {#each filters as f (f)}
+        <button class="chip" class:on={filter === f} onclick={() => (filter = filter === f ? null : f)}>
+          {t(`group.${f}` as MessageKey)}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <div class="scroll">
     {#if results.length === LIMIT}
@@ -149,7 +199,9 @@
       <section>
         <h2>{g.label}</h2>
         <div class="grid">
-          {#each g.items as c (c.id)}
+          {#each g.items as item (item.capture.id)}
+            {@const c = item.capture}
+            {@const why = reason(item)}
             <div
               class="tile"
               class:current={editor.current?.id === c.id}
@@ -160,6 +212,10 @@
             >
               <div class="image">
                 {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}
+                {#if why}<span class="why">{why}</span>{/if}
+                {#if item.tags.length}
+                  <span class="tags">{item.tags.map(tagLabel).join(" · ")}</span>
+                {/if}
               </div>
               <div class="meta">
                 <span>{time(c.createdAt)}</span>
@@ -190,7 +246,7 @@
     inset: 0;
     z-index: 20;
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     background: var(--bg, var(--surface));
   }
   header {
@@ -242,9 +298,70 @@
     border-color: var(--accent);
     color: #fff;
   }
-  .count {
+  .count,
+  .indexing {
     color: var(--text-muted);
     white-space: nowrap;
+  }
+  .indexing {
+    font-size: 12px;
+  }
+  .filters {
+    display: flex;
+    gap: 6px;
+    padding: var(--space-2) var(--space-4);
+    overflow-x: auto;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+  .chip {
+    flex: none;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .chip:hover {
+    background: var(--hover);
+  }
+  .chip.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  /* Grund des Treffers (immer) und Stichwörter (beim Darüberfahren). */
+  .why,
+  .tags {
+    position: absolute;
+    left: 6px;
+    max-width: calc(100% - 12px);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.6);
+    color: #fff;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .why {
+    top: 6px;
+    max-width: calc(100% - 48px);
+  }
+  .tags {
+    bottom: 6px;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .tile:hover .tags,
+  .tile:focus-visible .tags {
+    opacity: 1;
   }
   .close {
     margin-left: auto;

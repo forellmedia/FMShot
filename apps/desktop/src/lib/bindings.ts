@@ -53,8 +53,11 @@ export const commands = {
 	getDiagnostics: () => __TAURI_INVOKE<Diagnostics>("get_diagnostics"),
 	/**  Volltextsuche über den erkannten Text. */
 	searchCaptures: (query: string) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("search_captures", { query })),
-	/**  Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern. */
-	queryCaptures: (query: GalleryQuery) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("query_captures", { query })),
+	/**
+	 *  Galerie: Aufnahmen nach Text (erkannt oder Bildinhalt), Zeitraum, Art,
+	 *  Stern und Schnellfilter.
+	 */
+	queryCaptures: (query: GalleryQuery) => typedError<GalleryItem[], string>(__TAURI_INVOKE("query_captures", { query })),
 	/**
 	 *  „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.
 	 *  Der Nutzer sieht alles und schickt es selbst ab – ohne Screenshots.
@@ -69,6 +72,9 @@ export const commands = {
 } | null, string>(__TAURI_INVOKE("check_for_update")),
 	/**  Lädt das Update, prüft die Signatur, installiert und startet neu. */
 	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
+	contentSearchStatus: () => typedError<ContentSearchStatus, string>(__TAURI_INVOKE("content_search_status")),
+	/**  Schnellfilter der Galerie (Schlüssel für `group.<key>`). */
+	contentGroups: () => __TAURI_INVOKE<string[]>("content_groups"),
 };
 
 /* Types */
@@ -153,6 +159,14 @@ export type Color = {
 	a: number,
 };
 
+/**  Stand der Erkennung für Einstellungen und Galerie. */
+export type ContentSearchStatus = {
+	/**  Modell ist mitgeliefert. */
+	available: boolean,
+	done: number,
+	total: number,
+};
+
 /**  Ecke, z. B. Richtung des Lupengriffs. */
 export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
@@ -211,6 +225,18 @@ export type Fill = { type: "solid"; color: Color } |
 /**  Linearer Verlauf; `angle` in Grad, 0 = von links nach rechts. */
 { type: "linear_gradient"; from: Color; to: Color; angle: number | null };
 
+/**  Eine Aufnahme in der Galerie mit Stichwörtern und Grund des Treffers. */
+export type GalleryItem = {
+	capture: CaptureInfo,
+	/**  Stichwörter (Schlüssel für `tag.<key>`), bestes zuerst. */
+	tags: string[],
+	/**
+	 *  Warum die Aufnahme zur Suche passt: `text` (erkannter Text),
+	 *  `content` (Bildinhalt) oder ein Stichwort-Schlüssel.
+	 */
+	matched: string[],
+};
+
 /**  Filter der Galerie (siehe `fmshot_library::CaptureQuery`). */
 export type GalleryQuery = {
 	text: string,
@@ -222,6 +248,8 @@ export type GalleryQuery = {
 	starredOnly: boolean,
 	oldestFirst: boolean,
 	limit: number,
+	/**  Schnellfilter, z. B. `animals` (siehe `content_groups`). */
+	group: string | null,
 };
 
 /**  Ein Tastenkürzel für die Einstellungen. */
@@ -378,6 +406,11 @@ export type Settings = {
 	retention_days?: number | null,
 	/**  Format beim Speichern aus dem Editor (⌘S). */
 	save_format?: ImageFormat,
+	/**
+	 *  Bildinhalt erkennen, damit die Suche auch „Wald“ oder „Hund“ findet
+	 *  (ADR 0010). Läuft im Hintergrund.
+	 */
+	content_search?: boolean,
 };
 
 /**  Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund). */

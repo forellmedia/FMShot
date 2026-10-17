@@ -93,6 +93,9 @@ pub struct Settings {
     pub retention_days: Option<u32>,
     /// Format beim Speichern aus dem Editor (⌘S).
     pub save_format: ImageFormat,
+    /// Bildinhalt erkennen, damit die Suche auch „Wald“ oder „Hund“ findet
+    /// (ADR 0010). Läuft im Hintergrund.
+    pub content_search: bool,
 }
 
 impl Default for Settings {
@@ -108,6 +111,7 @@ impl Default for Settings {
             auto_export: AutoExport::default(),
             retention_days: None,
             save_format: ImageFormat::Png,
+            content_search: true,
         }
     }
 }

@@ -52,6 +52,15 @@ pub fn t(key: &str, params: &[(&str, &str)]) -> String {
     text
 }
 
+/// Text zum Schlüssel in allen Sprachen (z. B. für die Suche nach
+/// Stichwörtern, egal in welcher Sprache getippt).
+pub fn all(key: &str) -> Vec<String> {
+    [table(false), table(true)]
+        .iter()
+        .filter_map(|t| t.get(key).cloned())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

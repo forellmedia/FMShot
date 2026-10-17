@@ -226,8 +226,20 @@ export class Editor {
 
   async refreshCaptures() {
     try {
+      // Suche wie in der Galerie: erkannter Text und Bildinhalt.
       this.captures = this.query.trim()
-        ? await api.searchCaptures(this.query)
+        ? (
+            await api.queryCaptures({
+              text: this.query,
+              fromMs: null,
+              toMs: null,
+              mode: null,
+              starredOnly: false,
+              oldestFirst: false,
+              limit: 500,
+              group: null,
+            })
+          ).map((item) => item.capture)
         : await api.listCaptures();
     } catch (e) {
       this.flash(String(e));

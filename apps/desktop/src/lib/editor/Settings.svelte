@@ -2,7 +2,7 @@
   // Einstellungen: Allgemein, Tastenkürzel, Speichern, Info.
 
   import { onMount } from "svelte";
-  import { api, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
+  import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
   import { t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
 
@@ -11,6 +11,7 @@
   let settings = $state<Settings | null>(null);
   let hotkeys = $state<HotkeyInfo[]>([]);
   let diagnostics = $state<Diagnostics | null>(null);
+  let contentStatus = $state<ContentSearchStatus | null>(null);
   let version = $state("");
   let tab = $state<"general" | "hotkeys" | "saving" | "about">("general");
   let recording = $state<string | null>(null);
@@ -22,6 +23,14 @@
     hotkeys = await api.getHotkeys();
     diagnostics = await api.diagnostics();
     version = (await api.appInfo()).version;
+    contentStatus = await api.contentSearchStatus().catch(() => null);
+  });
+
+  // Fortschritt der Bildinhalt-Erkennung live nachführen.
+  $effect(() => {
+    let stop: (() => void) | undefined;
+    on<ContentSearchStatus>("content-index-progress", (s) => (contentStatus = s)).then((f) => (stop = f));
+    return () => stop?.();
   });
 
   async function save() {
@@ -268,6 +277,30 @@
             </select>
           </label>
           <p class="hint">{t("settings.retention_hint")}</p>
+          <label class="row check">
+            <input
+              type="checkbox"
+              bind:checked={settings.content_search}
+              disabled={contentStatus?.available === false}
+              onchange={save}
+            />
+            <span>{t("settings.content_search")}</span>
+          </label>
+          <p class="hint">
+            {#if contentStatus?.available === false}
+              {t("settings.content_search_missing")}
+            {:else}
+              {t("settings.content_search_hint")}
+              {#if contentStatus && settings.content_search}
+                {contentStatus.done >= contentStatus.total
+                  ? t("settings.content_search_done", { count: String(contentStatus.total) })
+                  : t("settings.content_search_progress", {
+                      done: String(contentStatus.done),
+                      total: String(contentStatus.total),
+                    })}
+              {/if}
+            {/if}
+          </p>
         {:else}
           <p><b>FMShot {version}</b> · © forellmedia.ch</p>
           <div class="buttons">

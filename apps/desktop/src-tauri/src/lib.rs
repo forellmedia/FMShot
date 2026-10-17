@@ -12,6 +12,7 @@ mod services;
 mod settings;
 mod tray;
 mod updater;
+mod vision;
 
 use std::sync::Arc;
 
@@ -51,6 +52,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         services::report_bug,
         updater::check_for_update,
         updater::install_update,
+        vision::content_search_status,
+        vision::content_groups,
     ])
 }
 
@@ -95,11 +98,13 @@ pub fn run() {
             app.manage(editor::EditorState::new());
             app.manage(scroll::ScrollState::default());
             app.manage(services::Services::new());
+            app.manage(vision::VisionState::new(app.handle()));
             app.state::<capture::CaptureState>().capturer.warm_up();
             tray::create(app.handle())?;
             menu::create(app.handle())?;
             hotkeys::register(app.handle());
             services::start(app.handle());
+            vision::start(app.handle());
             // Erster Start mit Argumenten (z. B. aus der Kommandozeile).
             let argv: Vec<String> = std::env::args().collect();
             handle_args(app.handle(), &argv);

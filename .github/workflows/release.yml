@@ -85,6 +85,16 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # Bildmodell (ADR 0010): Originale laden und mit uv umwandeln.
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/cache@v4
+        with:
+          path: models/siglip2
+          key: models-${{ hashFiles('scripts/fetch-model.sh', 'scripts/model/convert.py') }}
+      - name: Bildmodell bereitstellen
+        shell: bash
+        run: ./scripts/fetch-model.sh
+
       # Selbst erstelltes Zertifikat „FMShot Local Signing“ (ADR 0008).
       # Fehlen die Secrets, wird der Mac-Build ad-hoc signiert.
       - name: Mac-Signatur vorbereiten
@@ -105,4 +115,4 @@ jobs:
           releaseId: ${{ needs.draft.outputs.release-id }}
           # latest.json für den Updater an das Release hängen.
           includeUpdaterJson: true
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.models.conf.json

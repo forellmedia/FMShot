@@ -74,6 +74,7 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     if let Err(e) = crate::menu::create(&app) {
         log::error!("App-Menü: {e}");
     }
+    crate::vision::wake(&app);
     Ok(())
 }
 

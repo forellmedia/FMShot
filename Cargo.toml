@@ -23,6 +23,7 @@ fmshot-ocr = { path = "crates/fmshot-ocr" }
 fmshot-library = { path = "crates/fmshot-library" }
 fmshot-hotkeys = { path = "crates/fmshot-hotkeys" }
 fmshot-overlay = { path = "crates/fmshot-overlay" }
+fmshot-vision = { path = "crates/fmshot-vision" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

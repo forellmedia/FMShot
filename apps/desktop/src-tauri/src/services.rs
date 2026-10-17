@@ -146,6 +146,7 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
     {
         let _ = tx.send(());
     }
+    crate::vision::wake(app);
     let _ = app.emit("capture-saved", rec.id.clone());
 
     // Scroll-Aufnahmen will man fast immer gleich ansehen.
@@ -417,17 +418,57 @@ pub struct GalleryQuery {
     pub starred_only: bool,
     pub oldest_first: bool,
     pub limit: u32,
+    /// Schnellfilter, z. B. `animals` (siehe `content_groups`).
+    pub group: Option<String>,
 }
 
-/// Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern.
+/// Eine Aufnahme in der Galerie mit Stichwörtern und Grund des Treffers.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryItem {
+    pub capture: crate::editor::CaptureInfo,
+    /// Stichwörter (Schlüssel für `tag.<key>`), bestes zuerst.
+    pub tags: Vec<String>,
+    /// Warum die Aufnahme zur Suche passt: `text` (erkannter Text),
+    /// `content` (Bildinhalt) oder ein Stichwort-Schlüssel.
+    pub matched: Vec<String>,
+}
+
+/// Galerie: Aufnahmen nach Text (erkannt oder Bildinhalt), Zeitraum, Art,
+/// Stern und Schnellfilter.
 #[tauri::command]
 #[specta::specta]
-pub fn query_captures(
+pub async fn query_captures(
     app: AppHandle,
     query: GalleryQuery,
-) -> Result<Vec<crate::editor::CaptureInfo>, String> {
+) -> Result<Vec<GalleryItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || gallery(&app, query))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<Vec<GalleryItem>, String> {
+    let library = app.state::<CaptureState>().library.clone();
+    let has_text = !query.text.trim().is_empty();
+    let content_ids = if has_text {
+        crate::vision::search(app, &query.text)
+    } else {
+        Vec::new()
+    };
+    let text_tags = if has_text {
+        crate::vision::tags_for_text(&query.text)
+    } else {
+        Vec::new()
+    };
     let q = CaptureQuery {
-        text: query.text,
+        text: query.text.clone(),
+        content_ids: content_ids.clone(),
+        text_tags: text_tags.clone(),
+        any_tags: query
+            .group
+            .as_deref()
+            .map(crate::vision::group_tags)
+            .unwrap_or_default(),
         from_ms: query.from_ms.map(|v| v as i64),
         to_ms: query.to_ms.map(|v| v as i64),
         mode: query.mode,
@@ -435,13 +476,37 @@ pub fn query_captures(
         oldest_first: query.oldest_first,
         limit: query.limit,
     };
-    Ok(app
-        .state::<CaptureState>()
-        .library
-        .query(&q)
-        .map_err(|e| e.to_string())?
+    let records = library.query(&q).map_err(|e| e.to_string())?;
+    let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
+    let mut tags = library.tags(&ids).map_err(|e| e.to_string())?;
+    let by_text: std::collections::HashSet<String> = if has_text {
+        library
+            .text_matches(&query.text)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .collect()
+    } else {
+        Default::default()
+    };
+    let by_content: std::collections::HashSet<&String> = content_ids.iter().collect();
+    Ok(records
         .iter()
-        .map(crate::editor::CaptureInfo::from)
+        .map(|r| {
+            let tags = tags.remove(&r.id).unwrap_or_default();
+            let mut matched = Vec::new();
+            if by_text.contains(&r.id) {
+                matched.push("text".to_string());
+            }
+            matched.extend(tags.iter().filter(|t| text_tags.contains(t)).cloned());
+            if by_content.contains(&r.id) && matched.is_empty() {
+                matched.push("content".to_string());
+            }
+            GalleryItem {
+                capture: crate::editor::CaptureInfo::from(r),
+                tags,
+                matched,
+            }
+        })
         .collect())
 }
 

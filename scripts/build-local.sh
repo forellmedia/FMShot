@@ -11,9 +11,13 @@ APP="$ROOT/target/aarch64-apple-darwin/release/bundle/macos/FMShot.app"
 # Bildschirmaufnahme-Freigabe neu (ADR 0008).
 export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-FMShot Local Signing}"
 
+# Bildmodell für die Suche nach Bildinhalt (ADR 0010).
+./scripts/fetch-model.sh
+
 # Update-Pakete brauchen den Updater-Schlüssel und sind lokal unnötig.
 (cd apps/desktop && npm run tauri build -- \
   --target aarch64-apple-darwin --bundles app \
+  --config src-tauri/tauri.models.conf.json \
   --config '{"bundle":{"createUpdaterArtifacts":false}}')
 
 codesign --verify --deep --strict "$APP"

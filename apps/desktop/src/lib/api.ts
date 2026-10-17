@@ -7,15 +7,17 @@ import {
   type AssetInfo,
   type CaptureInfo,
   type CaptureMode,
+  type ContentSearchStatus,
   type Diagnostics,
   type ExportFormat,
+  type GalleryItem,
   type GalleryQuery,
   type HotkeyInfo,
   type Settings,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo, Diagnostics, GalleryQuery, HotkeyInfo, Settings };
+export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, HotkeyInfo, Settings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -73,8 +75,12 @@ export const api = {
     isTauri ? unwrap(commands.revealCapture(id)) : Promise.resolve(null),
   startCapture: (mode: CaptureMode): Promise<void> =>
     isTauri ? commands.startCapture(mode) : Promise.resolve(),
-  queryCaptures: (query: GalleryQuery): Promise<CaptureInfo[]> =>
+  queryCaptures: (query: GalleryQuery): Promise<GalleryItem[]> =>
     isTauri ? unwrap(commands.queryCaptures(query)) : mock.query(query),
+  contentGroups: (): Promise<string[]> =>
+    isTauri
+      ? commands.contentGroups()
+      : Promise.resolve(["people", "animals", "nature", "food", "vehicles", "buildings", "documents", "code", "charts", "apps"]),
   searchCaptures: (query: string): Promise<CaptureInfo[]> =>
     isTauri ? unwrap(commands.searchCaptures(query)) : mock.search(query),
   getSettings: (): Promise<Settings> =>
@@ -92,6 +98,8 @@ export const api = {
     isTauri
       ? commands.getDiagnostics()
       : Promise.resolve({ version: "0.1.0", platform: "browser", library: "-", logFile: "-", timings: ["Taste → Overlay sichtbar: 18 ms"] }),
+  contentSearchStatus: (): Promise<ContentSearchStatus> =>
+    isTauri ? unwrap(commands.contentSearchStatus()) : Promise.resolve({ available: true, done: 3, total: 4 }),
   reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
   appInfo: () => (isTauri ? commands.appInfo() : Promise.resolve({ version: "0.1.0", platform: "browser", arch: "" })),
 };
@@ -128,6 +136,18 @@ const mock = (() => {
     for (let l = 0; l < 12; l++) g.fillText(`Zeile ${l + 1}: Lorem ipsum dolor sit amet, Fehler 0x${(l * 4099).toString(16)}`, 24, 110 + l * 40);
     return c.toDataURL("image/png");
   }
+
+  // Stichwörter der Beispiel-Aufnahmen (Schlüssel wie im Backend).
+  const MOCK_TAGS = [["code", "terminal"], ["chart", "table"], ["forest", "snow"], ["chat"]];
+  const MOCK_GROUPS: Record<string, string> = {
+    code: "code",
+    terminal: "code",
+    chart: "charts",
+    table: "charts",
+    forest: "nature",
+    snow: "nature",
+    chat: "apps",
+  };
 
   function ensure() {
     if (captures.length) return;
@@ -169,6 +189,7 @@ const mock = (() => {
       auto_export: { enabled: false, folder: null, pattern: "FMShot {date} {time}", format: "png" },
       retention_days: null,
       save_format: "png",
+      content_search: true,
     } as Settings,
     hotkeys: [
       { action: "capture_region", shortcut: "Primary+Shift+2", label: "⇧⌘2", conflict: false },
@@ -178,18 +199,26 @@ const mock = (() => {
       { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
       { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
     ] as HotkeyInfo[],
-    async query(q: GalleryQuery) {
+    async query(q: GalleryQuery): Promise<GalleryItem[]> {
       ensure();
       const text = q.text.trim().toLowerCase();
-      const hits = captures.filter(
-        (c) =>
-          (!text || c.id.includes(text) || "lorem fehler".includes(text)) &&
+      const items = captures.map((c, i) => {
+        const tags = MOCK_TAGS[i % MOCK_TAGS.length];
+        const matched: string[] = [];
+        if (text && "lorem fehler zeile".includes(text)) matched.push("text");
+        matched.push(...tags.filter((tag) => text && tag.startsWith(text)));
+        return { capture: c, tags, matched };
+      });
+      const hits = items.filter(
+        ({ capture: c, tags, matched }) =>
+          (!text || matched.length > 0) &&
+          (!q.group || tags.some((tag) => MOCK_GROUPS[tag] === q.group)) &&
           (q.fromMs == null || (c.createdAt ?? 0) >= q.fromMs) &&
           (q.toMs == null || (c.createdAt ?? 0) < q.toMs) &&
           (!q.mode || c.mode === q.mode) &&
           (!q.starredOnly || c.starred),
       );
-      hits.sort((a, b) => ((a.createdAt ?? 0) - (b.createdAt ?? 0)) * (q.oldestFirst ? 1 : -1));
+      hits.sort((a, b) => ((a.capture.createdAt ?? 0) - (b.capture.createdAt ?? 0)) * (q.oldestFirst ? 1 : -1));
       return hits.slice(0, q.limit);
     },
     async search(query: string) {

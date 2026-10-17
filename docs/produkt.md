@@ -79,7 +79,7 @@ Windows-Signatur, Flatpak.
 | Auswahl losgelassen → Vorschau         | < 150 ms    |
 | Editor öffnen (warm)                   | < 200 ms    |
 | Leerlauf RAM / CPU                     | < 120 MB / ~0 % |
-| Download-Grösse                        | < 25 MB     |
+| Download-Grösse (mit Bildmodell, ADR 0010) | < 450 MB |
 
 Unter Wayland gilt „so schnell wie das Portal erlaubt“.
 Die App misst diese Werte selbst (Info → Messwerte). `crates/fmshot-bench`

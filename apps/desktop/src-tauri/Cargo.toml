@@ -37,6 +37,7 @@ fmshot-overlay.workspace = true
 fmshot-render.workspace = true
 fmshot-settings = { workspace = true, features = ["specta"] }
 fmshot-stitch.workspace = true
+fmshot-vision.workspace = true
 log = "0.4"
 sys-locale = "0.3"
 tauri-plugin-updater = "2"

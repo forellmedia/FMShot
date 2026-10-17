@@ -1,0 +1,2 @@
+# Shell-Skripte laufen auch unter Windows (Git Bash) – immer LF.
+*.sh text eol=lf
