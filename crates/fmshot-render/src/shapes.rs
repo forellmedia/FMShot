@@ -123,15 +123,27 @@ pub(crate) fn fill_rect(pixmap: &mut Pixmap, r: Rect, fill: &Fill, t: Transform)
     pixmap.fill_path(&path, &p, FillRule::Winding, t, None);
 }
 
+/// Wo und wie eine Bild-Ebene liegt.
+pub(crate) struct ImagePlacement {
+    pub bounds: Rect,
+    pub crop: Option<Rect>,
+    pub corner_radius: f32,
+}
+
+/// `quality`: Filter, wenn skaliert oder gedreht wird (1:1 bleibt pixelgenau).
 pub(crate) fn image(
     pixmap: &mut Pixmap,
     image: &RgbaImage,
-    bounds: Rect,
-    crop: Option<Rect>,
-    corner_radius: f32,
+    place: ImagePlacement,
     opacity: f32,
+    quality: FilterQuality,
     t: Transform,
 ) {
+    let ImagePlacement {
+        bounds,
+        crop,
+        corner_radius,
+    } = place;
     let Some(mut source) = to_pixmap(image) else {
         return;
     };
@@ -159,7 +171,7 @@ pub(crate) fn image(
         quality: if exact {
             FilterQuality::Nearest
         } else {
-            FilterQuality::Bicubic
+            quality
         },
         ..PixmapPaint::default()
     };

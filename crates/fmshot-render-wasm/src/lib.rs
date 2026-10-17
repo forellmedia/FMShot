@@ -105,6 +105,7 @@ impl WasmRenderer {
             layers: from..end,
             background,
             skip: (skip != 0).then_some(fmshot_core::LayerId(skip)),
+            interactive: true,
         };
         let img = self.renderer.render_with(&doc, &self.assets, &opts)?;
         Ok(RenderedImage {

@@ -105,3 +105,24 @@ jobs:
         run: |
           cargo test --workspace --exclude fmshot-desktop
           cargo build -p fmshot-desktop
+
+  # Geschwindigkeit der zeitkritischen Pfade (crates/fmshot-bench). Schlägt
+  # fehl, wenn ein Messwert sein Budget überschreitet; die Tabelle steht in
+  # der Zusammenfassung des Laufs.
+  bench:
+    name: Geschwindigkeit ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS arm64, os: macos-latest }
+          - { name: Windows x64, os: windows-latest }
+          - { name: Linux x86_64, os: ubuntu-22.04 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - run: cargo run --profile bench -p fmshot-bench

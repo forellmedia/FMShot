@@ -82,8 +82,10 @@ Windows-Signatur, Flatpak.
 | Download-Grösse                        | < 25 MB     |
 
 Unter Wayland gilt „so schnell wie das Portal erlaubt“.
-Die App misst diese Werte selbst (Debug-Panel); Benchmarks in der CI warnen bei
-Verschlechterung.
+Die App misst diese Werte selbst (Info → Messwerte). `crates/fmshot-bench`
+misst die Pfade ohne Bildschirm (Speichern + Vorschaubild, Editor öffnen,
+Zeichnen, Export, Scroll-Zusammensetzen, Suche); die CI schlägt fehl, wenn ein
+Wert sein Budget überschreitet.
 
 ## Plattformen
 

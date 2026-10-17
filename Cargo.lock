@@ -1320,6 +1320,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmshot-bench"
+version = "0.1.0"
+dependencies = [
+ "fmshot-core",
+ "fmshot-library",
+ "fmshot-render",
+ "fmshot-stitch",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fmshot-capture"
 version = "0.1.0"
 dependencies = [

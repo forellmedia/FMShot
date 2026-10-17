@@ -54,6 +54,10 @@ pub struct RenderOptions {
     pub background: bool,
     /// Diese Ebene auslassen (z. B. Text, der gerade bearbeitet wird).
     pub skip: Option<LayerId>,
+    /// Editor-Ansicht: Bilder bilinear statt bikubisch skalieren. Beim
+    /// Zoomen etwa zehnmal schneller, sichtbar kaum anders. Export und
+    /// Vorschaubilder bleiben bikubisch.
+    pub interactive: bool,
 }
 
 impl RenderOptions {
@@ -65,6 +69,7 @@ impl RenderOptions {
             layers: 0..doc.layers.len(),
             background: true,
             skip: None,
+            interactive: false,
         }
     }
 
@@ -141,7 +146,7 @@ impl Renderer {
             .iter()
             .filter(|l| l.visible && l.opacity > 0.0 && Some(l.id) != opts.skip)
         {
-            self.draw_layer(&mut pixmap, layer, base, opts.scale, assets)?;
+            self.draw_layer(&mut pixmap, layer, base, opts, assets)?;
         }
 
         Ok(codec::to_rgba_image(&pixmap))
@@ -162,9 +167,10 @@ impl Renderer {
         pixmap: &mut Pixmap,
         layer: &Layer,
         base: Transform,
-        scale: f32,
+        opts: &RenderOptions,
         assets: &dyn AssetSource,
     ) -> Result<(), RenderError> {
+        let scale = opts.scale;
         let b = layer.kind.bounds();
         // Effekte wirken auf ein achsparalleles Rechteck und drehen nicht mit.
         let t = if layer.rotation != 0.0 && !layer.kind.is_effect() {
@@ -193,7 +199,23 @@ impl Renderer {
                 if let Some(shadow) = shadow {
                     effects::shadow(pixmap, *bounds, *corner_radius, shadow, t, scale);
                 }
-                shapes::image(pixmap, image, *bounds, *crop, *corner_radius, opacity, t);
+                let quality = if opts.interactive {
+                    tiny_skia::FilterQuality::Bilinear
+                } else {
+                    tiny_skia::FilterQuality::Bicubic
+                };
+                shapes::image(
+                    pixmap,
+                    image,
+                    shapes::ImagePlacement {
+                        bounds: *bounds,
+                        crop: *crop,
+                        corner_radius: *corner_radius,
+                    },
+                    opacity,
+                    quality,
+                    t,
+                );
             }
             LayerKind::Rectangle {
                 bounds,

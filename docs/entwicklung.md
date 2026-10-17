@@ -13,6 +13,7 @@
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check
+cargo run --profile bench -p fmshot-bench   # Geschwindigkeit mit Budgets
 cd apps/desktop && npm install && npm run tauri dev
 ```
 
@@ -69,6 +70,10 @@ sich selbst aktualisieren, das .deb nicht.
 - **Prüfungen** (Linux): fmt, clippy, Lizenzen/Advisories (`cargo deny`),
   WASM-Build des Renderers, Frontend-Typprüfung und -Build.
 - **Tests** auf macOS arm64, Windows x64/ARM64, Linux x86_64/aarch64.
+- **Geschwindigkeit** auf macOS arm64, Windows x64, Linux x86_64:
+  `fmshot-bench` misst Speichern + Vorschaubild, Editor öffnen, Zeichnen,
+  Export, Scroll-Zusammensetzen und Suche. Ein Wert über Budget lässt den Lauf
+  fehlschlagen; die Tabelle steht in der Zusammenfassung des Laufs.
 
 ## Manuelle Tests
 - macOS nativ, Windows und Linux in den UTM-VMs (ARM64).

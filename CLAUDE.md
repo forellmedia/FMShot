@@ -19,6 +19,7 @@ crates/
   fmshot-hotkeys   globale Tastenkombinationen
   fmshot-overlay   natives Auswahl-Overlay (macOS: NSPanel + Core Animation)
   fmshot-cli       Kommandozeile `fmshot`
+  fmshot-bench     Geschwindigkeitsmessungen mit Budgets (läuft in der CI)
 apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 ```
 
@@ -58,6 +59,7 @@ cargo test --workspace                 # alle Rust-Tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                       # Lizenzen/Advisories
 cargo test -p fmshot-desktop           # erzeugt apps/desktop/src/lib/bindings.ts
+cargo run --profile bench -p fmshot-bench  # Geschwindigkeit messen (Budgets)
 cd apps/desktop && npm test             # Frontend-Tests (Vitest)
 cd apps/desktop && npm run tauri dev   # App starten
 cd apps/desktop && npm run dev         # nur Frontend im Browser (Beispieldaten)
