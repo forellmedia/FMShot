@@ -204,6 +204,12 @@ impl Library {
         Ok(index::tags(&self.lock(), ids)?)
     }
 
+    /// (ID, Stichwort) aller Aufnahmen, die zu den Filtern passen (ohne
+    /// Begrenzung) – für die Anzahl je Schnellfilter.
+    pub fn tagged(&self, q: &CaptureQuery) -> Result<Vec<(String, String)>> {
+        Ok(index::tagged(&self.lock(), q)?)
+    }
+
     /// IDs, deren erkannter Text zur Suche passt.
     pub fn text_matches(&self, text: &str) -> Result<Vec<String>> {
         Ok(index::text_matches(&self.lock(), text)?)
@@ -601,6 +607,16 @@ mod tests {
             }),
             vec![hund.id.clone()]
         );
+
+        // Stichwörter der gefilterten Aufnahmen (ohne Begrenzung)
+        let mut pairs = lib
+            .tagged(&CaptureQuery {
+                from_ms: Some(1_500),
+                ..Default::default()
+            })
+            .unwrap();
+        pairs.sort();
+        assert_eq!(pairs, vec![(hund.id.clone(), "dog".to_string())]);
 
         // Neuer Vektor macht die Stichwörter ungültig; Löschen räumt auf.
         lib.set_embedding(&wald.id, "m", &[2]).unwrap();

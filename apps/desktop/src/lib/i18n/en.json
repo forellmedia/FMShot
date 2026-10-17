@@ -138,7 +138,7 @@
   "settings.reset": "Default",
   "settings.conflict": "Two actions share a shortcut – only one will work.",
   "settings.replace_system": "Use macOS shortcuts ⇧⌘3/4/5",
-  "settings.replace_system_hint": "For this to work, turn off the macOS shortcuts in System Settings → Keyboard → Keyboard Shortcuts → Screenshots.",
+  "settings.replace_system_hint": "The macOS shortcuts are still on. In System Settings, open “Keyboard Shortcuts …” → Screenshots and turn them off.",
   "settings.auto_export": "Also save every capture as a file",
   "settings.folder": "Folder",
   "settings.desktop": "Desktop",
@@ -368,5 +368,8 @@
   "gallery.match.text": "Text match",
   "gallery.match.content": "Image content",
   "gallery.match.tag": "Tag: {tag}",
-  "gallery.indexing": "Recognizing images … {done} / {total}"
+  "gallery.indexing": "Recognizing images … {done} / {total}",
+  "settings.replace_system_open": "Open System Settings",
+  "settings.replace_system_done": "The macOS shortcuts are off – ⇧⌘3/4/5 belong to FMShot.",
+  "gallery.search_tag": "Search for this tag"
 }

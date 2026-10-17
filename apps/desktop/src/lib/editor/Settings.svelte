@@ -12,6 +12,8 @@
   let hotkeys = $state<HotkeyInfo[]>([]);
   let diagnostics = $state<Diagnostics | null>(null);
   let contentStatus = $state<ContentSearchStatus | null>(null);
+  /** macOS-Kürzel ⇧⌘3/4/5 noch eingeschaltet? `null` = unbekannt. */
+  let systemShortcuts = $state<boolean | null>(null);
   let version = $state("");
   let tab = $state<"general" | "hotkeys" | "saving" | "about">("general");
   let recording = $state<string | null>(null);
@@ -24,6 +26,7 @@
     diagnostics = await api.diagnostics();
     version = (await api.appInfo()).version;
     contentStatus = await api.contentSearchStatus().catch(() => null);
+    systemShortcuts = await api.systemShortcutsActive().catch(() => null);
   });
 
   // Fortschritt der Bildinhalt-Erkennung live nachführen.
@@ -32,6 +35,11 @@
     on<ContentSearchStatus>("content-index-progress", (s) => (contentStatus = s)).then((f) => (stop = f));
     return () => stop?.();
   });
+
+  // Zurück aus den Systemeinstellungen: Stand neu lesen.
+  async function refreshSystemShortcuts() {
+    if (isMac) systemShortcuts = await api.systemShortcutsActive().catch(() => null);
+  }
 
   async function save() {
     if (!settings) return;
@@ -117,6 +125,8 @@
   ];
 </script>
 
+<svelte:window onfocus={refreshSystemShortcuts} />
+
 <div class="backdrop" role="presentation" onpointerdown={() => (editor.settingsOpen = false)}>
   <div class="dialog" role="dialog" aria-label={t("settings.title")} tabindex="-1" onpointerdown={(e) => e.stopPropagation()}>
     <header>
@@ -197,7 +207,14 @@
               <span>{t("settings.replace_system")}</span>
             </label>
             {#if settings.replace_mac_system_shortcuts}
-              <p class="hint">{t("settings.replace_system_hint")}</p>
+              {#if systemShortcuts === false}
+                <p class="hint ok">✓ {t("settings.replace_system_done")}</p>
+              {:else}
+                <p class="hint">{t("settings.replace_system_hint")}</p>
+                <div class="buttons">
+                  <button onclick={() => api.openShortcutSettings()}>{t("settings.replace_system_open")}</button>
+                </div>
+              {/if}
             {/if}
           {/if}
         {:else if tab === "saving"}
@@ -434,6 +451,9 @@
   }
   .warn {
     color: var(--accent);
+  }
+  .hint.ok {
+    color: #2e7d32;
   }
   .buttons button {
     padding: 6px 12px;

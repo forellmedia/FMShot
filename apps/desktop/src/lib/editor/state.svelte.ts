@@ -239,7 +239,7 @@ export class Editor {
               limit: 500,
               group: null,
             })
-          ).map((item) => item.capture)
+          ).items.map((item) => item.capture)
         : await api.listCaptures();
     } catch (e) {
       this.flash(String(e));

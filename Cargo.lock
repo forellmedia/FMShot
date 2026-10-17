@@ -1596,6 +1596,7 @@ dependencies = [
 name = "fmshot-hotkeys"
 version = "0.1.0"
 dependencies = [
+ "plist",
  "serde",
  "thiserror 2.0.21",
 ]

@@ -11,13 +11,14 @@ import {
   type Diagnostics,
   type ExportFormat,
   type GalleryItem,
+  type GalleryResult,
   type GalleryQuery,
   type HotkeyInfo,
   type Settings,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, HotkeyInfo, Settings };
+export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Settings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -75,12 +76,8 @@ export const api = {
     isTauri ? unwrap(commands.revealCapture(id)) : Promise.resolve(null),
   startCapture: (mode: CaptureMode): Promise<void> =>
     isTauri ? commands.startCapture(mode) : Promise.resolve(),
-  queryCaptures: (query: GalleryQuery): Promise<GalleryItem[]> =>
+  queryCaptures: (query: GalleryQuery): Promise<GalleryResult> =>
     isTauri ? unwrap(commands.queryCaptures(query)) : mock.query(query),
-  contentGroups: (): Promise<string[]> =>
-    isTauri
-      ? commands.contentGroups()
-      : Promise.resolve(["people", "animals", "nature", "food", "vehicles", "buildings", "documents", "code", "charts", "apps"]),
   searchCaptures: (query: string): Promise<CaptureInfo[]> =>
     isTauri ? unwrap(commands.searchCaptures(query)) : mock.search(query),
   getSettings: (): Promise<Settings> =>
@@ -92,6 +89,10 @@ export const api = {
     isTauri ? unwrap(commands.shortcutLabel(shortcut)) : Promise.resolve(shortcut),
   pauseHotkeys: (paused: boolean): Promise<void> =>
     isTauri ? commands.pauseHotkeys(paused) : Promise.resolve(),
+  systemShortcutsActive: (): Promise<boolean | null> =>
+    isTauri ? commands.systemShortcutsActive() : Promise.resolve(true),
+  openShortcutSettings: (): Promise<void> =>
+    isTauri ? unwrap(commands.openShortcutSettings()).then(() => {}) : Promise.resolve(),
   chooseFolder: (): Promise<string | null> =>
     isTauri ? commands.chooseFolder() : Promise.resolve("/Users/beispiel/Desktop/Screenshots"),
   diagnostics: (): Promise<Diagnostics> =>
@@ -199,7 +200,7 @@ const mock = (() => {
       { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
       { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
     ] as HotkeyInfo[],
-    async query(q: GalleryQuery): Promise<GalleryItem[]> {
+    async query(q: GalleryQuery): Promise<GalleryResult> {
       ensure();
       const text = q.text.trim().toLowerCase();
       const items = captures.map((c, i) => {
@@ -209,17 +210,24 @@ const mock = (() => {
         matched.push(...tags.filter((tag) => text && tag.startsWith(text)));
         return { capture: c, tags, matched };
       });
-      const hits = items.filter(
-        ({ capture: c, tags, matched }) =>
+      const filtered = items.filter(
+        ({ capture: c, matched }) =>
           (!text || matched.length > 0) &&
-          (!q.group || tags.some((tag) => MOCK_GROUPS[tag] === q.group)) &&
           (q.fromMs == null || (c.createdAt ?? 0) >= q.fromMs) &&
           (q.toMs == null || (c.createdAt ?? 0) < q.toMs) &&
           (!q.mode || c.mode === q.mode) &&
           (!q.starredOnly || c.starred),
       );
+      // Schnellfilter, die in den Treffern vorkommen (ohne den gewählten).
+      const counts = new Map<string, number>();
+      for (const item of filtered) {
+        for (const g of new Set(item.tags.map((tag) => MOCK_GROUPS[tag]))) counts.set(g, (counts.get(g) ?? 0) + 1);
+      }
+      const order = ["people", "animals", "nature", "food", "vehicles", "buildings", "documents", "code", "charts", "apps"];
+      const groups = order.filter((g) => counts.has(g)).map((group) => ({ group, count: counts.get(group)! }));
+      const hits = filtered.filter(({ tags }) => !q.group || tags.some((tag) => MOCK_GROUPS[tag] === q.group));
       hits.sort((a, b) => ((a.capture.createdAt ?? 0) - (b.capture.createdAt ?? 0)) * (q.oldestFirst ? 1 : -1));
-      return hits.slice(0, q.limit);
+      return { items: hits.slice(0, q.limit), groups };
     },
     async search(query: string) {
       ensure();

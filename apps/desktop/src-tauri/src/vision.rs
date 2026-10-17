@@ -363,7 +363,8 @@ pub fn search(app: &AppHandle, text: &str) -> Vec<String> {
 }
 
 /// Stichwörter, deren Name (deutsch oder englisch) zum Suchtext passt –
-/// „Boot“ findet so alles mit dem Stichwort Boot.
+/// „Boot“ findet so alles mit dem Stichwort Boot, „Tiere“ alles aus der
+/// Gruppe Tiere.
 pub fn tags_for_text(text: &str) -> Vec<String> {
     let words: Vec<String> = text
         .split_whitespace()
@@ -371,20 +372,43 @@ pub fn tags_for_text(text: &str) -> Vec<String> {
         .filter(|w| w.chars().count() >= 3)
         .collect();
     let whole = text.trim().to_lowercase();
+    let matches = |key: &str| {
+        crate::i18n::all(key)
+            .iter()
+            .map(|l| l.to_lowercase())
+            .any(|label| {
+                label == whole
+                    || words.iter().any(|w| {
+                        label == *w || (w.chars().count() >= 4 && label.starts_with(w.as_str()))
+                    })
+            })
+    };
     fmshot_vision::terms::TERMS
         .iter()
         .filter(|term| {
-            crate::i18n::all(&format!("tag.{}", term.key))
-                .iter()
-                .map(|l| l.to_lowercase())
-                .any(|label| {
-                    label == whole
-                        || words.iter().any(|w| {
-                            label == *w || (w.chars().count() >= 4 && label.starts_with(w.as_str()))
-                        })
-                })
+            matches(&format!("tag.{}", term.key)) || matches(&format!("group.{}", term.group))
         })
         .map(|term| term.key.to_string())
+        .collect()
+}
+
+/// Anzahl Aufnahmen je Schnellfilter aus (ID, Stichwort); nur Gruppen mit
+/// Treffern, in der festen Reihenfolge.
+pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
+    use std::collections::{HashMap, HashSet};
+    let group_of: HashMap<&str, &str> = fmshot_vision::terms::TERMS
+        .iter()
+        .map(|t| (t.key, t.group))
+        .collect();
+    let mut ids: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (id, term) in tagged {
+        if let Some(group) = group_of.get(term.as_str()) {
+            ids.entry(group).or_default().insert(id);
+        }
+    }
+    fmshot_vision::terms::GROUPS
+        .iter()
+        .filter_map(|g| ids.get(g).map(|s| (g.to_string(), s.len() as u32)))
         .collect()
 }
 
@@ -421,12 +445,25 @@ pub fn content_search_status(app: AppHandle) -> Result<ContentSearchStatus, Stri
     })
 }
 
-/// Schnellfilter der Galerie (Schlüssel für `group.<key>`).
-#[tauri::command]
-#[specta::specta]
-pub fn content_groups() -> Vec<String> {
-    fmshot_vision::terms::GROUPS
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gruppen_zaehlen_jede_aufnahme_einmal() {
+        let tagged: Vec<(String, String)> = [
+            ("a", "dog"),
+            ("a", "cat"),
+            ("b", "cat"),
+            ("c", "code"),
+            ("d", "logo"),
+        ]
         .iter()
-        .map(|g| g.to_string())
-        .collect()
+        .map(|(i, t)| (i.to_string(), t.to_string()))
+        .collect();
+        assert_eq!(
+            group_counts(&tagged),
+            vec![("animals".to_string(), 2), ("code".to_string(), 1)]
+        );
+    }
 }

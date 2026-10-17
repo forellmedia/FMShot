@@ -138,7 +138,7 @@
   "settings.reset": "Standard",
   "settings.conflict": "Zwei Aktionen haben dasselbe Kürzel – nur eine funktioniert.",
   "settings.replace_system": "macOS-Kürzel ⇧⌘3/4/5 übernehmen",
-  "settings.replace_system_hint": "Damit das klappt, in den Systemeinstellungen unter Tastatur → Tastaturkurzbefehle → Bildschirmfotos die macOS-Kürzel ausschalten.",
+  "settings.replace_system_hint": "Die macOS-Kürzel sind noch eingeschaltet. In den Systemeinstellungen unter „Tastaturkurzbefehle …“ → Bildschirmfotos ausschalten.",
   "settings.auto_export": "Jede Aufnahme zusätzlich als Datei speichern",
   "settings.folder": "Ordner",
   "settings.desktop": "Schreibtisch",
@@ -368,5 +368,8 @@
   "gallery.match.text": "Text gefunden",
   "gallery.match.content": "Bildinhalt",
   "gallery.match.tag": "Stichwort: {tag}",
-  "gallery.indexing": "Bilder werden erkannt … {done} / {total}"
+  "gallery.indexing": "Bilder werden erkannt … {done} / {total}",
+  "settings.replace_system_open": "Systemeinstellungen öffnen",
+  "settings.replace_system_done": "Die macOS-Kürzel sind aus – ⇧⌘3/4/5 gehören FMShot.",
+  "gallery.search_tag": "Nach diesem Stichwort suchen"
 }

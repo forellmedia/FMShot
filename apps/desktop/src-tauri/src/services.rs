@@ -434,20 +434,35 @@ pub struct GalleryItem {
     pub matched: Vec<String>,
 }
 
+/// Ein Schnellfilter mit der Zahl passender Aufnahmen.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCount {
+    /// Schlüssel für `group.<key>`.
+    pub group: String,
+    pub count: u32,
+}
+
+/// Ergebnis der Galerie: Aufnahmen und die Schnellfilter, die darin
+/// vorkommen (ohne den gewählten Schnellfilter gezählt).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryResult {
+    pub items: Vec<GalleryItem>,
+    pub groups: Vec<GroupCount>,
+}
+
 /// Galerie: Aufnahmen nach Text (erkannt oder Bildinhalt), Zeitraum, Art,
 /// Stern und Schnellfilter.
 #[tauri::command]
 #[specta::specta]
-pub async fn query_captures(
-    app: AppHandle,
-    query: GalleryQuery,
-) -> Result<Vec<GalleryItem>, String> {
+pub async fn query_captures(app: AppHandle, query: GalleryQuery) -> Result<GalleryResult, String> {
     tauri::async_runtime::spawn_blocking(move || gallery(&app, query))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<Vec<GalleryItem>, String> {
+fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<GalleryResult, String> {
     let library = app.state::<CaptureState>().library.clone();
     let has_text = !query.text.trim().is_empty();
     let content_ids = if has_text {
@@ -477,6 +492,18 @@ fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<Vec<GalleryItem>, Str
         limit: query.limit,
     };
     let records = library.query(&q).map_err(|e| e.to_string())?;
+    let groups = if crate::settings::get(app).content_search {
+        let all = CaptureQuery {
+            any_tags: Vec::new(),
+            ..q.clone()
+        };
+        crate::vision::group_counts(&library.tagged(&all).map_err(|e| e.to_string())?)
+            .into_iter()
+            .map(|(group, count)| GroupCount { group, count })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
     let mut tags = library.tags(&ids).map_err(|e| e.to_string())?;
     let by_text: std::collections::HashSet<String> = if has_text {
@@ -489,7 +516,7 @@ fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<Vec<GalleryItem>, Str
         Default::default()
     };
     let by_content: std::collections::HashSet<&String> = content_ids.iter().collect();
-    Ok(records
+    let items = records
         .iter()
         .map(|r| {
             let tags = tags.remove(&r.id).unwrap_or_default();
@@ -507,7 +534,8 @@ fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<Vec<GalleryItem>, Str
                 matched,
             }
         })
-        .collect())
+        .collect();
+    Ok(GalleryResult { items, groups })
 }
 
 /// Volltextsuche über den erkannten Text.

@@ -4,7 +4,7 @@
   // Zeitraum, Art, nur mit Stern, Sortierung. Gefiltert wird im Backend.
 
   import { onMount } from "svelte";
-  import { api, fileUrl, on, type CaptureInfo, type ContentSearchStatus, type GalleryItem } from "$lib/api";
+  import { api, fileUrl, on, type CaptureInfo, type ContentSearchStatus, type GalleryItem, type GalleryResult } from "$lib/api";
   import { locale, t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
   import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
@@ -21,7 +21,7 @@
   let starredOnly = $state(false);
   let oldestFirst = $state(false);
   let filter = $state<string | null>(null);
-  let filters = $state<string[]>([]);
+  let filters = $state<GalleryResult["groups"]>([]);
   let status = $state<ContentSearchStatus | null>(null);
   /** Bildinhalt-Erkennung eingeschaltet (Einstellungen). */
   let contentOn = $state(false);
@@ -56,8 +56,11 @@
         group: filter,
       });
       if (mine !== request) return; // Eine neuere Suche läuft schon.
-      results = found;
-      for (const { capture: c } of found) {
+      results = found.items;
+      filters = found.groups;
+      // Gewählter Filter ohne Treffer mehr (z. B. nach neuer Suche): aufheben.
+      if (filter && !found.groups.some((g) => g.group === filter)) filter = null;
+      for (const { capture: c } of found.items) {
         if (!urls[c.id]) fileUrl(c.thumbnailPath, editor.thumbVersion).then((u) => (urls[c.id] = u));
       }
     } catch (e) {
@@ -77,7 +80,6 @@
 
   onMount(() => {
     searchInput.focus();
-    api.contentGroups().then((g) => (filters = g));
     api.getSettings().then((s) => (contentOn = s.content_search ?? true));
     api.contentSearchStatus().then((s) => (status = s)).catch(() => {});
     let stop: (() => void) | undefined;
@@ -183,9 +185,9 @@
   {#if filters.length && contentOn && status?.available}
     <div class="filters" role="toolbar" aria-label={t("gallery.groups")}>
       <button class="chip" class:on={filter === null} onclick={() => (filter = null)}>{t("gallery.groups.all")}</button>
-      {#each filters as f (f)}
-        <button class="chip" class:on={filter === f} onclick={() => (filter = filter === f ? null : f)}>
-          {t(`group.${f}` as MessageKey)}
+      {#each filters as f (f.group)}
+        <button class="chip" class:on={filter === f.group} onclick={() => (filter = filter === f.group ? null : f.group)}>
+          {t(`group.${f.group}` as MessageKey)} <span class="n">{f.count}</span>
         </button>
       {/each}
     </div>
@@ -214,7 +216,19 @@
                 {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}
                 {#if why}<span class="why">{why}</span>{/if}
                 {#if item.tags.length}
-                  <span class="tags">{item.tags.map(tagLabel).join(" · ")}</span>
+                  <span class="tags">
+                    {#each item.tags as tag (tag)}
+                      <button
+                        class="tag"
+                        title={t("gallery.search_tag")}
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          text = tagLabel(tag);
+                        }}
+                        onkeydown={(e) => e.stopPropagation()}>{tagLabel(tag)}</button
+                      >
+                    {/each}
+                  </span>
                 {/if}
               </div>
               <div class="meta">
@@ -330,6 +344,11 @@
   .chip:hover {
     background: var(--hover);
   }
+  .chip .n {
+    margin-left: 2px;
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+  }
   .chip.on {
     background: var(--accent);
     border-color: var(--accent);
@@ -356,8 +375,23 @@
   }
   .tags {
     bottom: 6px;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
     opacity: 0;
     transition: opacity 0.12s;
+  }
+  .tag {
+    padding: 1px 6px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .tag:hover {
+    background: rgb(255 255 255 / 0.25);
   }
   .tile:hover .tags,
   .tile:focus-visible .tags {

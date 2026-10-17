@@ -46,6 +46,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         settings::shortcut_label,
         settings::pause_hotkeys,
         settings::choose_folder,
+        settings::system_shortcuts_active,
+        settings::open_shortcut_settings,
         services::get_diagnostics,
         services::search_captures,
         services::query_captures,
@@ -53,7 +55,6 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         updater::check_for_update,
         updater::install_update,
         vision::content_search_status,
-        vision::content_groups,
     ])
 }
 

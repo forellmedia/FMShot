@@ -259,15 +259,11 @@ fn fts_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn query(
-    conn: &Connection,
-    root: &Path,
-    q: &CaptureQuery,
-) -> rusqlite::Result<Vec<CaptureRecord>> {
-    let mut filters: Vec<&str> = Vec::new();
+/// WHERE-Teil und Parameter für die Filter der Galerie.
+fn where_clause(q: &CaptureQuery) -> (String, Vec<rusqlite::types::Value>) {
+    let mut filters: Vec<String> = Vec::new();
     let mut args: Vec<rusqlite::types::Value> = Vec::new();
     let terms = fts_terms(&q.text);
-    let mut text_filter = String::new();
     if !terms.is_empty() {
         let mut any =
             vec!["id IN (SELECT id FROM captures_fts WHERE captures_fts MATCH ?)".to_string()];
@@ -283,40 +279,44 @@ pub(crate) fn query(
             ));
             args.extend(q.text_tags.iter().map(|t| t.clone().into()));
         }
-        text_filter = format!("({})", any.join(" OR "));
+        filters.push(format!("({})", any.join(" OR ")));
     }
-    if !text_filter.is_empty() {
-        filters.push(&text_filter);
-    }
-    let tag_filter;
     if !q.any_tags.is_empty() {
-        tag_filter = format!(
+        filters.push(format!(
             "id IN (SELECT id FROM capture_tags WHERE term IN ({}))",
             placeholders(q.any_tags.len())
-        );
-        filters.push(&tag_filter);
+        ));
         args.extend(q.any_tags.iter().map(|t| t.clone().into()));
     }
     if let Some(from) = q.from_ms {
-        filters.push("created_at >= ?");
+        filters.push("created_at >= ?".into());
         args.push(from.into());
     }
     if let Some(to) = q.to_ms {
-        filters.push("created_at < ?");
+        filters.push("created_at < ?".into());
         args.push(to.into());
     }
     if let Some(mode) = &q.mode {
-        filters.push("mode = ?");
+        filters.push("mode = ?".into());
         args.push(mode.clone().into());
     }
     if q.starred_only {
-        filters.push("starred = 1");
+        filters.push("starred = 1".into());
     }
-    let filter = if filters.is_empty() {
+    let clause = if filters.is_empty() {
         String::new()
     } else {
         format!("WHERE {}", filters.join(" AND "))
     };
+    (clause, args)
+}
+
+pub(crate) fn query(
+    conn: &Connection,
+    root: &Path,
+    q: &CaptureQuery,
+) -> rusqlite::Result<Vec<CaptureRecord>> {
+    let (filter, mut args) = where_clause(q);
     let order = if q.oldest_first { "ASC" } else { "DESC" };
     args.push(i64::from(q.limit.max(1)).into());
     let mut stmt = conn.prepare(&format!(
@@ -324,6 +324,22 @@ pub(crate) fn query(
     ))?;
     stmt.query_map(rusqlite::params_from_iter(args), |r| row(root, r))?
         .collect()
+}
+
+/// (ID, Stichwort) aller Aufnahmen, die zu den Filtern passen – ohne
+/// Begrenzung. Für die Anzahl je Schnellfilter.
+pub(crate) fn tagged(
+    conn: &Connection,
+    q: &CaptureQuery,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    let (filter, args) = where_clause(q);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, term FROM capture_tags WHERE id IN (SELECT id FROM captures {filter})"
+    ))?;
+    stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?
+    .collect()
 }
 
 fn placeholders(n: usize) -> String {

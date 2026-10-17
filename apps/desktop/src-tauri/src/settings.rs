@@ -122,6 +122,25 @@ pub fn pause_hotkeys(app: AppHandle, paused: bool) {
     }
 }
 
+/// Sind die Bildschirmfoto-Kürzel des Systems (macOS ⇧⌘3/4/5) noch an?
+/// `None` = gibt es auf dieser Plattform nicht.
+#[tauri::command]
+#[specta::specta]
+pub fn system_shortcuts_active() -> Option<bool> {
+    fmshot_hotkeys::system::screenshot_shortcuts_active()
+}
+
+/// Öffnet die Systemeinstellungen, in denen man diese Kürzel ausschaltet.
+#[tauri::command]
+#[specta::specta]
+pub fn open_shortcut_settings(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = fmshot_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Ordner für den Auto-Export wählen.
 #[tauri::command]
 #[specta::specta]

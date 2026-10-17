@@ -50,6 +50,13 @@ export const commands = {
 	pauseHotkeys: (paused: boolean) => __TAURI_INVOKE<void>("pause_hotkeys", { paused }),
 	/**  Ordner für den Auto-Export wählen. */
 	chooseFolder: () => __TAURI_INVOKE<string | null>("choose_folder"),
+	/**
+	 *  Sind die Bildschirmfoto-Kürzel des Systems (macOS ⇧⌘3/4/5) noch an?
+	 *  `None` = gibt es auf dieser Plattform nicht.
+	 */
+	systemShortcutsActive: () => __TAURI_INVOKE<boolean | null>("system_shortcuts_active"),
+	/**  Öffnet die Systemeinstellungen, in denen man diese Kürzel ausschaltet. */
+	openShortcutSettings: () => typedError<null, string>(__TAURI_INVOKE("open_shortcut_settings")),
 	getDiagnostics: () => __TAURI_INVOKE<Diagnostics>("get_diagnostics"),
 	/**  Volltextsuche über den erkannten Text. */
 	searchCaptures: (query: string) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("search_captures", { query })),
@@ -57,7 +64,7 @@ export const commands = {
 	 *  Galerie: Aufnahmen nach Text (erkannt oder Bildinhalt), Zeitraum, Art,
 	 *  Stern und Schnellfilter.
 	 */
-	queryCaptures: (query: GalleryQuery) => typedError<GalleryItem[], string>(__TAURI_INVOKE("query_captures", { query })),
+	queryCaptures: (query: GalleryQuery) => typedError<GalleryResult, string>(__TAURI_INVOKE("query_captures", { query })),
 	/**
 	 *  „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.
 	 *  Der Nutzer sieht alles und schickt es selbst ab – ohne Screenshots.
@@ -73,8 +80,6 @@ export const commands = {
 	/**  Lädt das Update, prüft die Signatur, installiert und startet neu. */
 	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
 	contentSearchStatus: () => typedError<ContentSearchStatus, string>(__TAURI_INVOKE("content_search_status")),
-	/**  Schnellfilter der Galerie (Schlüssel für `group.<key>`). */
-	contentGroups: () => __TAURI_INVOKE<string[]>("content_groups"),
 };
 
 /* Types */
@@ -250,6 +255,22 @@ export type GalleryQuery = {
 	limit: number,
 	/**  Schnellfilter, z. B. `animals` (siehe `content_groups`). */
 	group: string | null,
+};
+
+/**
+ *  Ergebnis der Galerie: Aufnahmen und die Schnellfilter, die darin
+ *  vorkommen (ohne den gewählten Schnellfilter gezählt).
+ */
+export type GalleryResult = {
+	items: GalleryItem[],
+	groups: GroupCount[],
+};
+
+/**  Ein Schnellfilter mit der Zahl passender Aufnahmen. */
+export type GroupCount = {
+	/**  Schlüssel für `group.<key>`. */
+	group: string,
+	count: number,
 };
 
 /**  Ein Tastenkürzel für die Einstellungen. */
