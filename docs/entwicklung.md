@@ -17,11 +17,11 @@ cargo run --profile bench -p fmshot-bench   # Geschwindigkeit mit Budgets
 cd apps/desktop && npm install && npm run tauri dev
 ```
 
-Release-Build lokal (macOS, mit eigenem Zertifikat):
+Lokal bauen und installieren (Apple Silicon, mit eigenem Zertifikat, ADR 0009):
 
 ```bash
-cd apps/desktop
-APPLE_SIGNING_IDENTITY="FMShot Local Signing" npm run tauri build -- --bundles app
+./scripts/build-local.sh            # bauen, laufendes FMShot beenden, nach /Applications, starten
+./scripts/build-local.sh --no-install   # nur bauen
 ```
 
 ## Einmalige Einrichtung: Mac-Signatur
@@ -62,7 +62,7 @@ sich selbst aktualisieren, das .deb nicht.
 1. Version in `Cargo.toml` (workspace), `apps/desktop/package.json` und
    `apps/desktop/src-tauri/tauri.conf.json` erhöhen.
 2. `git tag v0.1.0 && git push origin v0.1.0`
-3. Die Release-Pipeline baut macOS (Universal), Windows (x64, ARM64) und Linux
+3. Die Release-Pipeline baut macOS (arm64), Windows (x64, ARM64) und Linux
    (x86_64, aarch64) und legt einen **Release-Entwurf** an.
 4. Entwurf auf GitHub prüfen und veröffentlichen.
 

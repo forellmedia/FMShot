@@ -44,10 +44,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS Universal
+          # Nur Apple Silicon, kein Intel (ADR 0009).
+          - name: macOS arm64
             os: macos-latest
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
           - name: Windows x64
             os: windows-latest
             args: ""

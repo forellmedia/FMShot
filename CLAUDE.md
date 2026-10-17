@@ -66,7 +66,11 @@ cd apps/desktop && npm run dev         # nur Frontend im Browser (Beispieldaten)
 ```
 
 ## Ablauf
-- Arbeit pro Meilenstein-Issue auf GitHub; jedes Feature zuerst macOS, dann
-  Windows, dann Linux.
+- Arbeit pro Meilenstein-Issue auf GitHub.
+- **Zurzeit Phase „Apple Silicon“ (ADR 0009):** Nach jeder Änderung
+  `./scripts/build-local.sh` (baut, installiert nach /Applications, startet).
+  Der Nutzer testet; committen und pushen erst nach seiner Freigabe.
+  Windows/Linux müssen kompilieren, Funktionen dürfen dort vorerst fehlen.
+  Kein Intel-Mac.
 - Keine fremden Pull Requests annehmen.
 - App-ID `ch.forellmedia.fmshot` nie ändern (macOS knüpft Berechtigungen daran).

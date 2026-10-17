@@ -91,7 +91,7 @@ Wert sein Budget überschreitet.
 
 | Plattform | Mindestversion               | Architekturen        |
 |-----------|------------------------------|----------------------|
-| macOS     | 14 Sonoma                    | Universal (arm64 + x86_64) |
+| macOS     | 14 Sonoma                    | arm64 (Apple Silicon, kein Intel) |
 | Windows   | 10 22H2, 11                  | x64, ARM64           |
 | Linux     | Ubuntu 22.04+, Fedora 39+    | x86_64, aarch64      |
 
