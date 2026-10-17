@@ -3,6 +3,7 @@
   import { api } from "$lib/api";
   import { t } from "$lib/i18n";
   import Canvas from "./Canvas.svelte";
+  import Dropdown from "./Dropdown.svelte";
   import { editor } from "./state.svelte";
   import GalleryStrip from "./GalleryStrip.svelte";
   import Icon from "./Icon.svelte";
@@ -91,13 +92,25 @@
   }
 
   const zoomPercent = $derived(Math.round(editor.zoom * editor.ratio * 100));
+
+  // Kopfleiste passt sich der Fensterbreite an, statt über den Rand zu laufen:
+  // - schmal: Nebensachen ins „Mehr“-Menü, PNG/JPG unter „Sichern“
+  // - Eigenschaften passen nicht zwischen die Knöpfe: eigene Zeile darunter
+  let headerWidth = $state(0);
+  let captureWidth = $state(0);
+  let actionsWidth = $state(0);
+  let propsWidth = $state(0);
+  const COMPACT_BELOW = 900;
+  const compact = $derived(headerWidth > 0 && headerWidth < COMPACT_BELOW);
+  // Innenabstand (2 × 12) und Spaltenabstände (2 × 16) der Kopfleiste.
+  const twoRows = $derived(captureWidth + actionsWidth + propsWidth + 2 * 12 + 2 * 16 > headerWidth);
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
 <div class="editor">
-  <header>
-    <div class="capture">
+  <header class:two-rows={twoRows} bind:clientWidth={headerWidth}>
+    <div class="capture" bind:clientWidth={captureWidth}>
       <button title={t("capture.region")} onclick={() => api.startCapture("region")}>
         <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
       </button>
@@ -108,8 +121,8 @@
         <Icon d="M3 4h18v12H3zM8 20h8M12 16v4" />
       </button>
     </div>
-    <PropertiesBar />
-    <div class="actions">
+    <PropertiesBar bind:contentWidth={propsWidth} />
+    <div class="actions" bind:clientWidth={actionsWidth}>
       <button title="{t('editor.undo')} (⌘Z)" disabled={!editor.canUndo} onclick={() => editor.undo()}>
         <Icon d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3" />
       </button>
@@ -121,31 +134,97 @@
       <button class="zoom" title={t("editor.zoom_fit")} onclick={() => editor.fit()}>{zoomPercent}%</button>
       <button title={t("editor.zoom_in")} onclick={() => editor.zoomAt(1.25)}><Icon d="M5 12h14M12 5v14" /></button>
       <span class="sep"></span>
-      <button
-        title={t("editor.text")}
-        class:on={!!editor.ocrBlocks}
-        disabled={!editor.doc || editor.busy}
-        onclick={() => editor.showText()}
-      >
-        <Icon d="M4 7V5h16v2M12 5v14M9 19h6" />
-      </button>
-      <button title={t("editor.redact")} disabled={!editor.doc || editor.busy} onclick={() => editor.autoRedact()}>
-        <Icon d="M4 6h16M4 12h10M4 18h7M17 13l4 4m0-4l-4 4" />
-      </button>
-      <span class="sep"></span>
+      {#if !compact}
+        <button
+          title={t("editor.text")}
+          class:on={!!editor.ocrBlocks}
+          disabled={!editor.doc || editor.busy}
+          onclick={() => editor.showText()}
+        >
+          <Icon d="M4 7V5h16v2M12 5v14M9 19h6" />
+        </button>
+        <button title={t("editor.redact")} disabled={!editor.doc || editor.busy} onclick={() => editor.autoRedact()}>
+          <Icon d="M4 6h16M4 12h10M4 18h7M17 13l4 4m0-4l-4 4" />
+        </button>
+        <span class="sep"></span>
+      {/if}
       <button class="text" title="⌘C" onclick={() => editor.copy()} disabled={!editor.doc}>{t("editor.copy")}</button>
-      <button class="text" title="⌘S" onclick={() => editor.exportAs("png")} disabled={!editor.doc}>PNG</button>
-      <button class="text" title="⇧⌘S" onclick={() => editor.exportAs("jpg")} disabled={!editor.doc}>JPG</button>
-      <button
-        title={t("layers.title")}
-        class:on={editor.layersPanel}
-        onclick={() => (editor.layersPanel = !editor.layersPanel)}
-      >
-        <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
-      </button>
-      <button title={t("editor.settings")} onclick={() => (editor.settingsOpen = true)}>
-        <Icon d="M12 9a3 3 0 110 6 3 3 0 010-6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z" />
-      </button>
+      {#if compact}
+        <Dropdown align="right">
+          {#snippet label()}{t("editor.save")} ▾{/snippet}
+          {#snippet children(close)}
+            {#each [["png", "⌘S"], ["jpg", "⇧⌘S"]] as const as [format, keys] (format)}
+              <button
+                class="item"
+                disabled={!editor.doc}
+                onclick={() => {
+                  editor.exportAs(format);
+                  close();
+                }}
+              >
+                {format.toUpperCase()} <kbd>{keys}</kbd>
+              </button>
+            {/each}
+          {/snippet}
+        </Dropdown>
+        <Dropdown align="right" title={t("editor.more")}>
+          {#snippet label()}<Icon d="M5 12h.5M12 12h.5M19 12h.5" />{/snippet}
+          {#snippet children(close)}
+            <button
+              class="item"
+              disabled={!editor.doc || editor.busy}
+              onclick={() => {
+                editor.showText();
+                close();
+              }}
+            >
+              {t("editor.text")}
+            </button>
+            <button
+              class="item"
+              disabled={!editor.doc || editor.busy}
+              onclick={() => {
+                editor.autoRedact();
+                close();
+              }}
+            >
+              {t("editor.redact")}
+            </button>
+            <button
+              class="item"
+              onclick={() => {
+                editor.layersPanel = !editor.layersPanel;
+                close();
+              }}
+            >
+              {t("layers.title")}
+              {#if editor.layersPanel}<span>✓</span>{/if}
+            </button>
+            <button
+              class="item"
+              onclick={() => {
+                editor.settingsOpen = true;
+                close();
+              }}
+            >
+              {t("editor.settings")} <kbd>⌘,</kbd>
+            </button>
+          {/snippet}
+        </Dropdown>
+      {:else}
+        <button class="text" title="⌘S" onclick={() => editor.exportAs("png")} disabled={!editor.doc}>PNG</button>
+        <button class="text" title="⇧⌘S" onclick={() => editor.exportAs("jpg")} disabled={!editor.doc}>JPG</button>
+        <button
+          title={t("layers.title")}
+          class:on={editor.layersPanel}
+          onclick={() => (editor.layersPanel = !editor.layersPanel)}
+        >
+          <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
+        </button>
+        <button title={t("editor.settings")} onclick={() => (editor.settingsOpen = true)}>
+          <Icon d="M12 9a3 3 0 110 6 3 3 0 010-6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z" />
+        </button>
+      {/if}
     </div>
   </header>
 
@@ -183,28 +262,43 @@
 <style>
   .editor {
     display: grid;
+    /* minmax(0, …): Inhalt darf die Spalte nicht über das Fenster hinaus weiten. */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 1fr auto;
     height: 100vh;
     overflow: hidden;
   }
   header {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "capture props actions";
     align-items: center;
-    gap: var(--space-4);
+    column-gap: var(--space-4);
+    row-gap: 6px;
     padding: 6px var(--space-3);
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     min-height: 44px;
   }
+  header.two-rows {
+    grid-template-areas:
+      "capture . actions"
+      "props props props";
+  }
+  .capture {
+    grid-area: capture;
+  }
+  .actions {
+    grid-area: actions;
+  }
   header :global(.props) {
-    flex: 1;
+    grid-area: props;
   }
   .capture,
   .actions {
     display: flex;
     align-items: center;
     gap: 2px;
-    flex: none;
   }
   header button {
     display: grid;

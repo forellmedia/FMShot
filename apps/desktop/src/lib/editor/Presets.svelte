@@ -5,6 +5,7 @@
   import { t } from "$lib/i18n";
   import { toCss, type LayerKind } from "./model";
   import { editor, type Style } from "./state.svelte";
+  import Dropdown from "./Dropdown.svelte";
 
   const KEY = "fmshot.presets";
   const MAX = 6;
@@ -18,7 +19,6 @@
   }
 
   let presets = $state<Style[]>(load());
-  let open = $state(false);
 
   function persist() {
     try {
@@ -51,84 +51,44 @@
       if (k.type === "step") return { ...k, fill: p.color };
       return k;
     });
-    open = false;
   }
 </script>
 
-<div class="presets">
-  <button class="toggle" onclick={() => (open = !open)}>{t("presets.title")} ▾</button>
-  {#if open}
-    <div class="menu" role="menu">
-      {#each presets as p, i (i)}
-        <div class="item">
-          <button class="apply" onclick={() => apply(p)}>
+<Dropdown variant="outline">
+  {#snippet label()}{t("presets.title")} ▾{/snippet}
+  {#snippet children(close)}
+    {#each presets as p, i (i)}
+      <div class="row">
+        <button
+          class="item"
+          onclick={() => {
+            apply(p);
+            close();
+          }}
+        >
+          <span class="swatch">
             <span class="dot" style:background={toCss(p.color)}></span>
             {Math.round(p.strokeWidth)} · {Math.round(p.fontSize)}pt{p.bold ? " · B" : ""}
-          </button>
-          <button class="del" aria-label={t("presets.delete")} onclick={() => remove(i)}>✕</button>
-        </div>
-      {:else}
-        <p class="empty">{t("presets.empty")}</p>
-      {/each}
-      <button class="save" onclick={saveCurrent}>{t("presets.save")}</button>
-    </div>
-  {/if}
-</div>
+          </span>
+        </button>
+        <button class="del" aria-label={t("presets.delete")} onclick={() => remove(i)}>✕</button>
+      </div>
+    {:else}
+      <p class="empty">{t("presets.empty")}</p>
+    {/each}
+    <hr />
+    <button class="item" onclick={saveCurrent}><span class="save">{t("presets.save")}</span></button>
+  {/snippet}
+</Dropdown>
 
 <style>
-  .presets {
-    position: relative;
-    flex: none;
-  }
-  .toggle {
-    padding: 3px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .menu {
-    position: absolute;
-    top: 30px;
-    left: 0;
-    z-index: 25;
-    min-width: 200px;
-    padding: 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
-  }
-  .item {
+  .row {
     display: flex;
   }
-  .apply,
-  .del,
-  .save {
-    border: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    cursor: pointer;
-    padding: 6px 8px;
-    border-radius: 5px;
-  }
-  .apply {
-    flex: 1;
-    text-align: left;
+  .swatch {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-  .apply:hover,
-  .save:hover {
-    background: var(--hover);
-  }
-  .del {
-    color: var(--text-muted);
   }
   .dot {
     width: 14px;
@@ -136,12 +96,25 @@
     border-radius: 50%;
     border: 1px solid rgb(0 0 0 / 0.2);
   }
-  .save {
-    width: 100%;
-    text-align: left;
-    color: var(--selection);
+  .del {
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: 5px;
+  }
+  .del:hover {
+    background: var(--hover);
+  }
+  hr {
+    border: none;
     border-top: 1px solid var(--border);
-    margin-top: 4px;
+    margin: 4px 0;
+  }
+  .save {
+    color: var(--selection);
   }
   .empty {
     color: var(--text-muted);

@@ -8,6 +8,9 @@
   import type { ToolId } from "./tools";
   import Presets from "./Presets.svelte";
 
+  /** Breite, die die Leiste ohne Scrollen bräuchte (für die Kopfleiste). */
+  let { contentWidth = $bindable(0) }: { contentWidth?: number } = $props();
+
   /** Welche Art wird gerade bearbeitet – Auswahl oder Werkzeug? */
   const kind = $derived<string>(editor.selected?.kind.type ?? toolKind(editor.tool));
 
@@ -186,129 +189,134 @@
 </script>
 
 <div class="props">
-  <Presets />
-  {#if kind && !["image", "crop", "blur", "pixelate", "spotlight", "background"].includes(kind)}
-    <div class="group" role="radiogroup" aria-label={t("props.color")}>
-      {#each PALETTE as c (toHex(c))}
-        <button
-          class="swatch"
-          class:on={sameColor(c, currentColor)}
-          style:background={toCss(c)}
-          aria-label={toHex(c)}
-          onclick={() => setColor(c)}
-        ></button>
-      {/each}
-      <input
-        type="color"
-        value={toHex(currentColor)}
-        title={t("props.custom_color")}
-        onchange={(e) => setColor(fromHex(e.currentTarget.value, currentColor.a))}
-      />
-    </div>
-  {/if}
-
-  {#if hasStroke}
-    <label class="group">
-      {t("props.stroke")}
-      <input type="range" min="1" max="20" step="1" value={strokeWidth} oninput={(e) => setStrokeWidth(+e.currentTarget.value)} />
-      <span class="value">{Math.round(strokeWidth)}</span>
-    </label>
-  {/if}
-
-  {#if has("rectangle", "ellipse")}
-    <button class="toggle" class:on={filled} onclick={toggleFill}>{t("props.fill")}</button>
-  {/if}
-
-  {#if hasText}
-    <label class="group">
-      {t("props.font_size")}
-      <input type="number" min="6" max="200" value={Math.round(fontSize)} onchange={(e) => setFontSize(+e.currentTarget.value)} />
-    </label>
-    <button class="toggle" class:on={bold} onclick={toggleBold}><b>B</b></button>
-    {#if kind === "text"}
-      <button class="toggle" class:on={textBg} onclick={toggleTextBg}>{t("props.text_background")}</button>
+  <div class="inner" bind:clientWidth={contentWidth}>
+    <Presets />
+    {#if kind && !["image", "crop", "blur", "pixelate", "spotlight", "background"].includes(kind)}
+      <div class="group" role="radiogroup" aria-label={t("props.color")}>
+        {#each PALETTE as c (toHex(c))}
+          <button
+            class="swatch"
+            class:on={sameColor(c, currentColor)}
+            style:background={toCss(c)}
+            aria-label={toHex(c)}
+            onclick={() => setColor(c)}
+          ></button>
+        {/each}
+        <input
+          type="color"
+          value={toHex(currentColor)}
+          title={t("props.custom_color")}
+          onchange={(e) => setColor(fromHex(e.currentTarget.value, currentColor.a))}
+        />
+      </div>
     {/if}
-  {/if}
 
-  {#if has("blur", "pixelate", "spotlight")}
-    <label class="group">
-      {kind === "spotlight" ? t("props.dim") : t("props.strength")}
-      <input
-        type="range"
-        min={kind === "spotlight" ? 10 : 2}
-        max={kind === "spotlight" ? 90 : 40}
-        value={effectValue}
-        oninput={(e) => setEffect(+e.currentTarget.value)}
-      />
-    </label>
-  {/if}
-
-  {#if kind === "crop" || editor.tool === "crop"}
-    <span class="hint">{t("props.crop_hint")}</span>
-    <button class="toggle" onclick={resetCrop}>{t("props.crop_reset")}</button>
-    <button class="toggle" onclick={() => editor.fitArtboardToContent()}>{t("props.fit_content")}</button>
-  {/if}
-
-  {#if editor.tool === "background" && !sel}
-    <div class="group">
-      {#each BACKGROUNDS as f, i (i)}
-        <button class="swatch big" style:background={fillCss(f)} aria-label="Hintergrund {i + 1}" onclick={() => editor.applyBackground(f, padding)}></button>
-      {/each}
-    </div>
-    <label class="group">
-      {t("props.padding")}
-      <input type="range" min="8" max="160" bind:value={padding} />
-    </label>
-    <button class="toggle" onclick={() => editor.removeBackground()}>{t("props.background_remove")}</button>
-  {/if}
-
-  {#if imageLayer}
-    <label class="group">
-      {t("props.radius")}
-      <input type="range" min="0" max="40" value={imageLayer.corner_radius / ratio} oninput={(e) => setRadius(+e.currentTarget.value)} />
-    </label>
-    <button class="toggle" class:on={!!imageLayer.shadow} onclick={toggleShadow}>{t("props.shadow")}</button>
-  {/if}
-
-  {#if sel && !sel.locked}
-    <label class="group">
-      {t("props.opacity")}
-      <input type="range" min="10" max="100" value={Math.round(sel.opacity * 100)} oninput={(e) => setOpacity(+e.currentTarget.value)} />
-    </label>
-  {/if}
-
-  {#if rotatable}
-    <label class="group" title={multi ? t("props.rotate_by_hint") : undefined}>
-      {multi ? t("props.rotate_by") : t("props.rotation")}
-      <input type="number" step="1" min="-360" max="360" value={sel ? Math.round(sel.rotation) : 0} onchange={onRotation} />°
-    </label>
-    {#if sel && sel.rotation}
-      <button class="toggle" onclick={() => editor.setRotation(0)}>{t("props.rotation_reset")}</button>
+    {#if hasStroke}
+      <label class="group">
+        {t("props.stroke")}
+        <input type="range" min="1" max="20" step="1" value={strokeWidth} oninput={(e) => setStrokeWidth(+e.currentTarget.value)} />
+        <span class="value">{Math.round(strokeWidth)}</span>
+      </label>
     {/if}
-  {/if}
 
-  {#if editor.canGroup}
-    <button class="toggle" title="⌘G" onclick={() => editor.groupSelection()}>{t("props.group")}</button>
-  {/if}
-  {#if editor.canUngroup}
-    <button class="toggle" title="⇧⌘G" onclick={() => editor.ungroupSelection()}>{t("props.ungroup")}</button>
-  {/if}
+    {#if has("rectangle", "ellipse")}
+      <button class="toggle" class:on={filled} onclick={toggleFill}>{t("props.fill")}</button>
+    {/if}
 
-  {#if multi}
-    <span class="hint">{t("props.selected_count", { count: String(editor.selectedLayers.length) })}</span>
-  {:else if !kind && editor.tool !== "background"}
-    <span class="hint">{t("props.select_hint")}</span>
-  {/if}
+    {#if hasText}
+      <label class="group">
+        {t("props.font_size")}
+        <input type="number" min="6" max="200" value={Math.round(fontSize)} onchange={(e) => setFontSize(+e.currentTarget.value)} />
+      </label>
+      <button class="toggle" class:on={bold} onclick={toggleBold}><b>B</b></button>
+      {#if kind === "text"}
+        <button class="toggle" class:on={textBg} onclick={toggleTextBg}>{t("props.text_background")}</button>
+      {/if}
+    {/if}
+
+    {#if has("blur", "pixelate", "spotlight")}
+      <label class="group">
+        {kind === "spotlight" ? t("props.dim") : t("props.strength")}
+        <input
+          type="range"
+          min={kind === "spotlight" ? 10 : 2}
+          max={kind === "spotlight" ? 90 : 40}
+          value={effectValue}
+          oninput={(e) => setEffect(+e.currentTarget.value)}
+        />
+      </label>
+    {/if}
+
+    {#if kind === "crop" || editor.tool === "crop"}
+      <span class="hint">{t("props.crop_hint")}</span>
+      <button class="toggle" onclick={resetCrop}>{t("props.crop_reset")}</button>
+      <button class="toggle" onclick={() => editor.fitArtboardToContent()}>{t("props.fit_content")}</button>
+    {/if}
+
+    {#if editor.tool === "background" && !sel}
+      <div class="group">
+        {#each BACKGROUNDS as f, i (i)}
+          <button class="swatch big" style:background={fillCss(f)} aria-label="Hintergrund {i + 1}" onclick={() => editor.applyBackground(f, padding)}></button>
+        {/each}
+      </div>
+      <label class="group">
+        {t("props.padding")}
+        <input type="range" min="8" max="160" bind:value={padding} />
+      </label>
+      <button class="toggle" onclick={() => editor.removeBackground()}>{t("props.background_remove")}</button>
+    {/if}
+
+    {#if imageLayer}
+      <label class="group">
+        {t("props.radius")}
+        <input type="range" min="0" max="40" value={imageLayer.corner_radius / ratio} oninput={(e) => setRadius(+e.currentTarget.value)} />
+      </label>
+      <button class="toggle" class:on={!!imageLayer.shadow} onclick={toggleShadow}>{t("props.shadow")}</button>
+    {/if}
+
+    {#if sel && !sel.locked}
+      <label class="group">
+        {t("props.opacity")}
+        <input type="range" min="10" max="100" value={Math.round(sel.opacity * 100)} oninput={(e) => setOpacity(+e.currentTarget.value)} />
+      </label>
+    {/if}
+
+    {#if rotatable}
+      <label class="group" title={multi ? t("props.rotate_by_hint") : undefined}>
+        {multi ? t("props.rotate_by") : t("props.rotation")}
+        <input type="number" step="1" min="-360" max="360" value={sel ? Math.round(sel.rotation) : 0} onchange={onRotation} />°
+      </label>
+      {#if sel && sel.rotation}
+        <button class="toggle" onclick={() => editor.setRotation(0)}>{t("props.rotation_reset")}</button>
+      {/if}
+    {/if}
+
+    {#if editor.canGroup}
+      <button class="toggle" title="⌘G" onclick={() => editor.groupSelection()}>{t("props.group")}</button>
+    {/if}
+    {#if editor.canUngroup}
+      <button class="toggle" title="⇧⌘G" onclick={() => editor.ungroupSelection()}>{t("props.ungroup")}</button>
+    {/if}
+
+    {#if multi}
+      <span class="hint">{t("props.selected_count", { count: String(editor.selectedLayers.length) })}</span>
+    {:else if !kind && editor.tool !== "background"}
+      <span class="hint">{t("props.select_hint")}</span>
+    {/if}
+  </div>
 </div>
 
 <style>
   .props {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .inner {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    min-width: 0;
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    width: max-content;
   }
   .group {
     display: flex;
