@@ -9,12 +9,13 @@ import {
   type CaptureMode,
   type Diagnostics,
   type ExportFormat,
+  type GalleryQuery,
   type HotkeyInfo,
   type Settings,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo, Diagnostics, HotkeyInfo, Settings };
+export type { AssetInfo, CaptureInfo, Diagnostics, GalleryQuery, HotkeyInfo, Settings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -72,6 +73,8 @@ export const api = {
     isTauri ? unwrap(commands.revealCapture(id)) : Promise.resolve(null),
   startCapture: (mode: CaptureMode): Promise<void> =>
     isTauri ? commands.startCapture(mode) : Promise.resolve(),
+  queryCaptures: (query: GalleryQuery): Promise<CaptureInfo[]> =>
+    isTauri ? unwrap(commands.queryCaptures(query)) : mock.query(query),
   searchCaptures: (query: string): Promise<CaptureInfo[]> =>
     isTauri ? unwrap(commands.searchCaptures(query)) : mock.search(query),
   getSettings: (): Promise<Settings> =>
@@ -140,8 +143,9 @@ const mock = (() => {
       images.set(path, sample(i, w, h));
       captures.unshift({
         id,
-        createdAt: Date.now() - (sizes.length - i) * 60000,
-        mode: "region",
+        // Über mehrere Tage verteilt, damit die Galerie Tage gruppiert.
+        createdAt: Date.now() - (sizes.length - i) * 31 * 3_600_000,
+        mode: ["region", "window", "screen", "scroll"][i],
         width: w,
         height: h,
         scaleFactor: 2,
@@ -174,6 +178,20 @@ const mock = (() => {
       { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
       { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
     ] as HotkeyInfo[],
+    async query(q: GalleryQuery) {
+      ensure();
+      const text = q.text.trim().toLowerCase();
+      const hits = captures.filter(
+        (c) =>
+          (!text || c.id.includes(text) || "lorem fehler".includes(text)) &&
+          (q.fromMs == null || (c.createdAt ?? 0) >= q.fromMs) &&
+          (q.toMs == null || (c.createdAt ?? 0) < q.toMs) &&
+          (!q.mode || c.mode === q.mode) &&
+          (!q.starredOnly || c.starred),
+      );
+      hits.sort((a, b) => ((a.createdAt ?? 0) - (b.createdAt ?? 0)) * (q.oldestFirst ? 1 : -1));
+      return hits.slice(0, q.limit);
+    },
     async search(query: string) {
       ensure();
       return captures.filter((c) => !query || c.id.includes(query) || "lorem fehler".includes(query.toLowerCase()));

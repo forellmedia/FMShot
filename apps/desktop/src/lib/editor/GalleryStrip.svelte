@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { fileUrl, type CaptureInfo } from "$lib/api";
   import { t } from "$lib/i18n";
   import { editor } from "./state.svelte";
@@ -12,6 +13,21 @@
     for (const c of editor.captures) {
       fileUrl(c.thumbnailPath, version).then((u) => (urls[c.id] = u));
     }
+  });
+
+  // Geöffnete Aufnahme sichtbar halten (z. B. nach Wahl in der Galerie).
+  let strip: HTMLElement;
+  $effect(() => {
+    const id = editor.current?.id;
+    void editor.captures;
+    if (!id) return;
+    tick().then(() => {
+      const thumb = strip?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+      if (!thumb) return;
+      const box = strip.getBoundingClientRect();
+      const r = thumb.getBoundingClientRect();
+      if (r.left < box.left || r.right > box.right) thumb.scrollIntoView({ inline: "center", block: "nearest" });
+    });
   });
 
   function contextMenu(e: MouseEvent, capture: CaptureInfo) {
@@ -39,11 +55,12 @@
 
 <svelte:window onclick={() => (menu = null)} />
 
-<section class="strip" aria-label={t("gallery.title")}>
+<section class="strip" bind:this={strip} aria-label={t("gallery.title")}>
   <input class="search" type="search" placeholder={t("gallery.search")} value={editor.query} oninput={onSearch} />
   {#each editor.captures as c (c.id)}
     <button
       class="thumb"
+      data-id={c.id}
       class:current={editor.current?.id === c.id}
       title={time(c.createdAt)}
       onclick={() => editor.open(c.id)}

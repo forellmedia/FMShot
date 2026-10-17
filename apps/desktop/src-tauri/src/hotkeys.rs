@@ -1,7 +1,7 @@
 //! Registriert die globalen Tastenkürzel beim System.
 
 use fmshot_hotkeys::{Action, Platform};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::capture;
@@ -40,7 +40,10 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::CaptureWindow => capture::start(app, capture::Mode::Window),
         Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
         Action::CaptureText => capture::start(app, capture::Mode::Text),
-        Action::OpenGallery => show_main_window(app),
+        Action::OpenGallery => {
+            show_main_window(app);
+            let _ = app.emit("open-gallery", ());
+        }
         Action::CaptureScroll => capture::start(app, capture::Mode::scroll(app)),
     }
 }

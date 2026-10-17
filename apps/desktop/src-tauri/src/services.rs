@@ -9,10 +9,10 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use fmshot_core::RgbaImage;
-use fmshot_library::{CaptureRecord, Library};
+use fmshot_library::{CaptureQuery, CaptureRecord, Library};
 use fmshot_overlay::{PreviewAction, PreviewPlacement};
 use fmshot_settings::{AfterCapture, ImageFormat, PreviewPosition, export_file_name};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -402,6 +402,47 @@ pub fn get_diagnostics(app: AppHandle) -> Diagnostics {
             .cloned()
             .collect(),
     }
+}
+
+/// Filter der Galerie (siehe `fmshot_library::CaptureQuery`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryQuery {
+    pub text: String,
+    /// Unix-Millisekunden, inklusive.
+    pub from_ms: Option<f64>,
+    /// Unix-Millisekunden, exklusive.
+    pub to_ms: Option<f64>,
+    pub mode: Option<String>,
+    pub starred_only: bool,
+    pub oldest_first: bool,
+    pub limit: u32,
+}
+
+/// Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern.
+#[tauri::command]
+#[specta::specta]
+pub fn query_captures(
+    app: AppHandle,
+    query: GalleryQuery,
+) -> Result<Vec<crate::editor::CaptureInfo>, String> {
+    let q = CaptureQuery {
+        text: query.text,
+        from_ms: query.from_ms.map(|v| v as i64),
+        to_ms: query.to_ms.map(|v| v as i64),
+        mode: query.mode,
+        starred_only: query.starred_only,
+        oldest_first: query.oldest_first,
+        limit: query.limit,
+    };
+    Ok(app
+        .state::<CaptureState>()
+        .library
+        .query(&q)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .map(crate::editor::CaptureInfo::from)
+        .collect())
 }
 
 /// Volltextsuche über den erkannten Text.

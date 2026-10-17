@@ -127,6 +127,7 @@ export class Editor {
   query = $state("");
   settingsOpen = $state(false);
   /** Galerie im Vollbild offen. */
+  galleryOpen = $state(false);
   /** Kopierte Ebenen für ⌘V. */
   private layerClipboard: Layer[] = [];
   /** Zählt jede Änderung am Dokument – die Leinwand zeichnet dann neu. */
@@ -220,6 +221,7 @@ export class Editor {
       await this.open(id);
     });
     await on("open-settings", () => (this.settingsOpen = true));
+    await on("open-gallery", () => (this.galleryOpen = true));
   }
 
   async refreshCaptures() {

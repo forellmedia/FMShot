@@ -18,6 +18,11 @@ export function setLocale(locale: Locale) {
   current = locale;
 }
 
+/** Aktuelle Sprache (z. B. für Datumsformate). */
+export function locale(): Locale {
+  return current;
+}
+
 /** Text zum Schlüssel; `{name}` wird durch `params.name` ersetzt. */
 export function t(key: MessageKey, params: Record<string, string> = {}): string {
   const text = messages[current][key] ?? messages.en[key] ?? key;

@@ -82,18 +82,80 @@ pub(crate) fn set_ocr_text(conn: &Connection, id: &str, text: &str) -> rusqlite:
 }
 
 /// Volltextsuche; jedes Wort muss (als Wortanfang) vorkommen.
+/// Filter und Sortierung für die Galerie.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CaptureQuery {
+    /// Volltext über den erkannten Text; leer = alle.
+    pub text: String,
+    /// Ab diesem Zeitpunkt (inklusive, Unix-Millisekunden).
+    pub from_ms: Option<i64>,
+    /// Vor diesem Zeitpunkt (exklusive).
+    pub to_ms: Option<i64>,
+    /// Nur Aufnahmen dieser Art (`region`, `window`, `screen`, `scroll`).
+    pub mode: Option<String>,
+    pub starred_only: bool,
+    pub oldest_first: bool,
+    pub limit: u32,
+}
+
+/// Wörter für die Volltextsuche (Präfixsuche je Wort).
+fn fts_terms(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(|w| w.replace('"', ""))
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{w}\"*"))
+        .collect()
+}
+
+pub(crate) fn query(
+    conn: &Connection,
+    root: &Path,
+    q: &CaptureQuery,
+) -> rusqlite::Result<Vec<CaptureRecord>> {
+    let mut filters: Vec<&str> = Vec::new();
+    let mut args: Vec<rusqlite::types::Value> = Vec::new();
+    let terms = fts_terms(&q.text);
+    if !terms.is_empty() {
+        filters.push("id IN (SELECT id FROM captures_fts WHERE captures_fts MATCH ?)");
+        args.push(terms.join(" ").into());
+    }
+    if let Some(from) = q.from_ms {
+        filters.push("created_at >= ?");
+        args.push(from.into());
+    }
+    if let Some(to) = q.to_ms {
+        filters.push("created_at < ?");
+        args.push(to.into());
+    }
+    if let Some(mode) = &q.mode {
+        filters.push("mode = ?");
+        args.push(mode.clone().into());
+    }
+    if q.starred_only {
+        filters.push("starred = 1");
+    }
+    let filter = if filters.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", filters.join(" AND "))
+    };
+    let order = if q.oldest_first { "ASC" } else { "DESC" };
+    args.push(i64::from(q.limit.max(1)).into());
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM captures {filter} ORDER BY created_at {order}, id {order} LIMIT ?"
+    ))?;
+    stmt.query_map(rusqlite::params_from_iter(args), |r| row(root, r))?
+        .collect()
+}
+
 pub(crate) fn search(
     conn: &Connection,
     root: &Path,
     query: &str,
     limit: u32,
 ) -> rusqlite::Result<Vec<CaptureRecord>> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|w| w.replace('"', ""))
-        .filter(|w| !w.is_empty())
-        .map(|w| format!("\"{w}\"*"))
-        .collect();
+    let terms = fts_terms(query);
     if terms.is_empty() {
         return recent(conn, root, limit);
     }

@@ -53,6 +53,8 @@ export const commands = {
 	getDiagnostics: () => __TAURI_INVOKE<Diagnostics>("get_diagnostics"),
 	/**  Volltextsuche über den erkannten Text. */
 	searchCaptures: (query: string) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("search_captures", { query })),
+	/**  Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern. */
+	queryCaptures: (query: GalleryQuery) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("query_captures", { query })),
 	/**
 	 *  „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.
 	 *  Der Nutzer sieht alles und schickt es selbst ab – ohne Screenshots.
@@ -208,6 +210,19 @@ export type ExportFormat = "png" | "jpg";
 export type Fill = { type: "solid"; color: Color } | 
 /**  Linearer Verlauf; `angle` in Grad, 0 = von links nach rechts. */
 { type: "linear_gradient"; from: Color; to: Color; angle: number | null };
+
+/**  Filter der Galerie (siehe `fmshot_library::CaptureQuery`). */
+export type GalleryQuery = {
+	text: string,
+	/**  Unix-Millisekunden, inklusive. */
+	fromMs: number | null,
+	/**  Unix-Millisekunden, exklusive. */
+	toMs: number | null,
+	mode: string | null,
+	starredOnly: boolean,
+	oldestFirst: boolean,
+	limit: number,
+};
 
 /**  Ein Tastenkürzel für die Einstellungen. */
 export type HotkeyInfo = {

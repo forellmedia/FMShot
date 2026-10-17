@@ -4,6 +4,7 @@
   import { t } from "$lib/i18n";
   import Canvas from "./Canvas.svelte";
   import Dropdown from "./Dropdown.svelte";
+  import Gallery from "./Gallery.svelte";
   import { editor } from "./state.svelte";
   import GalleryStrip from "./GalleryStrip.svelte";
   import Icon from "./Icon.svelte";
@@ -26,7 +27,7 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (isTyping(e) || editor.settingsOpen) return;
+    if (isTyping(e) || editor.settingsOpen || editor.galleryOpen) return;
     const modKey = e.metaKey || e.ctrlKey;
     if (modKey && e.key === ",") {
       e.preventDefault();
@@ -110,6 +111,10 @@
 <div class="editor">
   <header class:two-rows={twoRows} bind:clientWidth={headerWidth}>
     <div class="capture" bind:clientWidth={captureWidth}>
+      <button title="{t('gallery.title')} (⌥⌘G)" aria-label={t("gallery.title")} onclick={() => (editor.galleryOpen = true)}>
+        <Icon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
+      </button>
+      <span class="sep"></span>
       <button title={t("capture.region")} onclick={() => api.startCapture("region")}>
         <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
       </button>
@@ -241,6 +246,10 @@
   </main>
 
   <GalleryStrip />
+
+  {#if editor.galleryOpen}
+    <Gallery />
+  {/if}
 
   {#if editor.settingsOpen}
     <Settings />

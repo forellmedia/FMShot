@@ -8,7 +8,7 @@ use fmshot_core::{Document, RgbaImage};
 use rusqlite::Connection;
 
 use crate::encode::{encode_png, encode_webp, thumbnail};
-use crate::index::{self, CaptureRecord};
+use crate::index::{self, CaptureQuery, CaptureRecord};
 use crate::{
     CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, month_dir, original_file,
     thumbnail_file,
@@ -166,6 +166,11 @@ impl Library {
     /// Erkannten Text für die Suche ablegen.
     pub fn set_ocr_text(&self, id: &str, text: &str) -> Result<()> {
         Ok(index::set_ocr_text(&self.lock(), id, text)?)
+    }
+
+    /// Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern filtern.
+    pub fn query(&self, q: &CaptureQuery) -> Result<Vec<CaptureRecord>> {
+        Ok(index::query(&self.lock(), &self.root, q)?)
     }
 
     /// Volltextsuche über den erkannten Text; leere Suche = neueste.
@@ -464,6 +469,65 @@ mod tests {
                 "20261016-200122-944-0_original.png",
                 "20261016-200122-944-0_thumb.webp",
             ]
+        );
+    }
+
+    #[test]
+    fn galerie_filtert_nach_zeitraum_stern_text_und_sortiert() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let tag = 86_400_000;
+        let t0 = 1_792_000_000_000;
+        let a = lib.save_capture(&capture(t0)).unwrap();
+        let b = lib.save_capture(&capture(t0 + tag)).unwrap();
+        let c = lib.save_capture(&capture(t0 + 2 * tag)).unwrap();
+        lib.set_starred(&b.id, true).unwrap();
+        lib.set_ocr_text(&c.id, "Rechnung März").unwrap();
+        let ids = |q: CaptureQuery| -> Vec<String> {
+            lib.query(&CaptureQuery { limit: 50, ..q })
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id.to_string())
+                .collect()
+        };
+        let id = |r: &CaptureRecord| r.id.to_string();
+
+        assert_eq!(ids(CaptureQuery::default()), vec![id(&c), id(&b), id(&a)]);
+        assert_eq!(
+            ids(CaptureQuery {
+                oldest_first: true,
+                ..Default::default()
+            }),
+            vec![id(&a), id(&b), id(&c)]
+        );
+        assert_eq!(
+            ids(CaptureQuery {
+                from_ms: Some(t0 + tag),
+                to_ms: Some(t0 + 2 * tag),
+                ..Default::default()
+            }),
+            vec![id(&b)]
+        );
+        assert_eq!(
+            ids(CaptureQuery {
+                starred_only: true,
+                ..Default::default()
+            }),
+            vec![id(&b)]
+        );
+        assert_eq!(
+            ids(CaptureQuery {
+                text: "rech".into(),
+                ..Default::default()
+            }),
+            vec![id(&c)]
+        );
+        assert!(
+            ids(CaptureQuery {
+                mode: Some("window".into()),
+                ..Default::default()
+            })
+            .is_empty()
         );
     }
 }

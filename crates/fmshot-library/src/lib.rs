@@ -22,7 +22,7 @@ mod store;
 use std::path::{Path, PathBuf};
 
 pub use encode::{encode_jpeg, encode_png, thumbnail};
-pub use index::CaptureRecord;
+pub use index::{CaptureQuery, CaptureRecord};
 pub use store::{Library, LibraryError, NewCapture};
 
 /// Längste Kante der Vorschaubilder in Pixeln.

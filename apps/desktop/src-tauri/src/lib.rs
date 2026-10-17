@@ -47,6 +47,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         settings::choose_folder,
         services::get_diagnostics,
         services::search_captures,
+        services::query_captures,
         services::report_bug,
         updater::check_for_update,
         updater::install_update,
