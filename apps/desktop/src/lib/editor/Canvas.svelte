@@ -40,6 +40,7 @@
     type Rect,
   } from "./model";
   import { measureText, render, renderer } from "./renderer";
+  import { LayerCache, type Surface } from "./layerCache";
   import { LAYER_MARKER } from "./clipboard";
   import { snap, type Guides } from "./snap";
 
@@ -73,8 +74,6 @@
     | { kind: "crop"; start: Point }
     | { kind: "marquee"; start: Point; add: boolean };
   let drag: Drag | null = null;
-  /** Index der aktiven Ebene beim Ziehen (Zwischenspeicher gültig). */
-  let session: { index: number; fast: boolean } | null = null;
   let frame = 0;
   let editBefore = "";
 
@@ -140,31 +139,29 @@
     canvas.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  function fullRender() {
-    draw(baseCanvas, 0, -1, true);
-    clear(activeCanvas);
-    clear(aboveCanvas);
-  }
+  const surfaces = (): Record<Surface, HTMLCanvasElement> => ({
+    base: baseCanvas,
+    active: activeCanvas,
+    above: aboveCanvas,
+  });
+  const cache = new LayerCache({
+    draw: (s, from, to, background) => draw(surfaces()[s], from, to, background),
+    clear: (s) => clear(surfaces()[s]),
+  });
 
   /** Beginn einer Zieh-Aktion an Ebene `index`: Zwischenspeicher füllen. */
   function beginSession(index: number) {
     if (!wasm || !editor.doc) return;
-    const fast = !wasm.hasEffectAbove(JSON.stringify(editor.doc), index);
-    session = { index, fast };
-    if (fast) {
-      draw(baseCanvas, 0, index, true);
-      draw(aboveCanvas, index + 1, -1, false);
-      draw(activeCanvas, index, index + 1, false);
-    }
+    cache.begin(index, !wasm.hasEffectAbove(JSON.stringify(editor.doc), index));
   }
 
   /** Zieh-Aktion über mehrere Ebenen: jedes Mal alles neu zeichnen. */
   function beginSlowSession() {
-    session = { index: -1, fast: false };
+    cache.beginSlow();
   }
 
   function endSession() {
-    session = null;
+    cache.end();
     scheduleRender();
   }
 
@@ -172,20 +169,30 @@
     if (frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
-      if (session?.fast) draw(activeCanvas, session.index, session.index + 1, false);
-      else fullRender();
+      cache.render();
     });
   }
 
-  // Neu zeichnen, wenn sich Dokument oder Ansicht ändern.
+  /** Sofort zeichnen (z. B. nach neuer Grösse, sonst bleibt ein Bild lang leer). */
+  function renderNow() {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    cache.render();
+  }
+
+  // Neu zeichnen, wenn sich das Dokument ändert.
   $effect(() => {
     void editor.revision;
+    void editor.editingTextId;
+    scheduleRender();
+  });
+
+  // Andere Ansicht: auch die zwischengespeicherten Flächen neu zeichnen.
+  $effect(() => {
     void editor.zoom;
     void editor.panX;
     void editor.panY;
-    void editor.editingTextId;
-    void width;
-    void height;
+    cache.invalidate();
     scheduleRender();
   });
 
@@ -224,13 +231,16 @@
       const first = width === 800 && height === 600;
       width = container.clientWidth;
       height = container.clientHeight;
+      // Neue Grösse leert jede Canvas – auch mitten in einer Zieh-Aktion, etwa
+      // wenn die Eigenschaftsleiste für die neue Ebene breiter wird.
       for (const c of [baseCanvas, activeCanvas, aboveCanvas]) {
         c.width = Math.round(width * dpr);
         c.height = Math.round(height * dpr);
       }
+      cache.invalidate();
       editor.viewport = { width, height };
       if (first) editor.fit();
-      scheduleRender();
+      renderNow();
     });
     ro.observe(container);
     return () => ro.disconnect();
