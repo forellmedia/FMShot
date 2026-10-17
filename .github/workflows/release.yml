@@ -14,8 +14,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Den Entwurf einmal vorab anlegen. Sonst legen die parallelen Build-Jobs
+  # gleichzeitig je einen eigenen Entwurf an, und latest.json ist auf beide
+  # verteilt (so geschehen bei v0.1.0).
+  draft:
+    name: Release-Entwurf anlegen
+    runs-on: ubuntu-latest
+    outputs:
+      release-id: ${{ steps.create.outputs.id }}
+    steps:
+      - id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -n1)
+          if [ -z "$id" ]; then
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="FMShot $TAG" -F draft=true \
+              -f body="Siehe CHANGELOG. Mac-Hinweis – beim ersten Start unter Systemeinstellungen → Datenschutz & Sicherheit auf „Dennoch öffnen“ klicken." \
+              --jq .id)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -77,11 +101,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: FMShot ${{ github.ref_name }}
-          releaseBody: Siehe CHANGELOG. Mac-Hinweis – beim ersten Start unter Systemeinstellungen → Datenschutz & Sicherheit auf „Dennoch öffnen“ klicken.
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.draft.outputs.release-id }}
           # latest.json für den Updater an das Release hängen.
           includeUpdaterJson: true
           args: ${{ matrix.args }}
