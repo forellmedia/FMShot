@@ -26,6 +26,12 @@ ignore = [
   { id = "RUSTSEC-2026-0367", reason = "zip über Updater, nur signierte eigene Archive" },
   { id = "RUSTSEC-2026-0368", reason = "zip über Updater, nur signierte eigene Archive" },
   { id = "RUSTSEC-2026-0369", reason = "zip über Updater, nur signierte eigene Archive" },
+  # Nur „unmaintained“: zbus_names, zvariant und zvariant_derive kommen über
+  # zbus aus tauri-plugin-opener und -single-instance (nur Linux, D-Bus).
+  # Entfernen, sobald die Plugins die Nachfolger verwenden.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant über zbus aus Tauri-Plugins" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names über zbus aus Tauri-Plugins" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive über zbus aus Tauri-Plugins" },
 ]
 
 [licenses]

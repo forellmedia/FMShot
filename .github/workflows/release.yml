@@ -68,12 +68,15 @@ jobs:
             os: macos-latest
             rust-targets: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+            models: true
           - name: Windows x64
             os: windows-latest
             args: ""
+            models: true
           - name: Windows ARM64
             os: windows-11-arm
             args: ""
+            models: true
           # Ubuntu 22.04 als Basis, damit das AppImage auch auf älteren
           # Distributionen läuft (glibc).
           - name: Linux x86_64
@@ -104,7 +107,9 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # Linux vorerst ohne Bildinhalt-Erkennung (ADR 0010), also ohne Modell.
       - uses: actions/download-artifact@v4
+        if: matrix.models
         with:
           name: siglip2
           path: models/siglip2
@@ -129,4 +134,4 @@ jobs:
           releaseId: ${{ needs.draft.outputs.release-id }}
           # latest.json für den Updater an das Release hängen.
           includeUpdaterJson: true
-          args: ${{ matrix.args }} --config src-tauri/tauri.models.conf.json
+          args: ${{ matrix.args }} ${{ matrix.models && '--config src-tauri/tauri.models.conf.json' || '' }}

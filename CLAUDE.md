@@ -58,7 +58,7 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 ```bash
 cargo test --workspace                 # alle Rust-Tests
 ./scripts/fetch-model.sh               # Bildmodell nach models/ (ADR 0010, braucht uv)
-cargo test -p fmshot-vision --release -- --ignored  # Bildinhalt mit echtem Modell
+cargo test -p fmshot-vision --release --features onnx -- --ignored  # Bildinhalt mit echtem Modell
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                       # Lizenzen/Advisories
 cargo test -p fmshot-desktop           # erzeugt apps/desktop/src/lib/bindings.ts

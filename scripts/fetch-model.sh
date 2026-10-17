@@ -17,10 +17,12 @@ SOURCES=(
   "onnx/text_model.onnx baf12d941beabafafb14f7b4adb38dc15be18681b964a84410ec53d9d65e6293"
   "tokenizer.json cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322"
 )
-# Ergebnis der Umwandlung (deterministisch), SHA-256
+# Ergebnis der Umwandlung, SHA-256. Je Prozessor reproduzierbar, aber
+# ONNX Runtime rundet beim Quantisieren auf ARM (Mac) und x86 (Linux, CI)
+# minimal anders – darum zwei zulässige Werte (Mac,Linux).
 RESULTS=(
-  "vision.onnx 95f1226c95ffe5a244b07b41105792e619b859fd9a1fc13f439ad7488e295e25"
-  "text.onnx 75a9cc417690972fb431562509887cc24a78b5eb9da3da6a5495a62d7fecf906"
+  "vision.onnx 95f1226c95ffe5a244b07b41105792e619b859fd9a1fc13f439ad7488e295e25,4f7501ddee6e67e3095c93ec6c79142e670a2ba46f637cc50e3bfe3b89e14464"
+  "text.onnx 75a9cc417690972fb431562509887cc24a78b5eb9da3da6a5495a62d7fecf906,3163390cdbb2a6553464e227f1039f10d7738a99e7f8005b241b6b42ba768c6e"
   "tokenizer.json cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322"
 )
 
@@ -30,8 +32,8 @@ sha() {
 
 ready() {
   for entry in "${RESULTS[@]}"; do
-    read -r name sum <<<"$entry"
-    [[ -f "$OUT/$name" && "$(sha "$OUT/$name")" == "$sum" ]] || return 1
+    read -r name sums <<<"$entry"
+    [[ -f "$OUT/$name" && ",$sums," == *",$(sha "$OUT/$name"),"* ]] || return 1
   done
 }
 

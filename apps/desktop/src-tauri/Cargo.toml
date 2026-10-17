@@ -47,3 +47,7 @@ serde_json.workspace = true
 specta.workspace = true
 specta-typescript = "0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+
+# Bildinhalt-Erkennung mit ONNX Runtime – unter Linux vorerst aus (ADR 0010).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+fmshot-vision = { workspace = true, features = ["onnx"] }

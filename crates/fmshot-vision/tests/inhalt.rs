@@ -1,6 +1,7 @@
 //! Bildinhalt mit dem echten Modell. Braucht `scripts/fetch-model.sh`, darum
-//! nur auf Abruf: `cargo test -p fmshot-vision -- --ignored`.
+//! nur auf Abruf: `cargo test -p fmshot-vision --features onnx -- --ignored`.
 //! Modellordner: `FMSHOT_MODEL_DIR`, sonst `models/siglip2` im Workspace.
+#![cfg(feature = "onnx")]
 
 use std::path::PathBuf;
 use std::time::Instant;

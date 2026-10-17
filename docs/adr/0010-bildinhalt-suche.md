@@ -97,6 +97,12 @@ und Linux fehlt etwas Vergleichbares. Darum braucht es ein eigenes Modell, das
 - Die Modelldateien sind keine Rust-Crates und fallen nicht unter
   `cargo deny`. Ihre Lizenz (Apache-2.0, auch der Tokenizer aus Gemma laut
   Modellkarte) gehört in die Drittanbieter-Hinweise der App.
+- **Linux vorerst ohne Bildinhalt:** Die fertige ONNX Runtime von `ort`
+  braucht glibc ≥ 2.38 und eine neuere libstdc++ als Ubuntu 22.04, auf dem
+  wir für das AppImage bauen. Darum ist die Ausführung ein Feature `onnx`
+  (an für macOS und Windows). Unter Linux meldet die Crate „nicht
+  verfügbar“, und das Paket enthält kein Modell. Später: ONNX Runtime unter
+  Linux zur Laufzeit laden (`load-dynamic`) und die `.so` mitliefern.
 - Fürs Bauen braucht es `uv` und einmalig rund 1,5 GB Download für die
   Originale. Die liegen danach im Cache `models/.cache/`.
 - Später möglich: das Textmodell auf Deutsch und Englisch kürzen. Der
