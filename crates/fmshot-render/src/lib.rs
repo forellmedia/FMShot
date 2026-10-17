@@ -166,7 +166,8 @@ impl Renderer {
         assets: &dyn AssetSource,
     ) -> Result<(), RenderError> {
         let b = layer.kind.bounds();
-        let t = if layer.rotation != 0.0 {
+        // Effekte wirken auf ein achsparalleles Rechteck und drehen nicht mit.
+        let t = if layer.rotation != 0.0 && !layer.kind.is_effect() {
             base.pre_concat(Transform::from_rotate_at(
                 layer.rotation,
                 b.x + b.width / 2.0,
@@ -221,7 +222,7 @@ impl Renderer {
                 style,
             } => self
                 .text
-                .draw_box(pixmap, *bounds, text, style, None, opacity, base, scale),
+                .draw_box(pixmap, *bounds, text, style, None, opacity, t, scale),
             LayerKind::Callout {
                 bounds,
                 tail,
@@ -238,7 +239,7 @@ impl Renderer {
                     (bounds.height - 2.0 * pad).max(1.0),
                 );
                 self.text
-                    .draw_box(pixmap, inner, text, style, None, opacity, base, scale);
+                    .draw_box(pixmap, inner, text, style, None, opacity, t, scale);
             }
             LayerKind::Step {
                 center,
@@ -260,7 +261,7 @@ impl Renderer {
                     &number.to_string(),
                     &style,
                     opacity,
-                    base,
+                    t,
                     scale,
                 );
             }

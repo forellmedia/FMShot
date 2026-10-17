@@ -7,7 +7,6 @@
   import GalleryStrip from "./GalleryStrip.svelte";
   import Icon from "./Icon.svelte";
   import LayersPanel from "./LayersPanel.svelte";
-  import { translate } from "./model";
   import { LAYER_MARKER } from "./clipboard";
   import PropertiesBar from "./PropertiesBar.svelte";
   import Settings from "./Settings.svelte";
@@ -46,6 +45,8 @@
           else editor.copy();
         },
         d: () => editor.duplicate(),
+        a: () => editor.selectAll(),
+        g: () => (e.shiftKey ? editor.ungroupSelection() : editor.groupSelection()),
         s: () => editor.exportAs(e.shiftKey ? "jpg" : "png"),
         "0": () => editor.fit(),
         "1": () => editor.actualSize(),
@@ -66,7 +67,7 @@
       return;
     }
     if (key === "escape") {
-      editor.selectedId = null;
+      editor.selectedIds = [];
       return;
     }
     const arrows: Record<string, [number, number]> = {
@@ -75,12 +76,11 @@
       arrowup: [0, -1],
       arrowdown: [0, 1],
     };
-    const sel = editor.selected;
-    if (arrows[key] && sel && !sel.locked) {
+    if (arrows[key] && editor.editableSelection.length) {
       e.preventDefault();
       const step = (e.shiftKey ? 10 : 1) * editor.ratio;
       const [dx, dy] = arrows[key];
-      editor.updateLayer(sel.id, (l) => (l.kind = translate(l.kind, dx * step, dy * step)));
+      editor.nudgeSelection(dx * step, dy * step);
       return;
     }
     const tool = toolByKey(key);

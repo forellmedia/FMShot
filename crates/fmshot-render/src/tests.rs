@@ -200,6 +200,37 @@ fn emoji_werden_farbig_gezeichnet() {
 }
 
 #[test]
+fn gedrehter_text_steht_senkrecht() {
+    let mut r = Renderer::new();
+    let mut doc = Document::from_capture(200, 200);
+    let id = doc.push_layer(LayerKind::Text {
+        bounds: Rect::new(20.0, 85.0, 160.0, 30.0),
+        text: "MMMMMMMM".into(),
+        style: TextStyle {
+            size: 24.0,
+            color: Color::WHITE,
+            bold: true,
+            background: None,
+        },
+    });
+    let ink = |img: &RgbaImage, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+        xs.flat_map(|x| ys.clone().map(move |y| (x, y)))
+            .filter(|&(x, y)| img.pixel(x, y) != Some(BLUE))
+            .count()
+    };
+    let flat = r.render(&doc, &assets(200, 200)).unwrap();
+    // Ungedreht: Tinte links und rechts, nicht oben.
+    assert!(ink(&flat, 20..60, 85..115) > 50);
+    assert_eq!(ink(&flat, 85..115, 0..60), 0);
+
+    doc.layers.iter_mut().find(|l| l.id == id).unwrap().rotation = 90.0;
+    let turned = r.render(&doc, &assets(200, 200)).unwrap();
+    // Um 90° gedreht: Tinte oben in der Mitte, links nicht mehr.
+    assert!(ink(&turned, 85..115, 20..60) > 50);
+    assert_eq!(ink(&turned, 0..60, 85..115), 0);
+}
+
+#[test]
 fn verpixeln_macht_bloecke_einfarbig() {
     let mut doc = Document::from_capture(16, 16);
     doc.push_layer(LayerKind::Pixelate {

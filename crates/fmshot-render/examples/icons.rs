@@ -102,6 +102,7 @@ fn layer(doc: &Document, kind: LayerKind) -> fmshot_core::Layer {
         locked: false,
         opacity: 1.0,
         rotation: 0.0,
+        group: None,
         kind,
     }
 }

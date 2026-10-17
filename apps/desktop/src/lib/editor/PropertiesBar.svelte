@@ -4,7 +4,7 @@
 
   import { t } from "$lib/i18n";
   import { editor } from "./state.svelte";
-  import { fromHex, PALETTE, rgb, sameColor, toCss, toHex, type Color, type Fill, type LayerKind } from "./model";
+  import { canRotate, fromHex, PALETTE, rgb, sameColor, toCss, toHex, type Color, type Fill, type LayerKind } from "./model";
   import type { ToolId } from "./tools";
   import Presets from "./Presets.svelte";
 
@@ -127,6 +127,16 @@
       if (k.type === "spotlight") return { ...k, dim: v / 100 };
       return k;
     });
+  }
+
+  /** Drehung: eine Ebene absolut, mehrere gemeinsam um die eingegebene Gradzahl. */
+  const multi = $derived(!sel && editor.editableSelection.length > 1);
+  const rotatable = $derived(sel ? !sel.locked && canRotate(sel.kind) : multi);
+
+  function onRotation(e: Event & { currentTarget: HTMLInputElement }) {
+    const v = +e.currentTarget.value;
+    if (Number.isFinite(v)) editor.setRotation(v);
+    if (multi) e.currentTarget.value = "0";
   }
 
   function setOpacity(v: number) {
@@ -267,7 +277,26 @@
     </label>
   {/if}
 
-  {#if !kind && editor.tool !== "background"}
+  {#if rotatable}
+    <label class="group" title={multi ? t("props.rotate_by_hint") : undefined}>
+      {multi ? t("props.rotate_by") : t("props.rotation")}
+      <input type="number" step="1" min="-360" max="360" value={sel ? Math.round(sel.rotation) : 0} onchange={onRotation} />°
+    </label>
+    {#if sel && sel.rotation}
+      <button class="toggle" onclick={() => editor.setRotation(0)}>{t("props.rotation_reset")}</button>
+    {/if}
+  {/if}
+
+  {#if editor.canGroup}
+    <button class="toggle" title="⌘G" onclick={() => editor.groupSelection()}>{t("props.group")}</button>
+  {/if}
+  {#if editor.canUngroup}
+    <button class="toggle" title="⇧⌘G" onclick={() => editor.ungroupSelection()}>{t("props.ungroup")}</button>
+  {/if}
+
+  {#if multi}
+    <span class="hint">{t("props.selected_count", { count: String(editor.selectedLayers.length) })}</span>
+  {:else if !kind && editor.tool !== "background"}
     <span class="hint">{t("props.select_hint")}</span>
   {/if}
 </div>

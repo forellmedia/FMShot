@@ -4,12 +4,22 @@
 import { api, on, type AssetInfo, type CaptureInfo, type OcrBlock } from "$lib/api";
 import { t } from "$lib/i18n";
 import {
-  bounds,
+  center,
   clone,
+  groupIds,
+  groupLayers,
+  moveBlock,
   newLayer,
+  nextGroupId,
+  normalizeAngle,
+  normalizeGroups,
   rgb,
+  rotateAround,
+  canRotate,
   translate,
+  ungroupLayers,
   union,
+  visualBounds,
   type Color,
   type Doc,
   type Fill,
@@ -44,7 +54,8 @@ export class Editor {
   captures = $state<CaptureInfo[]>([]);
   current = $state<CaptureInfo | null>(null);
   doc = $state<Doc | null>(null);
-  selectedId = $state<number | null>(null);
+  /** Ausgewählte Ebenen (bei einer Gruppe alle Mitglieder). */
+  selectedIds = $state<number[]>([]);
   editingTextId = $state<number | null>(null);
   tool = $state<ToolId>("arrow");
   style = $state<Style>({
@@ -92,8 +103,67 @@ export class Editor {
     return this.doc?.pixel_ratio ?? 1;
   }
 
+  /** Die eine ausgewählte Ebene – null bei keiner oder mehreren. */
+  get selectedId(): number | null {
+    return this.selectedIds.length === 1 ? this.selectedIds[0] : null;
+  }
+
+  /** Genau diese Ebene auswählen (ohne ihre Gruppe), `null` = nichts. */
+  set selectedId(id: number | null) {
+    this.selectedIds = id == null ? [] : [id];
+  }
+
   get selected(): Layer | null {
-    return this.doc?.layers.find((l) => l.id === this.selectedId) ?? null;
+    const id = this.selectedId;
+    return id == null ? null : (this.doc?.layers.find((l) => l.id === id) ?? null);
+  }
+
+  /** Alle ausgewählten Ebenen in Zeichenreihenfolge. */
+  get selectedLayers(): Layer[] {
+    const set = new Set(this.selectedIds);
+    return this.doc?.layers.filter((l) => set.has(l.id)) ?? [];
+  }
+
+  /** Ausgewählte Ebenen, die verändert werden dürfen. */
+  get editableSelection(): Layer[] {
+    return this.selectedLayers.filter((l) => !l.locked);
+  }
+
+  /** Ist die Auswahl genau eine ganze Gruppe? */
+  get selectedGroup(): number | null {
+    const layers = this.selectedLayers;
+    const g = layers[0]?.group;
+    if (layers.length < 2 || g == null || layers.some((l) => l.group !== g)) return null;
+    return this.doc!.layers.filter((l) => l.group === g).length === layers.length ? g : null;
+  }
+
+  get canGroup(): boolean {
+    return this.editableSelection.length >= 2 && this.selectedGroup == null;
+  }
+
+  get canUngroup(): boolean {
+    return this.selectedLayers.some((l) => l.group != null);
+  }
+
+  /**
+   * Ebene auswählen. Gruppen werden als Ganzes gewählt, ausser `single`.
+   * `add` = zur Auswahl hinzufügen bzw. wieder entfernen (Umschalttaste).
+   */
+  select(id: number, opts: { add?: boolean; single?: boolean } = {}) {
+    if (!this.doc) return;
+    const ids = opts.single ? [id] : groupIds(this.doc, id);
+    if (!opts.add) {
+      this.selectedIds = ids;
+      return;
+    }
+    const has = this.selectedIds.includes(id);
+    this.selectedIds = has
+      ? this.selectedIds.filter((x) => !ids.includes(x))
+      : [...this.selectedIds, ...ids.filter((x) => !this.selectedIds.includes(x))];
+  }
+
+  selectAll() {
+    this.selectedIds = this.doc?.layers.filter((l) => l.visible && !l.locked).map((l) => l.id) ?? [];
   }
 
   // --- Laden ----------------------------------------------------------------
@@ -126,7 +196,7 @@ export class Editor {
       const [info, doc] = await Promise.all([api.getCapture(id), api.loadDocument(id)]);
       this.current = info;
       this.doc = doc;
-      this.selectedId = null;
+      this.selectedIds = [];
       this.editingTextId = null;
       this.ocrBlocks = null;
       this.undoStack = [];
@@ -227,7 +297,8 @@ export class Editor {
   }
 
   private afterHistoryJump() {
-    if (this.selectedId && !this.selected) this.selectedId = null;
+    const ids = new Set(this.doc?.layers.map((l) => l.id));
+    this.selectedIds = this.selectedIds.filter((id) => ids.has(id));
     this.editingTextId = null;
     this.changed();
   }
@@ -254,20 +325,92 @@ export class Editor {
   }
 
   deleteSelected() {
-    const sel = this.selected;
-    if (!sel || sel.locked) return;
-    this.commit((d) => (d.layers = d.layers.filter((l) => l.id !== sel.id)));
-    this.selectedId = null;
+    const ids = new Set(this.editableSelection.map((l) => l.id));
+    if (!ids.size) return;
+    this.commit((d) => {
+      d.layers = d.layers.filter((l) => !ids.has(l.id));
+      normalizeGroups(d);
+    });
+    this.selectedIds = [];
   }
 
-  /** Ebene in der Reihenfolge verschieben (+1 = nach oben). */
-  moveLayer(id: number, delta: number) {
+  /**
+   * Ebene in der Reihenfolge verschieben (+1 = nach oben). Innerhalb einer
+   * Gruppe bleibt sie in der Gruppe; eine einzelne Ebene springt über
+   * Nachbargruppen hinweg.
+   */
+  moveLayer(id: number, delta: 1 | -1) {
     this.commit((d) => {
       const i = d.layers.findIndex((l) => l.id === id);
-      const j = Math.max(0, Math.min(d.layers.length - 1, i + delta));
-      if (i < 0 || i === j) return;
-      const [l] = d.layers.splice(i, 1);
-      d.layers.splice(j, 0, l);
+      if (i < 0) return;
+      const g = d.layers[i].group;
+      if (g == null) {
+        moveBlock(d, [id], delta);
+        return;
+      }
+      const j = i + delta;
+      if (d.layers[j]?.group !== g) return;
+      [d.layers[i], d.layers[j]] = [d.layers[j], d.layers[i]];
+    });
+  }
+
+  /** Ganze Gruppe in der Reihenfolge verschieben. */
+  moveGroup(group: number, delta: 1 | -1) {
+    this.commit((d) => moveBlock(d, d.layers.filter((l) => l.group === group).map((l) => l.id), delta));
+  }
+
+  // --- Gruppen, Drehen, Verschieben ------------------------------------------------
+
+  /** ⌘G: Auswahl zu einer Gruppe zusammenfassen. */
+  groupSelection() {
+    if (!this.canGroup) return;
+    const ids = this.editableSelection.map((l) => l.id);
+    this.commit((d) => groupLayers(d, ids));
+    if (this.doc) this.selectedIds = groupIds(this.doc, ids[0]);
+  }
+
+  /** ⇧⌘G: Gruppe der Auswahl auflösen (Ebenen bleiben ausgewählt). */
+  ungroupSelection() {
+    if (!this.canUngroup) return;
+    const ids = this.selectedLayers.map((l) => l.id);
+    this.commit((d) => ungroupLayers(d, ids));
+  }
+
+  /** Auswahl verschieben (Pfeiltasten). */
+  nudgeSelection(dx: number, dy: number) {
+    const ids = new Set(this.editableSelection.map((l) => l.id));
+    if (!ids.size) return;
+    this.commit((d) => {
+      for (const l of d.layers) if (ids.has(l.id)) l.kind = translate(l.kind, dx, dy);
+    });
+  }
+
+  /** Umschliessendes Rechteck der Auswahl (nach Drehung). */
+  selectionBounds(layers = this.selectedLayers): Rect | null {
+    return layers.length ? layers.map(visualBounds).reduce(union) : null;
+  }
+
+  /**
+   * Drehung setzen: eine Ebene auf `deg` Grad; mehrere Ebenen bzw. eine
+   * Gruppe werden gemeinsam um `deg` weitergedreht (um ihre Mitte).
+   */
+  setRotation(deg: number) {
+    const sel = this.selected;
+    if (sel) {
+      if (!sel.locked && canRotate(sel.kind)) this.updateLayer(sel.id, (l) => (l.rotation = normalizeAngle(deg)));
+      return;
+    }
+    this.rotateSelectionBy(deg);
+  }
+
+  rotateSelectionBy(deg: number) {
+    const layers = this.editableSelection;
+    const box = this.selectionBounds(layers);
+    if (!box || !deg) return;
+    const c = center(box);
+    const ids = new Set(layers.map((l) => l.id));
+    this.commit((d) => {
+      d.layers = d.layers.map((l) => (ids.has(l.id) ? rotateAround(l, deg, c) : l));
     });
   }
 
@@ -386,7 +529,7 @@ export class Editor {
   applyBackground(fill: Fill, paddingPt = 48) {
     this.commit((d) => {
       const pad = paddingPt * d.pixel_ratio;
-      const content = d.layers.filter((l) => l.visible).map((l) => bounds(l.kind)).reduce(union);
+      const content = d.layers.filter((l) => l.visible).map(visualBounds).reduce(union);
       d.artboard.rect = {
         x: content.x - pad,
         y: content.y - pad,
@@ -418,35 +561,42 @@ export class Editor {
   fitArtboardToContent() {
     this.commit((d) => {
       const visible = d.layers.filter((l) => l.visible);
-      if (visible.length) d.artboard.rect = visible.map((l) => bounds(l.kind)).reduce(union);
+      if (visible.length) d.artboard.rect = visible.map(visualBounds).reduce(union);
     });
   }
 
   // --- Ebenen kopieren -------------------------------------------------------
 
   copyLayer(): boolean {
-    const sel = this.selected;
-    if (!sel || sel.locked) return false;
-    this.layerClipboard = [clone($state.snapshot(sel) as Layer)];
+    const layers = this.editableSelection;
+    if (!layers.length) return false;
+    this.layerClipboard = layers.map((l) => clone($state.snapshot(l) as Layer));
     return true;
   }
 
-  /** Kopierte Ebene leicht versetzt einfügen. */
+  /** Kopierte Ebenen leicht versetzt einfügen (Gruppen bleiben Gruppen). */
   pasteLayer(): boolean {
     if (!this.doc || !this.layerClipboard.length) return false;
     const offset = 12 * this.ratio;
-    let lastId = 0;
+    const ids: number[] = [];
     this.commit((d) => {
+      const groups = new Map<number, number>();
       for (const l of this.layerClipboard) {
         const copy = newLayer(d, translate(clone(l.kind), offset, offset));
         copy.opacity = l.opacity;
+        copy.rotation = l.rotation;
+        if (l.group != null) {
+          if (!groups.has(l.group)) groups.set(l.group, nextGroupId(d));
+          copy.group = groups.get(l.group);
+        }
         d.layers.push(copy);
-        lastId = copy.id;
+        ids.push(copy.id);
       }
+      normalizeGroups(d);
     });
     // Nächstes Einfügen wieder ein Stück weiter.
     this.layerClipboard = this.layerClipboard.map((l) => ({ ...l, kind: translate(l.kind, offset, offset) }));
-    this.selectedId = lastId;
+    this.selectedIds = ids;
     return true;
   }
 

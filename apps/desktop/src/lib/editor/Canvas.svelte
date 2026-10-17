@@ -10,15 +10,27 @@
   import { editor } from "./state.svelte";
   import {
     bounds,
+    canRotate,
+    center,
     clone,
+    groupIds,
     hasBoxHandles,
     hitTest,
+    intersects,
+    keepInPlace,
     newLayer,
     nextStepNumber,
+    normalizeAngle,
+    pivot,
     rectFromPoints,
+    rotateAround,
+    rotatePoint,
+    rotationOf,
     textPadding,
     toCss,
     translate,
+    union,
+    visualBounds,
     withBounds,
     LINE_HEIGHT,
     type Doc,
@@ -47,14 +59,19 @@
   /** Hilfslinien beim Einrasten (Dokument-Koordinaten). */
   let guides = $state<Guides | null>(null);
 
+  /** Rahmen beim Aufziehen einer Auswahl (Dokument-Koordinaten). */
+  let marquee = $state<Rect | null>(null);
+
   /** Laufende Zieh-Aktion. */
   type Drag =
     | { kind: "create"; id: number; start: Point; before: string }
-    | { kind: "move"; id: number; start: Point; orig: LayerKind; before: string }
-    | { kind: "handle"; id: number; handle: string; orig: LayerKind; before: string }
+    | { kind: "move"; origs: Layer[]; start: Point; box: Rect; before: string }
+    | { kind: "handle"; id: number; handle: string; orig: LayerKind; rotation: number; before: string }
+    | { kind: "rotate"; origs: Layer[]; center: Point; startAngle: number; before: string }
     | { kind: "pen"; id: number; before: string }
     | { kind: "pan"; start: Point; panX: number; panY: number }
-    | { kind: "crop"; start: Point };
+    | { kind: "crop"; start: Point }
+    | { kind: "marquee"; start: Point; add: boolean };
   let drag: Drag | null = null;
   /** Index der aktiven Ebene beim Ziehen (Zwischenspeicher gültig). */
   let session: { index: number; fast: boolean } | null = null;
@@ -139,6 +156,11 @@
       draw(aboveCanvas, index + 1, -1, false);
       draw(activeCanvas, index, index + 1, false);
     }
+  }
+
+  /** Zieh-Aktion über mehrere Ebenen: jedes Mal alles neu zeichnen. */
+  function beginSlowSession() {
+    session = { index: -1, fast: false };
   }
 
   function endSession() {
@@ -228,6 +250,10 @@
 
   type Handle = { name: string; x: number; y: number };
 
+  /** Abstand des Drehgriffs über der Auswahl (Bildschirmpunkte). */
+  const ROTATE_GAP = 26;
+
+  /** Griffe im eigenen (ungedrehten) Koordinatensystem der Ebene. */
   function handlesOf(layer: Layer): Handle[] {
     const k = layer.kind;
     if (k.type === "line" || k.type === "arrow") {
@@ -251,20 +277,51 @@
           if (names[row][col]) hs.push({ name: names[row][col], x: xs[col], y: ys[row] });
     }
     if (k.type === "callout") hs.push({ name: "tail", x: k.tail.x, y: k.tail.y });
+    if (canRotate(k)) {
+      const b = k.type === "callout" ? k.bounds : bounds(k);
+      hs.push({ name: "rotate", x: b.x + b.width / 2, y: b.y - ROTATE_GAP / editor.zoom });
+    }
     return hs;
   }
 
-  function handleAt(p: Point): string | null {
-    const sel = editor.selected;
-    if (!sel || sel.locked) return null;
-    const tol = 7 / editor.zoom;
-    for (const h of handlesOf(sel)) {
-      if (Math.abs(h.x - p.x) <= tol && Math.abs(h.y - p.y) <= tol) return h.name;
-    }
-    return null;
+  /** Griffe auf der Leinwand (gedreht wie die Ebene). */
+  function worldHandles(layer: Layer): Handle[] {
+    const r = rotationOf(layer);
+    const c = pivot(layer.kind);
+    return handlesOf(layer).map((h) => ({ ...h, ...rotatePoint(h, r, c) }));
   }
 
-  function applyHandle(orig: LayerKind, handle: string, p: Point, shift: boolean): LayerKind {
+  /** Drehgriff einer Mehrfachauswahl bzw. Gruppe. */
+  function groupRotateHandle(): Handle | null {
+    if (editor.selected || editor.editableSelection.length < 1) return null;
+    const box = editor.selectionBounds();
+    if (!box) return null;
+    return { name: "rotate", x: box.x + box.width / 2, y: box.y - ROTATE_GAP / editor.zoom };
+  }
+
+  function handleAt(p: Point): string | null {
+    const tol = 7 / editor.zoom;
+    const near = (h: Handle) => Math.abs(h.x - p.x) <= tol && Math.abs(h.y - p.y) <= tol;
+    const sel = editor.selected;
+    if (sel) {
+      if (sel.locked) return null;
+      return worldHandles(sel).find(near)?.name ?? null;
+    }
+    const g = groupRotateHandle();
+    return g && near(g) ? "rotate" : null;
+  }
+
+  /** Winkel von `c` nach `p` in Grad (0 = nach rechts, im Uhrzeigersinn). */
+  function angle(c: Point, p: Point): number {
+    return (Math.atan2(p.y - c.y, p.x - c.x) * 180) / Math.PI;
+  }
+
+  function applyHandle(orig: LayerKind, handle: string, p: Point, shift: boolean, rotation = 0): LayerKind {
+    if (rotation) {
+      // Im eigenen System der Ebene rechnen, danach an ihren Platz rücken.
+      const local = rotatePoint(p, -rotation, pivot(orig));
+      return keepInPlace(orig, applyHandle(orig, handle, local, shift), rotation);
+    }
     if (orig.type === "line" || orig.type === "arrow") {
       return handle === "from" ? { ...orig, from: p } : { ...orig, to: p };
     }
@@ -435,9 +492,20 @@
 
     // Griffe der Auswahl haben Vorrang – bei jedem Werkzeug.
     const handle = handleAt(p);
+    if (handle === "rotate") {
+      startRotate(p);
+      return;
+    }
     if (handle && editor.selected) {
       const sel = editor.selected;
-      drag = { kind: "handle", id: sel.id, handle, orig: clone($state.snapshot(sel.kind) as LayerKind), before: editor.snapshot() };
+      drag = {
+        kind: "handle",
+        id: sel.id,
+        handle,
+        orig: clone($state.snapshot(sel.kind) as LayerKind),
+        rotation: rotationOf(sel),
+        before: editor.snapshot(),
+      };
       beginSession(layerIndex(sel.id));
       return;
     }
@@ -451,11 +519,23 @@
 
     if (tool === "select") {
       const hit = topLayerAt(p);
-      editor.selectedId = hit?.id ?? null;
-      if (hit) {
-        drag = { kind: "move", id: hit.id, start: p, orig: clone($state.snapshot(hit.kind) as LayerKind), before: editor.snapshot() };
-        beginSession(layerIndex(hit.id));
+      if (!hit) {
+        // Leere Stelle: Auswahlrahmen aufziehen.
+        if (!e.shiftKey) editor.selectedIds = [];
+        drag = { kind: "marquee", start: p, add: e.shiftKey };
+        marquee = { x: p.x, y: p.y, width: 0, height: 0 };
+        return;
       }
+      if (e.shiftKey) {
+        editor.select(hit.id, { add: true });
+        if (!editor.selectedIds.includes(hit.id)) return;
+      } else if (e.metaKey || e.ctrlKey) {
+        // ⌘-Klick: einzelne Ebene aus einer Gruppe.
+        editor.select(hit.id, { single: true });
+      } else if (!editor.selectedIds.includes(hit.id)) {
+        editor.select(hit.id);
+      }
+      startMove(p);
       return;
     }
 
@@ -486,6 +566,25 @@
     }
     drag = tool === "pen" ? { kind: "pen", id: layer.id, before } : { kind: "create", id: layer.id, start: p, before };
     beginSession(editor.doc.layers.length - 1);
+  }
+
+  /** Alle ausgewählten (nicht gesperrten) Ebenen verschieben. */
+  function startMove(p: Point) {
+    const origs = editor.editableSelection.map((l) => clone($state.snapshot(l) as Layer));
+    if (!origs.length) return;
+    const box = origs.map(visualBounds).reduce(union);
+    drag = { kind: "move", origs, start: p, box, before: editor.snapshot() };
+    if (origs.length === 1) beginSession(layerIndex(origs[0].id));
+    else beginSlowSession();
+  }
+
+  function startRotate(p: Point) {
+    const origs = editor.editableSelection.map((l) => clone($state.snapshot(l) as Layer));
+    if (!origs.length) return;
+    const c = origs.length === 1 ? pivot(origs[0].kind) : center(origs.map(visualBounds).reduce(union));
+    drag = { kind: "rotate", origs, center: c, startAngle: angle(c, p), before: editor.snapshot() };
+    if (origs.length === 1) beginSession(layerIndex(origs[0].id));
+    else beginSlowSession();
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -521,36 +620,67 @@
         return;
       }
       case "move": {
-        const { id, start, orig } = drag;
+        const { origs, start, box } = drag;
         let dx = p.x - start.x;
         let dy = p.y - start.y;
         // Einrasten an Zeichenfläche und anderen Ebenen (⌘ gedrückt = aus).
         if (!e.metaKey && editor.doc) {
+          const moving = new Set(origs.map((l) => l.id));
           const targets = [
             editor.doc.artboard.rect,
-            ...editor.doc.layers.filter((l) => l.id !== id && l.visible).map((l) => bounds(l.kind)),
+            ...editor.doc.layers.filter((l) => !moving.has(l.id) && l.visible).map(visualBounds),
           ];
-          const s = snap(bounds(translate(orig, dx, dy)), targets, 6 / editor.zoom);
+          const s = snap({ ...box, x: box.x + dx, y: box.y + dy }, targets, 6 / editor.zoom);
           dx += s.dx;
           dy += s.dy;
           guides = s.guides.x.length || s.guides.y.length ? s.guides : null;
         } else {
           guides = null;
         }
+        const byId = new Map(origs.map((l) => [l.id, l]));
         editor.preview((d) => {
-          const l = d.layers.find((l) => l.id === id);
-          if (l) l.kind = translate(orig, dx, dy);
+          for (const l of d.layers) {
+            const o = byId.get(l.id);
+            if (o) l.kind = translate(o.kind, dx, dy);
+          }
         });
         return;
       }
       case "handle": {
-        const { id, handle, orig } = drag;
+        const { id, handle, orig, rotation } = drag;
         editor.preview((d) => {
           const l = d.layers.find((l) => l.id === id);
-          if (l) l.kind = applyHandle(orig, handle, p, e.shiftKey);
+          if (l) l.kind = applyHandle(orig, handle, p, e.shiftKey, rotation);
         });
         return;
       }
+      case "rotate": {
+        const { origs, center: c, startAngle } = drag;
+        let delta = angle(c, p) - startAngle;
+        if (origs.length === 1) {
+          // Eine Ebene: absoluter Winkel, mit ⇧ in 15°-Schritten.
+          let r = normalizeAngle(origs[0].rotation + delta);
+          if (e.shiftKey) r = normalizeAngle(Math.round(r / 15) * 15);
+          const id = origs[0].id;
+          editor.preview((d) => {
+            const l = d.layers.find((l) => l.id === id);
+            if (l) l.rotation = r;
+          });
+          return;
+        }
+        if (e.shiftKey) delta = Math.round(delta / 15) * 15;
+        const byId = new Map(origs.map((l) => [l.id, l]));
+        editor.preview((d) => {
+          d.layers = d.layers.map((l) => {
+            const o = byId.get(l.id);
+            return o ? rotateAround(o, delta, c) : l;
+          });
+        });
+        return;
+      }
+      case "marquee":
+        marquee = rectFromPoints(drag.start, p);
+        return;
     }
   }
 
@@ -587,16 +717,39 @@
       }
       case "move":
       case "handle":
+      case "rotate":
         editor.finishPreview(d.before);
         break;
+      case "marquee": {
+        const r = marquee;
+        marquee = null;
+        const doc = editor.doc;
+        if (!r || !doc || (r.width < 2 / editor.zoom && r.height < 2 / editor.zoom)) break;
+        const hits = doc.layers.filter((l) => l.visible && !l.locked && intersects(visualBounds(l), r));
+        const ids = new Set(d.add ? editor.selectedIds : []);
+        for (const l of hits) for (const id of groupIds(doc, l.id)) ids.add(id);
+        editor.selectedIds = [...ids];
+        break;
+      }
     }
     endSession();
   }
 
   /** Bild-Ebene nicht-destruktiv auf `r` (Dokument-Koordinaten) zuschneiden. */
-  function cropImageLayer(id: number, r: Rect) {
+  function cropImageLayer(id: number, rect: Rect) {
+    const layer = editor.doc?.layers.find((l) => l.id === id);
+    const rotation = layer ? rotationOf(layer) : 0;
     editor.updateKind(id, (k) => {
       if (k.type !== "image") return k;
+      // Gedrehtes Bild: Rahmen ins eigene System der Ebene umrechnen.
+      const c = pivot(k);
+      const corners = [
+        { x: rect.x, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y },
+        { x: rect.x, y: rect.y + rect.height },
+        { x: rect.x + rect.width, y: rect.y + rect.height },
+      ].map((q) => rotatePoint(q, -rotation, c));
+      const r = corners.map((q) => ({ ...q, width: 0, height: 0 })).reduce(union);
       const b = k.bounds;
       const x0 = Math.max(b.x, r.x);
       const y0 = Math.max(b.y, r.y);
@@ -606,7 +759,7 @@
       const src = k.crop ?? { x: 0, y: 0, width: k.source_size.width, height: k.source_size.height };
       const sx = src.width / b.width;
       const sy = src.height / b.height;
-      return {
+      const cropped: LayerKind = {
         ...k,
         crop: {
           x: src.x + (x0 - b.x) * sx,
@@ -616,6 +769,7 @@
         },
         bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 },
       };
+      return keepInPlace(k, cropped, rotation);
     });
   }
 
@@ -769,7 +923,12 @@
     const k = l.kind;
     if (k.type !== "text" && k.type !== "callout") return null;
     const pad = k.type === "text" ? textPadding(k.style) : k.style.size * 0.5;
+    const c = pivot(k);
     return {
+      rotation: rotationOf(l),
+      // Drehpunkt relativ zur linken oberen Ecke des Textfelds.
+      originX: (c.x - k.bounds.x - pad) * editor.zoom,
+      originY: (c.y - k.bounds.y - pad) * editor.zoom,
       left: sx(k.bounds.x + pad),
       top: sy(k.bounds.y + pad),
       width: Math.max(20, (k.bounds.width - 2 * pad) * editor.zoom),
@@ -821,18 +980,51 @@
     void editor.zoom;
     void editor.panX;
     void editor.panY;
+    const toScreen = (h: Handle) => ({ name: h.name, x: sx(h.x), y: sy(h.y) });
+    const outline = (l: Layer) => {
+      const b = l.kind.type === "callout" ? l.kind.bounds : bounds(l.kind);
+      const r = rotationOf(l);
+      const c = pivot(l.kind);
+      return [
+        { x: b.x, y: b.y },
+        { x: b.x + b.width, y: b.y },
+        { x: b.x + b.width, y: b.y + b.height },
+        { x: b.x, y: b.y + b.height },
+      ]
+        .map((p) => rotatePoint(p, r, c))
+        .map((p) => `${sx(p.x)},${sy(p.y)}`)
+        .join(" ");
+    };
     const l = editor.selected;
-    if (!l || editor.editingTextId === l.id) return null;
-    const b = l.kind.type === "callout" ? l.kind.bounds : bounds(l.kind);
+    if (l) {
+      if (editor.editingTextId === l.id) return null;
+      const handles = l.locked ? [] : worldHandles(l).map(toScreen);
+      const rot = handles.find((h) => h.name === "rotate");
+      const top = handles.find((h) => h.name === "n");
+      return {
+        outlines: l.kind.type === "line" || l.kind.type === "arrow" ? [] : [outline(l)],
+        box: null,
+        handles,
+        stem: rot && top ? { x1: top.x, y1: top.y, x2: rot.x, y2: rot.y } : null,
+      };
+    }
+    const layers = editor.selectedLayers;
+    if (!layers.length) return null;
+    const b = editor.selectionBounds(layers)!;
+    const g = groupRotateHandle();
+    const rot = g ? toScreen(g) : null;
     return {
+      outlines: layers.map(outline),
       box: { x: sx(b.x), y: sy(b.y), w: b.width * editor.zoom, h: b.height * editor.zoom },
-      line: l.kind.type === "line" || l.kind.type === "arrow",
-      handles: l.locked ? [] : handlesOf(l).map((h) => ({ name: h.name, x: sx(h.x), y: sy(h.y) })),
+      handles: rot ? [rot] : [],
+      stem: rot ? { x1: rot.x, y1: sy(b.y), x2: rot.x, y2: rot.y } : null,
     };
   });
 
   const cursor = $derived.by(() => {
     if (spaceDown) return "grab";
+    if (drag?.kind === "rotate") return "grabbing";
+    if (hoverHandle === "rotate") return "grab";
     if (hoverHandle) {
       const map: Record<string, string> = {
         n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
@@ -906,18 +1098,37 @@
       />
     {/if}
     {#if selection}
-      {#if !selection.line}
+      {#each selection.outlines as points, i (i)}
+        <polygon class="sel" class:member={!!selection.box} {points} />
+      {/each}
+      {#if selection.box}
         <rect
-          class="sel"
-          x={selection.box.x - 0.5}
-          y={selection.box.y - 0.5}
-          width={selection.box.w + 1}
-          height={selection.box.h + 1}
+          class="sel group"
+          x={selection.box.x - 3.5}
+          y={selection.box.y - 3.5}
+          width={selection.box.w + 7}
+          height={selection.box.h + 7}
         />
       {/if}
+      {#if selection.stem}
+        <line class="stem" x1={selection.stem.x1} y1={selection.stem.y1} x2={selection.stem.x2} y2={selection.stem.y2} />
+      {/if}
       {#each selection.handles as h (h.name)}
-        <rect class="handle" class:tail={h.name === "tail"} x={h.x - 4.5} y={h.y - 4.5} width="9" height="9" rx="2" />
+        {#if h.name === "rotate"}
+          <circle class="handle rotate" cx={h.x} cy={h.y} r="5.5" />
+        {:else}
+          <rect class="handle" class:tail={h.name === "tail"} x={h.x - 4.5} y={h.y - 4.5} width="9" height="9" rx="2" />
+        {/if}
       {/each}
+    {/if}
+    {#if marquee}
+      <rect
+        class="marquee"
+        x={sx(marquee.x)}
+        y={sy(marquee.y)}
+        width={marquee.width * editor.zoom}
+        height={marquee.height * editor.zoom}
+      />
     {/if}
     {#if ocrView}
       {#each ocrView as b, i (i)}
@@ -962,6 +1173,8 @@
       style:font-weight={editing.bold ? 700 : 400}
       style:color={editing.color}
       style:line-height={LINE_HEIGHT}
+      style:transform={editing.rotation ? `rotate(${editing.rotation}deg)` : null}
+      style:transform-origin="{editing.originX}px {editing.originY}px"
       oninput={onTextInput}
       onkeydown={onTextKey}
       onblur={commitText}
@@ -1005,6 +1218,26 @@
     stroke: var(--selection);
     stroke-width: 1;
     stroke-dasharray: 4 3;
+  }
+  .sel.member {
+    stroke-dasharray: none;
+    stroke-opacity: 0.6;
+  }
+  .sel.group {
+    stroke-dasharray: 2 3;
+  }
+  .stem {
+    stroke: var(--selection);
+    stroke-width: 1;
+  }
+  .handle.rotate {
+    fill: var(--selection);
+    stroke: #fff;
+  }
+  .marquee {
+    fill: rgb(30 136 229 / 0.08);
+    stroke: var(--selection);
+    stroke-width: 1;
   }
   .handle {
     fill: #fff;

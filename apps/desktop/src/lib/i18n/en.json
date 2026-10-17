@@ -165,5 +165,13 @@
   "presets.title": "Presets",
   "presets.save": "+ Save current style",
   "presets.empty": "No presets yet",
-  "presets.delete": "Delete preset"
+  "presets.delete": "Delete preset",
+  "props.rotation": "Rotation",
+  "props.rotate_by": "Rotate by",
+  "props.rotate_by_hint": "Rotates all selected layers together around their centre",
+  "props.rotation_reset": "Straighten",
+  "props.group": "Group",
+  "props.ungroup": "Ungroup",
+  "props.selected_count": "{count} layers selected",
+  "layers.group": "Group {number}"
 }

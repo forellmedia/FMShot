@@ -66,10 +66,33 @@ pub struct Layer {
     pub locked: bool,
     /// 0.0 bis 1.0
     pub opacity: f32,
-    /// Drehung in Grad um den Mittelpunkt der Ebene.
+    /// Drehung in Grad (im Uhrzeigersinn) um den Mittelpunkt von
+    /// [`LayerKind::bounds`]. Effekt-Ebenen (Weichzeichnen usw.) werden nicht
+    /// gedreht.
     #[serde(default)]
     pub rotation: f32,
+    /// Gruppe, zu der die Ebene gehört. Ebenen einer Gruppe liegen in der
+    /// Reihenfolge direkt übereinander und werden gemeinsam ausgewählt,
+    /// verschoben und gedreht. Auf das Zeichnen hat die Gruppe keinen Einfluss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<u32>,
     pub kind: LayerKind,
+}
+
+impl Layer {
+    /// Umschliessendes Rechteck nach der Drehung (ohne Strichbreite).
+    pub fn visual_bounds(&self) -> Rect {
+        let b = self.kind.bounds();
+        if self.rotation == 0.0 || self.kind.is_effect() {
+            return b;
+        }
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        let (cx, cy) = (b.x + b.width / 2.0, b.y + b.height / 2.0);
+        // Halbe Ausdehnung des gedrehten Rechtecks je Achse.
+        let hw = (b.width * cos.abs() + b.height * sin.abs()) / 2.0;
+        let hh = (b.width * sin.abs() + b.height * cos.abs()) / 2.0;
+        Rect::new(cx - hw, cy - hh, 2.0 * hw, 2.0 * hh)
+    }
 }
 
 /// Woher die Pixel einer Bild-Ebene kommen.
@@ -294,6 +317,7 @@ impl Document {
                 locked: true,
                 opacity: 1.0,
                 rotation: 0.0,
+                group: None,
                 kind: LayerKind::Image {
                     asset: AssetRef::Original,
                     bounds,
@@ -321,6 +345,7 @@ impl Document {
             locked: false,
             opacity: 1.0,
             rotation: 0.0,
+            group: None,
             kind,
         });
         id
@@ -345,7 +370,9 @@ impl Document {
     pub fn fit_artboard_to_content(&mut self) {
         let mut visible = self.layers.iter().filter(|l| l.visible);
         if let Some(first) = visible.next() {
-            let bounds = visible.fold(first.kind.bounds(), |acc, l| acc.union(&l.kind.bounds()));
+            let bounds = visible.fold(first.visual_bounds(), |acc, l| {
+                acc.union(&l.visual_bounds())
+            });
             self.artboard.rect = bounds;
         }
     }
@@ -394,6 +421,41 @@ mod tests {
         });
         doc.fit_artboard_to_content();
         assert_eq!(doc.artboard.rect, Rect::new(0.0, 0.0, 150.0, 100.0));
+    }
+
+    #[test]
+    fn gedrehte_ebene_hat_groessere_grenzen() {
+        let mut doc = Document::from_capture(100, 100);
+        let id = doc.push_layer(LayerKind::Rectangle {
+            bounds: Rect::new(10.0, 40.0, 80.0, 20.0),
+            stroke: Stroke::default(),
+            fill: None,
+            corner_radius: 0.0,
+        });
+        let layer = doc.layers.iter_mut().find(|l| l.id == id).unwrap();
+        layer.rotation = 90.0;
+        let b = layer.visual_bounds();
+        assert!(
+            (b.x - 40.0).abs() < 0.01 && (b.width - 20.0).abs() < 0.01,
+            "{b:?}"
+        );
+        assert!(
+            (b.y - 10.0).abs() < 0.01 && (b.height - 80.0).abs() < 0.01,
+            "{b:?}"
+        );
+        layer.rotation = 45.0;
+        assert!(layer.visual_bounds().width > 70.0);
+    }
+
+    #[test]
+    fn gruppe_wird_nur_gespeichert_wenn_gesetzt() {
+        let mut doc = Document::from_capture(10, 10);
+        assert!(!serde_json::to_string(&doc).unwrap().contains("group"));
+        doc.layers[0].group = Some(3);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("\"group\":3"));
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.layers[0].group, Some(3));
     }
 
     #[test]

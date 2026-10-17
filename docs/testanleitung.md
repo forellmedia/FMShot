@@ -74,6 +74,16 @@ Alle Aufnahmemodi gibt es auch im Menüleisten-Symbol.
       Zuschneiden (C), Hintergrund (G), Auswählen (V)
 - [ ] Griffe zum Ändern, Shift = gerade Linien / Quadrate
 - [ ] Text direkt tippen, Umlaute, Esc beendet
+- [ ] Emoji im Text (⌃⌘Leertaste): farbig, auch ❤️, 👍🏽, 🇨🇭; im Export gleich
+- [ ] Drehen: runder Griff über der Ebene ziehen (⇧ = 15°-Schritte) oder
+      Gradzahl oben eingeben; „Gerade“ setzt zurück; gedrehter Text bleibt
+      bearbeitbar (Doppelklick); Griffe ändern die Grösse, die Gegenseite
+      bleibt stehen
+- [ ] Mehrfachauswahl: ⇧-Klick oder Rahmen aufziehen (Auswählen-Werkzeug),
+      ⌘A; gemeinsam verschieben (Maus/Pfeiltasten), drehen, löschen
+- [ ] Gruppen: ⌘G gruppiert, ⇧⌘G löst auf; Klick wählt die ganze Gruppe,
+      ⌘-Klick eine einzelne Ebene darin; ⌘C/⌘V und ⌘D kopieren die Gruppe;
+      Ebenen-Panel zeigt „Gruppe n“ mit Sichtbar/Sperre/Reihenfolge
 - [ ] ⌘Z / ⇧⌘Z, ⌘C kopiert das Bild (mit Auswahl: die Ebene), ⌘D dupliziert
 - [ ] Bild aus dem Finder hineinziehen, ⌘V fügt Bild aus der
       Zwischenablage ein, Galerie-Bild auf die Leinwand ziehen
@@ -223,5 +233,3 @@ Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
   × Skalierung (macOS-Basis) – unter Windows wären 96 dpi richtig.
 - Signatur-/Updater-Secrets auf GitHub (Issue #2) – danach erster Release.
 - Eigenes Menüleisten-Symbol (noch das App-Symbol).
-- Emoji im Text-Werkzeug (Schrift Inter hat keine Emoji).
-- Stil-Vorlagen und Ausrichtungshilfen im Editor.

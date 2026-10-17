@@ -248,8 +248,18 @@ export type Layer_Deserialize = {
 	locked: boolean,
 	/**  0.0 bis 1.0 */
 	opacity: number | null,
-	/**  Drehung in Grad um den Mittelpunkt der Ebene. */
+	/**
+	 *  Drehung in Grad (im Uhrzeigersinn) um den Mittelpunkt von
+	 *  [`LayerKind::bounds`]. Effekt-Ebenen (Weichzeichnen usw.) werden nicht
+	 *  gedreht.
+	 */
 	rotation?: number | null,
+	/**
+	 *  Gruppe, zu der die Ebene gehört. Ebenen einer Gruppe liegen in der
+	 *  Reihenfolge direkt übereinander und werden gemeinsam ausgewählt,
+	 *  verschoben und gedreht. Auf das Zeichnen hat die Gruppe keinen Einfluss.
+	 */
+	group?: number | null,
 	kind: LayerKind,
 };
 
@@ -260,8 +270,18 @@ export type Layer_Serialize = {
 	locked: boolean,
 	/**  0.0 bis 1.0 */
 	opacity: number | null,
-	/**  Drehung in Grad um den Mittelpunkt der Ebene. */
+	/**
+	 *  Drehung in Grad (im Uhrzeigersinn) um den Mittelpunkt von
+	 *  [`LayerKind::bounds`]. Effekt-Ebenen (Weichzeichnen usw.) werden nicht
+	 *  gedreht.
+	 */
 	rotation: number | null,
+	/**
+	 *  Gruppe, zu der die Ebene gehört. Ebenen einer Gruppe liegen in der
+	 *  Reihenfolge direkt übereinander und werden gemeinsam ausgewählt,
+	 *  verschoben und gedreht. Auf das Zeichnen hat die Gruppe keinen Einfluss.
+	 */
+	group?: number | null,
 	kind: LayerKind,
 };
 

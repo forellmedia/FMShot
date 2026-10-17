@@ -51,6 +51,8 @@ export type Layer = {
   locked: boolean;
   opacity: number;
   rotation: number;
+  /** Gruppe (Ebenen liegen direkt übereinander), siehe fmshot-core. */
+  group?: number | null;
   kind: LayerKind;
 };
 
@@ -172,9 +174,101 @@ export function bounds(kind: LayerKind): Rect {
   }
 }
 
-/** Liegt `p` auf der Ebene? `tol` in Dokument-Pixeln. */
-export function hitTest(layer: Layer, p: Point, tol: number): boolean {
+export function center(r: Rect): Point {
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+}
+
+/** Dreht `p` um `deg` Grad im Uhrzeigersinn (y nach unten) um `c`. */
+export function rotatePoint(p: Point, deg: number, c: Point): Point {
+  if (!deg) return p;
+  const a = (deg * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+}
+
+/** Winkel auf -180 bis 180 Grad bringen. */
+export function normalizeAngle(deg: number): number {
+  const a = (((deg + 180) % 360) + 360) % 360 - 180;
+  return Math.abs(a) < 1e-9 ? 0 : a;
+}
+
+/** Wirkt die Ebene auf das darunter (wie `LayerKind::is_effect`)? */
+export function isEffect(kind: LayerKind): boolean {
+  return ["blur", "pixelate", "spotlight", "magnifier"].includes(kind.type);
+}
+
+/** Kann die Ebene gedreht werden? Linien und Pfeile drehen über ihre Enden. */
+export function canRotate(kind: LayerKind): boolean {
+  return !isEffect(kind) && kind.type !== "line" && kind.type !== "arrow";
+}
+
+/** Wirksame Drehung (Effekte drehen nie mit – wie im Renderer). */
+export function rotationOf(layer: Layer): number {
+  return isEffect(layer.kind) ? 0 : layer.rotation || 0;
+}
+
+/** Drehpunkt der Ebene: Mitte von `bounds`. */
+export function pivot(kind: LayerKind): Point {
+  return center(bounds(kind));
+}
+
+/** Punkt der Leinwand → ungedrehtes Koordinatensystem der Ebene. */
+export function toLocal(layer: Layer, p: Point): Point {
+  const r = rotationOf(layer);
+  return r ? rotatePoint(p, -r, pivot(layer.kind)) : p;
+}
+
+/** Umschliessendes Rechteck nach der Drehung – wie `Layer::visual_bounds`. */
+export function visualBounds(layer: Layer): Rect {
+  const b = bounds(layer.kind);
+  const r = rotationOf(layer);
+  if (!r) return b;
+  const a = (r * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(a));
+  const sin = Math.abs(Math.sin(a));
+  const hw = (b.width * cos + b.height * sin) / 2;
+  const hh = (b.width * sin + b.height * cos) / 2;
+  const c = center(b);
+  return { x: c.x - hw, y: c.y - hh, width: 2 * hw, height: 2 * hh };
+}
+
+/** Überschneiden sich zwei Rechtecke? */
+export function intersects(a: Rect, b: Rect): boolean {
+  return a.x <= b.x + b.width && b.x <= a.x + a.width && a.y <= b.y + b.height && b.y <= a.y + a.height;
+}
+
+/**
+ * Nach dem Ändern einer gedrehten Ebene in ihrem eigenen Koordinatensystem:
+ * so verschieben, dass sie auf der Leinwand an derselben Stelle bleibt
+ * (der Drehpunkt wandert mit der Grösse mit).
+ */
+export function keepInPlace(orig: LayerKind, changed: LayerKind, rotation: number): LayerKind {
+  if (!rotation) return changed;
+  const c = pivot(changed);
+  const target = rotatePoint(c, rotation, pivot(orig));
+  return translate(changed, target.x - c.x, target.y - c.y);
+}
+
+/** Dreht eine Ebene um `deg` Grad um den Punkt `c` (Gruppe drehen). */
+export function rotateAround(layer: Layer, deg: number, c: Point): Layer {
   const k = layer.kind;
+  if (k.type === "line" || k.type === "arrow") {
+    return { ...layer, kind: { ...k, from: rotatePoint(k.from, deg, c), to: rotatePoint(k.to, deg, c) } };
+  }
+  const p = pivot(k);
+  const q = rotatePoint(p, deg, c);
+  const kind = translate(k, q.x - p.x, q.y - p.y);
+  if (isEffect(k)) return { ...layer, kind };
+  return { ...layer, kind, rotation: normalizeAngle((layer.rotation || 0) + deg) };
+}
+
+/** Liegt `p` auf der Ebene? `tol` in Dokument-Pixeln. */
+export function hitTest(layer: Layer, point: Point, tol: number): boolean {
+  const k = layer.kind;
+  const p = toLocal(layer, point);
   const sw = "stroke" in k ? k.stroke.width / 2 : 0;
   switch (k.type) {
     case "line":
@@ -266,6 +360,87 @@ export function nextLayerId(doc: Doc): number {
 
 export function nextStepNumber(doc: Doc): number {
   return doc.layers.reduce((m, l) => (l.kind.type === "step" ? Math.max(m, l.kind.number) : m), 0) + 1;
+}
+
+// --- Gruppen -------------------------------------------------------------------
+
+/** IDs aller Ebenen, die mit `id` zusammen ausgewählt werden (ihre Gruppe). */
+export function groupIds(doc: Doc, id: number): number[] {
+  const l = doc.layers.find((x) => x.id === id);
+  if (!l) return [];
+  if (l.group == null) return [id];
+  return doc.layers.filter((x) => x.group === l.group).map((x) => x.id);
+}
+
+export function nextGroupId(doc: Doc): number {
+  return doc.layers.reduce((m, l) => Math.max(m, l.group ?? 0), 0) + 1;
+}
+
+/**
+ * Fasst Ebenen zu einer Gruppe zusammen. Sie rücken dabei in der Reihenfolge
+ * an die Stelle der obersten von ihnen (Reihenfolge untereinander bleibt).
+ * Gibt die neue Gruppen-ID zurück (oder null bei weniger als zwei Ebenen).
+ */
+export function groupLayers(doc: Doc, ids: number[]): number | null {
+  const set = new Set(ids);
+  const members = doc.layers.filter((l) => set.has(l.id));
+  if (members.length < 2) return null;
+  const group = nextGroupId(doc);
+  const top = Math.max(...members.map((m) => doc.layers.indexOf(m)));
+  const rest = doc.layers.filter((l) => !set.has(l.id));
+  // Wie viele Nicht-Mitglieder liegen unter der obersten?
+  const below = doc.layers.slice(0, top).filter((l) => !set.has(l.id)).length;
+  for (const m of members) m.group = group;
+  doc.layers = [...rest.slice(0, below), ...members, ...rest.slice(below)];
+  normalizeGroups(doc);
+  return group;
+}
+
+export function ungroupLayers(doc: Doc, ids: number[]) {
+  const set = new Set(ids);
+  for (const l of doc.layers) if (set.has(l.id)) l.group = null;
+  normalizeGroups(doc);
+}
+
+/** Gruppen mit nur noch einer Ebene auflösen. */
+export function normalizeGroups(doc: Doc) {
+  const count = new Map<number, number>();
+  for (const l of doc.layers) if (l.group != null) count.set(l.group, (count.get(l.group) ?? 0) + 1);
+  for (const l of doc.layers) {
+    if (l.group != null && (count.get(l.group) ?? 0) < 2) l.group = null;
+    if (l.group == null) delete l.group;
+  }
+}
+
+/**
+ * Verschiebt einen zusammenhängenden Block von Ebenen um eine Stufe nach oben
+ * (+1) oder unten (-1). Eine benachbarte Gruppe wird als Ganzes übersprungen.
+ */
+export function moveBlock(doc: Doc, ids: number[], delta: 1 | -1) {
+  const set = new Set(ids);
+  const idx = doc.layers.map((l, i) => (set.has(l.id) ? i : -1)).filter((i) => i >= 0);
+  if (!idx.length) return;
+  const first = idx[0];
+  const last = idx[idx.length - 1];
+  if (last - first + 1 !== idx.length) return; // nicht zusammenhängend
+  const block = doc.layers.slice(first, last + 1);
+  const rest = [...doc.layers.slice(0, first), ...doc.layers.slice(last + 1)];
+  // Nachbar-Block (Gruppe oder einzelne Ebene) in Bewegungsrichtung.
+  let at = first;
+  const step = (i: number) => {
+    const g = rest[i]?.group;
+    let j = i;
+    if (g != null) while (rest[j + delta]?.group === g) j += delta;
+    return j;
+  };
+  if (delta > 0) {
+    if (first >= rest.length) return;
+    at = step(first) + 1;
+  } else {
+    if (first === 0) return;
+    at = step(first - 1);
+  }
+  doc.layers = [...rest.slice(0, at), ...block, ...rest.slice(at)];
 }
 
 export function newLayer(doc: Doc, kind: LayerKind): Layer {

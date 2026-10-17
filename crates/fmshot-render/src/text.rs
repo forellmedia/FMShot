@@ -168,9 +168,64 @@ impl TextEngine {
     }
 
     /// Setzt den Text in Ausgabeauflösung (scharf bei jedem Zoom) und mischt
-    /// die Glyphen direkt in die Pixmap.
+    /// die Glyphen direkt in die Pixmap. Bei gedrehtem `base` wird der Text
+    /// erst ungedreht in ein eigenes Bild gesetzt und dieses dann gedreht
+    /// eingefügt.
     #[allow(clippy::too_many_arguments)]
     fn draw_at(
+        &mut self,
+        pixmap: &mut Pixmap,
+        origin: Point,
+        text: &str,
+        style: &TextStyle,
+        wrap: Option<f32>,
+        opacity: f32,
+        base: Transform,
+        scale: f32,
+    ) {
+        if base.kx != 0.0 || base.ky != 0.0 {
+            self.draw_rotated(pixmap, origin, text, style, wrap, opacity, base, scale);
+            return;
+        }
+        self.draw_straight(pixmap, origin, text, style, wrap, opacity, base, scale);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_rotated(
+        &mut self,
+        pixmap: &mut Pixmap,
+        origin: Point,
+        text: &str,
+        style: &TextStyle,
+        wrap: Option<f32>,
+        opacity: f32,
+        base: Transform,
+        scale: f32,
+    ) {
+        let m = self.measure(text, style, wrap);
+        // Etwas Rand für Unterlängen und Kantenglättung.
+        let margin = style.size * 0.25;
+        let w = ((wrap.unwrap_or(m.width).max(m.width) + 2.0 * margin) * scale).ceil() as u32;
+        let h = ((m.height + 2.0 * margin) * scale).ceil() as u32;
+        let Some(mut layer) = Pixmap::new(w.max(1), h.max(1)) else {
+            return;
+        };
+        let local = Transform::from_scale(scale, scale)
+            .pre_translate(-(origin.x - margin), -(origin.y - margin));
+        self.draw_straight(&mut layer, origin, text, style, wrap, 1.0, local, scale);
+        let place = base
+            .pre_translate(origin.x - margin, origin.y - margin)
+            .pre_scale(1.0 / scale, 1.0 / scale);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: opacity.clamp(0.0, 1.0),
+            quality: tiny_skia::FilterQuality::Bilinear,
+            ..Default::default()
+        };
+        pixmap.draw_pixmap(0, 0, layer.as_ref(), &paint, place, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_straight(
         &mut self,
         pixmap: &mut Pixmap,
         origin: Point,

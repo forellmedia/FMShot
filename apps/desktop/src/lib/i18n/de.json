@@ -165,5 +165,13 @@
   "presets.title": "Vorlagen",
   "presets.save": "+ Aktuellen Stil speichern",
   "presets.empty": "Noch keine Vorlagen",
-  "presets.delete": "Vorlage löschen"
+  "presets.delete": "Vorlage löschen",
+  "props.rotation": "Drehung",
+  "props.rotate_by": "Drehen um",
+  "props.rotate_by_hint": "Dreht alle ausgewählten Ebenen gemeinsam um ihre Mitte",
+  "props.rotation_reset": "Gerade",
+  "props.group": "Gruppieren",
+  "props.ungroup": "Gruppierung aufheben",
+  "props.selected_count": "{count} Ebenen ausgewählt",
+  "layers.group": "Gruppe {number}"
 }
