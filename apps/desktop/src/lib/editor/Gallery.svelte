@@ -11,7 +11,7 @@
 
   /** Höchstens so viele auf einmal – sonst Filter eingrenzen. */
   const LIMIT = 1000;
-  const MODES = ["region", "window", "screen", "scroll"] as const;
+  const MODES = ["region", "window", "screen", "scroll", "video"] as const;
 
   let text = $state(editor.query);
   let period = $state<Period>("all");
@@ -134,6 +134,12 @@
     }
   }
 
+  /** „1:23“ – Länge eines Videos. */
+  function formatDuration(ms: number) {
+    const s = Math.round(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+
   function time(ms: number | null) {
     return ms ? new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) : "";
   }
@@ -214,6 +220,7 @@
             >
               <div class="image">
                 {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}
+                {#if c.durationMs != null}<span class="duration">▶ {formatDuration(c.durationMs)}</span>{/if}
                 {#if why}<span class="why">{why}</span>{/if}
                 {#if item.tags.length}
                   <span class="tags">
@@ -369,6 +376,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .duration {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.6);
+    color: #fff;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
   .why {
     top: 6px;
     max-width: calc(100% - 48px);

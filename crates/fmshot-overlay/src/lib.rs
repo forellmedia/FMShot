@@ -171,6 +171,72 @@ pub fn open_scroll_ui(
     }
 }
 
+/// Knopf in der Leiste der Video-Aufnahme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordAction {
+    /// Pause bzw. Weiter.
+    Pause,
+    Stop,
+    Cancel,
+}
+
+/// Texte der Video-Leiste (übersetzt).
+#[derive(Debug, Clone, Copy)]
+pub struct RecordLabels<'a> {
+    pub status: &'a str,
+    pub pause: &'a str,
+    pub stop: &'a str,
+    pub cancel: &'a str,
+}
+
+/// Rahmen und Leiste während einer Video-Aufnahme.
+pub struct RecordUi {
+    #[cfg(target_os = "macos")]
+    inner: macos::RecordUi,
+}
+
+impl RecordUi {
+    /// Statuszeile, z. B. „● 0:12  Mikro ▮▮▮▯▯“.
+    pub fn set_status(&self, text: &str) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_status(text);
+        #[cfg(not(target_os = "macos"))]
+        let _ = text;
+    }
+
+    /// Text des Pause-Knopfs („Pause“ / „Weiter“).
+    pub fn set_pause_label(&self, text: &str) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_pause_label(text);
+        #[cfg(not(target_os = "macos"))]
+        let _ = text;
+    }
+
+    pub fn close(&self) {
+        #[cfg(target_os = "macos")]
+        self.inner.close();
+    }
+}
+
+/// Zeigt die Leiste der Video-Aufnahme. Mit `rect` (physische Pixel des
+/// Monitors) zusätzlich einen roten Rahmen um den Bereich. FMShot selbst ist
+/// im Video nie zu sehen.
+pub fn open_record_ui(
+    display_id: u32,
+    rect: Option<(u32, u32, u32, u32)>,
+    labels: &RecordLabels<'_>,
+    on_action: Box<dyn Fn(RecordAction)>,
+) -> Result<RecordUi, OverlayError> {
+    #[cfg(target_os = "macos")]
+    return macos::open_record_ui(display_id, rect, labels, on_action)
+        .map(|inner| RecordUi { inner });
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (display_id, rect, labels, on_action);
+        Err(OverlayError::NotImplemented)
+    }
+}
+
 /// Knöpfe der Schnellzugriff-Vorschau.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewAction {

@@ -43,7 +43,8 @@ use objc2_quartz_core::{
 
 use crate::{
     DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction, PreviewPlacement,
-    ScrollAction, Selection, WindowTarget, points_to_pixels, rect_from_points, window_at,
+    RecordAction, RecordLabels, ScrollAction, Selection, WindowTarget, points_to_pixels,
+    rect_from_points, window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -707,34 +708,77 @@ impl OverlayView {
     }
 }
 
-// --- Scroll-Leiste ------------------------------------------------------------
+// --- Aufnahmeleiste (Scroll, Video) ------------------------------------------
 
-const BAR_WIDTH: f64 = 340.0;
 const BAR_HEIGHT: f64 = 44.0;
-/// x-Bereiche der Knöpfe in der Leiste (Punkte).
-const FINISH_X: (f64, f64) = (190.0, 262.0);
-const CANCEL_X: (f64, f64) = (268.0, 334.0);
+const BAR_STATUS_WIDTH: f64 = 176.0;
+const BAR_BUTTON_WIDTH: f64 = 76.0;
+const BAR_GAP: f64 = 6.0;
 
-pub(crate) struct ScrollUi {
-    border: Retained<OverlayPanel>,
+/// Rahmen um den Bereich (optional) und eine Leiste mit Status und Knöpfen.
+struct Bar {
+    border: Option<Retained<OverlayPanel>>,
     bar: Retained<OverlayPanel>,
     status: Retained<CATextLayer>,
+    labels: Vec<Retained<CATextLayer>>,
 }
 
-impl ScrollUi {
-    pub fn set_status(&self, text: &str) {
-        let s = NSString::from_str(text);
-        without_animation(|| unsafe { self.status.setString(Some(as_any(&s))) });
+impl Bar {
+    fn set_status(&self, text: &str) {
+        set_text(&self.status, text);
     }
 
-    pub fn close(&self) {
-        self.border.orderOut(None);
+    fn set_label(&self, index: usize, text: &str) {
+        if let Some(l) = self.labels.get(index) {
+            set_text(l, text);
+        }
+    }
+
+    fn close(&self) {
+        if let Some(border) = &self.border {
+            border.orderOut(None);
+        }
         self.bar.orderOut(None);
     }
 }
 
+fn set_text(layer: &CATextLayer, text: &str) {
+    let s = NSString::from_str(text);
+    without_animation(|| unsafe { layer.setString(Some(as_any(&s))) });
+}
+
+pub(crate) struct ScrollUi(Bar);
+
+impl ScrollUi {
+    pub fn set_status(&self, text: &str) {
+        self.0.set_status(text);
+    }
+
+    pub fn close(&self) {
+        self.0.close();
+    }
+}
+
+pub(crate) struct RecordUi(Bar);
+
+impl RecordUi {
+    pub fn set_status(&self, text: &str) {
+        self.0.set_status(text);
+    }
+
+    pub fn set_pause_label(&self, text: &str) {
+        self.0.set_label(0, text);
+    }
+
+    pub fn close(&self) {
+        self.0.close();
+    }
+}
+
 struct BarIvars {
-    on_action: Box<dyn Fn(ScrollAction)>,
+    /// x-Bereiche der Knöpfe (Punkte).
+    buttons: Vec<(f64, f64)>,
+    on_click: Box<dyn Fn(usize)>,
 }
 
 define_class!(
@@ -742,9 +786,9 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[name = "FMShotScrollBarView"]
     #[ivars = BarIvars]
-    struct ScrollBarView;
+    struct BarView;
 
-    impl ScrollBarView {
+    impl BarView {
         #[unsafe(method(isFlipped))]
         fn is_flipped(&self) -> bool {
             true
@@ -758,92 +802,123 @@ define_class!(
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             let p = self.convertPoint_fromView(event.locationInWindow(), None);
-            let action = if p.x >= FINISH_X.0 && p.x <= FINISH_X.1 {
-                Some(ScrollAction::Finish)
-            } else if p.x >= CANCEL_X.0 && p.x <= CANCEL_X.1 {
-                Some(ScrollAction::Cancel)
-            } else {
-                None
-            };
-            if let Some(a) = action {
-                (self.ivars().on_action)(a);
+            let iv = self.ivars();
+            if let Some(i) = iv.buttons.iter().position(|(a, b)| p.x >= *a && p.x <= *b) {
+                (iv.on_click)(i);
             }
         }
     }
 );
 
-pub(crate) fn open_scroll_ui(
+/// Knopf der Leiste: Text und ob er rot hervorgehoben ist.
+type BarButton<'a> = (&'a str, bool);
+
+/// Zeigt die Leiste. `rect` (physische Pixel des Monitors) bekommt einen
+/// roten Rahmen, die Leiste sitzt darunter; ohne `rect` sitzt sie unten in
+/// der Mitte des Monitors. Mausklicks gehen weiterhin an die Apps darunter.
+fn open_bar(
     display_id: u32,
-    rect: (u32, u32, u32, u32),
-    labels: (&str, &str, &str),
-    on_action: Box<dyn Fn(ScrollAction)>,
-) -> Result<ScrollUi, OverlayError> {
+    rect: Option<(u32, u32, u32, u32)>,
+    status: &str,
+    buttons: &[BarButton<'_>],
+    on_click: Box<dyn Fn(usize)>,
+) -> Result<Bar, OverlayError> {
     let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
     let screens = NSScreen::screens(mtm);
     let screen = screens
         .iter()
         .find(|s| screen_number(s) == Some(display_id))
+        .or_else(|| screens.firstObject())
         .ok_or(OverlayError::NoScreens)?;
     let sf = screen.frame();
+    let vf = screen.visibleFrame();
     let scale = screen.backingScaleFactor().max(1.0);
+    let margin = 3.0;
+
     // Pixel (oben links im Monitor) → Cocoa-Koordinaten (unten links global)
-    let (x, y, w, h) = (
-        rect.0 as f64 / scale,
-        rect.1 as f64 / scale,
-        rect.2 as f64 / scale,
-        rect.3 as f64 / scale,
-    );
-    let cocoa = NSRect::new(
-        CGPoint::new(sf.origin.x + x, sf.origin.y + sf.size.height - y - h),
-        CGSize::new(w, h),
-    );
+    let area = rect.map(|r| {
+        let (x, y, w, h) = (
+            r.0 as f64 / scale,
+            r.1 as f64 / scale,
+            r.2 as f64 / scale,
+            r.3 as f64 / scale,
+        );
+        NSRect::new(
+            CGPoint::new(sf.origin.x + x, sf.origin.y + sf.size.height - y - h),
+            CGSize::new(w, h),
+        )
+    });
 
     // Rahmen: durchlässig für Maus und Scrollen.
-    let margin = 3.0;
-    let border_frame = NSRect::new(
-        CGPoint::new(cocoa.origin.x - margin, cocoa.origin.y - margin),
-        CGSize::new(w + 2.0 * margin, h + 2.0 * margin),
-    );
-    let border = OverlayPanel::new(mtm, border_frame);
-    border.setIgnoresMouseEvents(true);
-    let bview = NSView::initWithFrame(
-        NSView::alloc(mtm),
-        NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size),
-    );
-    bview.setWantsLayer(true);
-    let shape = shape_layer(NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size));
-    shape.setPath(Some(&rect_path(CGRect::new(
-        CGPoint::new(1.0, 1.0),
-        CGSize::new(
-            border_frame.size.width - 2.0,
-            border_frame.size.height - 2.0,
-        ),
-    ))));
-    shape.setStrokeColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
-    shape.setLineWidth(2.0);
-    bview.layer().expect("Ebene").addSublayer(&shape);
-    border.setContentView(Some(&bview));
+    let border = area.map(|cocoa| {
+        let border_frame = NSRect::new(
+            CGPoint::new(cocoa.origin.x - margin, cocoa.origin.y - margin),
+            CGSize::new(
+                cocoa.size.width + 2.0 * margin,
+                cocoa.size.height + 2.0 * margin,
+            ),
+        );
+        let border = OverlayPanel::new(mtm, border_frame);
+        border.setIgnoresMouseEvents(true);
+        let bview = NSView::initWithFrame(
+            NSView::alloc(mtm),
+            NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size),
+        );
+        bview.setWantsLayer(true);
+        let shape = shape_layer(NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size));
+        shape.setPath(Some(&rect_path(CGRect::new(
+            CGPoint::new(1.0, 1.0),
+            CGSize::new(
+                border_frame.size.width - 2.0,
+                border_frame.size.height - 2.0,
+            ),
+        ))));
+        shape.setStrokeColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
+        shape.setLineWidth(2.0);
+        bview.layer().expect("Ebene").addSublayer(&shape);
+        border.setContentView(Some(&bview));
+        border
+    });
 
-    // Leiste unter dem Bereich, sonst darüber, sonst innen unten.
-    let vf = screen.visibleFrame();
-    let bx = (cocoa.origin.x + (w - BAR_WIDTH) / 2.0).clamp(
-        vf.origin.x + 4.0,
-        vf.origin.x + vf.size.width - BAR_WIDTH - 4.0,
-    );
-    let below = cocoa.origin.y - margin - 10.0 - BAR_HEIGHT;
-    let above = cocoa.origin.y + h + margin + 10.0;
-    let by = if below >= vf.origin.y {
-        below
-    } else if above + BAR_HEIGHT <= vf.origin.y + vf.size.height {
-        above
-    } else {
-        cocoa.origin.y + 12.0
+    let bar_width = 14.0 + BAR_STATUS_WIDTH + buttons.len() as f64 * (BAR_BUTTON_WIDTH + BAR_GAP);
+    // Unter dem Bereich, sonst darüber, sonst innen unten.
+    let (bx, by) = match area {
+        Some(cocoa) => {
+            let bx = (cocoa.origin.x + (cocoa.size.width - bar_width) / 2.0).clamp(
+                vf.origin.x + 4.0,
+                vf.origin.x + vf.size.width - bar_width - 4.0,
+            );
+            let below = cocoa.origin.y - margin - 10.0 - BAR_HEIGHT;
+            let above = cocoa.origin.y + cocoa.size.height + margin + 10.0;
+            let by = if below >= vf.origin.y {
+                below
+            } else if above + BAR_HEIGHT <= vf.origin.y + vf.size.height {
+                above
+            } else {
+                cocoa.origin.y + 12.0
+            };
+            (bx, by)
+        }
+        None => (
+            vf.origin.x + (vf.size.width - bar_width) / 2.0,
+            vf.origin.y + 24.0,
+        ),
     };
-    let bar_frame = NSRect::new(CGPoint::new(bx, by), CGSize::new(BAR_WIDTH, BAR_HEIGHT));
+    let bar_frame = NSRect::new(CGPoint::new(bx, by), CGSize::new(bar_width, BAR_HEIGHT));
     let bar = OverlayPanel::new(mtm, bar_frame);
     bar.setHasShadow(true);
-    let view = ScrollBarView::alloc(mtm).set_ivars(BarIvars { on_action });
-    let view: Retained<ScrollBarView> = unsafe {
+
+    let ranges: Vec<(f64, f64)> = (0..buttons.len())
+        .map(|i| {
+            let x = 14.0 + BAR_STATUS_WIDTH + i as f64 * (BAR_BUTTON_WIDTH + BAR_GAP);
+            (x, x + BAR_BUTTON_WIDTH)
+        })
+        .collect();
+    let view = BarView::alloc(mtm).set_ivars(BarIvars {
+        buttons: ranges.clone(),
+        on_click,
+    });
+    let view: Retained<BarView> = unsafe {
         msg_send![super(view), initWithFrame: NSRect::new(CGPoint::new(0.0, 0.0), bar_frame.size)]
     };
     view.setWantsLayer(true);
@@ -864,54 +939,100 @@ pub(crate) fn open_scroll_ui(
         unsafe { l.setString(Some(as_any(&ns))) };
         l
     };
-    let status = text(
+    let status_layer = text(
         CGRect::new(
             CGPoint::new(14.0, 13.0),
-            CGSize::new(FINISH_X.0 - 20.0, 18.0),
+            CGSize::new(BAR_STATUS_WIDTH - 6.0, 18.0),
         ),
-        labels.0,
+        status,
         13.0,
     );
-    root.addSublayer(&status);
+    root.addSublayer(&status_layer);
 
-    let finish_bg = CALayer::new();
-    finish_bg.setFrame(CGRect::new(
-        CGPoint::new(FINISH_X.0, 8.0),
-        CGSize::new(FINISH_X.1 - FINISH_X.0, 28.0),
-    ));
-    finish_bg.setBackgroundColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
-    finish_bg.setCornerRadius(6.0);
-    root.addSublayer(&finish_bg);
-    let finish = text(
-        CGRect::new(
-            CGPoint::new(FINISH_X.0, 13.0),
-            CGSize::new(FINISH_X.1 - FINISH_X.0, 18.0),
-        ),
-        labels.1,
-        13.0,
-    );
-    finish.setAlignmentMode(unsafe { kCAAlignmentCenter });
-    root.addSublayer(&finish);
-    let cancel = text(
-        CGRect::new(
-            CGPoint::new(CANCEL_X.0, 13.0),
-            CGSize::new(CANCEL_X.1 - CANCEL_X.0, 18.0),
-        ),
-        labels.2,
-        13.0,
-    );
-    cancel.setAlignmentMode(unsafe { kCAAlignmentCenter });
-    cancel.setForegroundColor(Some(&CGColor::new_srgb(0.8, 0.8, 0.8, 1.0)));
-    root.addSublayer(&cancel);
+    let mut labels = Vec::new();
+    for ((label, primary), (x0, x1)) in buttons.iter().zip(&ranges) {
+        let button_bg = CALayer::new();
+        button_bg.setFrame(CGRect::new(
+            CGPoint::new(*x0, 8.0),
+            CGSize::new(x1 - x0, 28.0),
+        ));
+        let color = if *primary {
+            CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)
+        } else {
+            CGColor::new_srgb(1.0, 1.0, 1.0, 0.12)
+        };
+        button_bg.setBackgroundColor(Some(&color));
+        button_bg.setCornerRadius(6.0);
+        root.addSublayer(&button_bg);
+        let l = text(
+            CGRect::new(CGPoint::new(*x0, 13.0), CGSize::new(x1 - x0, 18.0)),
+            label,
+            13.0,
+        );
+        l.setAlignmentMode(unsafe { kCAAlignmentCenter });
+        root.addSublayer(&l);
+        labels.push(l);
+    }
 
     bar.setContentView(Some(&view));
-    border.orderFrontRegardless();
+    if let Some(border) = &border {
+        border.orderFrontRegardless();
+    }
     bar.orderFrontRegardless();
-    Ok(ScrollUi {
+    Ok(Bar {
         border,
         bar,
-        status,
+        status: status_layer,
+        labels,
     })
+}
+
+pub(crate) fn open_scroll_ui(
+    display_id: u32,
+    rect: (u32, u32, u32, u32),
+    labels: (&str, &str, &str),
+    on_action: Box<dyn Fn(ScrollAction)>,
+) -> Result<ScrollUi, OverlayError> {
+    open_bar(
+        display_id,
+        Some(rect),
+        labels.0,
+        &[(labels.1, true), (labels.2, false)],
+        Box::new(move |i| {
+            on_action(if i == 0 {
+                ScrollAction::Finish
+            } else {
+                ScrollAction::Cancel
+            })
+        }),
+    )
+    .map(ScrollUi)
+}
+
+pub(crate) fn open_record_ui(
+    display_id: u32,
+    rect: Option<(u32, u32, u32, u32)>,
+    labels: &RecordLabels<'_>,
+    on_action: Box<dyn Fn(RecordAction)>,
+) -> Result<RecordUi, OverlayError> {
+    open_bar(
+        display_id,
+        rect,
+        labels.status,
+        &[
+            (labels.pause, false),
+            (labels.stop, true),
+            (labels.cancel, false),
+        ],
+        Box::new(move |i| {
+            on_action(match i {
+                0 => RecordAction::Pause,
+                1 => RecordAction::Stop,
+                _ => RecordAction::Cancel,
+            })
+        }),
+    )
+    .map(RecordUi)
 }
 
 // --- Schnellzugriff-Vorschau ---------------------------------------------------

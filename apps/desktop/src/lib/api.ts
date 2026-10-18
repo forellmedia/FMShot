@@ -14,11 +14,14 @@ import {
   type GalleryResult,
   type GalleryQuery,
   type HotkeyInfo,
+  type MainView,
+  type Microphone,
   type Settings,
+  type VideoSettings,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Settings };
+export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Microphone, Settings, VideoSettings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -102,6 +105,22 @@ export const api = {
   contentSearchStatus: (): Promise<ContentSearchStatus> =>
     isTauri ? unwrap(commands.contentSearchStatus()) : Promise.resolve({ available: true, done: 3, total: 4 }),
   reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
+  copyVideo: (id: string): Promise<null> => (isTauri ? unwrap(commands.copyVideo(id)) : Promise.resolve(null)),
+  saveVideoAs: (id: string): Promise<string | null> =>
+    isTauri ? unwrap(commands.saveVideoAs(id)) : Promise.resolve(null),
+  openMain: (view: MainView): Promise<void> => (isTauri ? commands.openMain(view) : Promise.resolve()),
+  quitApp: (): Promise<void> => (isTauri ? commands.quitApp() : Promise.resolve()),
+  listMicrophones: (): Promise<Microphone[]> =>
+    isTauri
+      ? commands.listMicrophones()
+      : Promise.resolve([
+          { id: "builtin", name: "MacBook Pro-Mikrofon" },
+          { id: "usb", name: "USB-Headset" },
+        ]),
+  getLaunchAtLogin: (): Promise<boolean> =>
+    isTauri ? commands.getLaunchAtLogin() : Promise.resolve(mock.launchAtLogin),
+  setLaunchAtLogin: (enabled: boolean): Promise<null> =>
+    isTauri ? unwrap(commands.setLaunchAtLogin(enabled)) : Promise.resolve((mock.launchAtLogin = enabled, null)),
   appInfo: () => (isTauri ? commands.appInfo() : Promise.resolve({ version: "0.1.0", platform: "browser", arch: "" })),
 };
 
@@ -166,7 +185,7 @@ const mock = (() => {
         id,
         // Über mehrere Tage verteilt, damit die Galerie Tage gruppiert.
         createdAt: Date.now() - (sizes.length - i) * 31 * 3_600_000,
-        mode: ["region", "window", "screen", "scroll"][i],
+        mode: ["video", "window", "screen", "scroll"][i],
         width: w,
         height: h,
         scaleFactor: 2,
@@ -174,6 +193,8 @@ const mock = (() => {
         originalPath: path,
         thumbnailPath: path,
         dir: "mock",
+        durationMs: i === 0 ? 83_000 : null,
+        videoPath: i === 0 ? path : null,
       });
     });
   }
@@ -191,13 +212,16 @@ const mock = (() => {
       retention_days: null,
       save_format: "png",
       content_search: true,
+      video: { target: "region", microphone: true, microphone_id: null, system_audio: true, countdown: true, fps: 30 },
     } as Settings,
+    launchAtLogin: false,
     hotkeys: [
       { action: "capture_region", shortcut: "Primary+Shift+2", label: "⇧⌘2", conflict: false },
       { action: "capture_screen", shortcut: "Primary+Shift+1", label: "⇧⌘1", conflict: false },
       { action: "capture_window", shortcut: "Primary+Alt+3", label: "⌥⌘3", conflict: false },
       { action: "capture_scroll", shortcut: "Primary+Alt+4", label: "⌥⌘4", conflict: false },
       { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
+      { action: "capture_video", shortcut: "Primary+Shift+6", label: "⇧⌘6", conflict: false },
       { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
     ] as HotkeyInfo[],
     async query(q: GalleryQuery): Promise<GalleryResult> {

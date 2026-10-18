@@ -39,6 +39,16 @@ export const commands = {
 	revealCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("reveal_capture", { id })),
 	/**  Aufnahme aus der Oberfläche starten (z. B. Knopf im Editor). */
 	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),
+	/**  Legt das Video als Datei in die Zwischenablage. */
+	copyVideo: (id: string) => typedError<null, string>(__TAURI_INVOKE("copy_video", { id })),
+	/**  Fragt nach dem Ziel und kopiert das Video dorthin (`None` = abgebrochen). */
+	saveVideoAs: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("save_video_as", { id })),
+	openMain: (view: MainView) => __TAURI_INVOKE<void>("open_main", { view }),
+	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
+	listMicrophones: () => __TAURI_INVOKE<Microphone[]>("list_microphones"),
+	/**  Startet FMShot mit der Anmeldung am Computer? */
+	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
+	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	getSettings: () => __TAURI_INVOKE<Settings>("get_settings"),
 	/**  Speichert und wendet sofort an (Tastenkürzel, Sprache, Tray-Menü). */
 	setSettings: (settings: Settings) => typedError<null, string>(__TAURI_INVOKE("set_settings", { settings })),
@@ -152,9 +162,12 @@ export type CaptureInfo = {
 	thumbnailPath: string,
 	/**  Monatsordner; hineingezogene Bilder liegen als `<id>_asset_<hash>.png` darin. */
 	dir: string,
+	/**  Nur bei Videos: Länge in Millisekunden und das abspielbare MP4. */
+	durationMs: number | null,
+	videoPath: string | null,
 };
 
-export type CaptureMode = "region" | "window" | "screen" | "scroll" | "text";
+export type CaptureMode = "region" | "window" | "screen" | "scroll" | "text" | "video";
 
 /**  Farbe mit gerader (nicht vormultiplizierter) Deckkraft. */
 export type Color = {
@@ -380,6 +393,15 @@ export type LineStyle = "solid" | "dashed" | "dotted" |
 /**  Zwei parallele Linien. */
 "double";
 
+/**  Was das Tray-Fenster im Hauptfenster öffnen kann. */
+export type MainView = "gallery" | "settings" | "library";
+
+/**  Ein Mikrofon für die Auswahl im Video-Tab. */
+export type Microphone = {
+	id: string,
+	name: string,
+};
+
 /**  Ein erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = {
 	text: string,
@@ -432,6 +454,7 @@ export type Settings = {
 	 *  (ADR 0010). Läuft im Hintergrund.
 	 */
 	content_search?: boolean,
+	video?: VideoSettings,
 };
 
 /**  Schatten unter einer Ebene (z. B. Screenshot auf Hintergrund). */
@@ -478,6 +501,28 @@ export type UpdateInfo = {
 
 /**  Senkrechte Ausrichtung von Text in seinem Kasten. */
 export type VerticalAlign = "top" | "middle" | "bottom";
+
+/**  Einstellungen der Video-Aufnahme (ADR 0011). */
+export type VideoSettings = {
+	target?: VideoTarget,
+	microphone?: boolean,
+	/**  `None` = Standard-Mikrofon des Systems. */
+	microphone_id?: string | null,
+	system_audio?: boolean,
+	/**  3-Sekunden-Countdown vor dem Start. */
+	countdown?: boolean,
+	/**  Bilder pro Sekunde: 30 oder 60. */
+	fps?: number,
+};
+
+/**  Was bei einer Video-Aufnahme aufgenommen wird. */
+export type VideoTarget = 
+/**  Bereich aufziehen. */
+"region" | 
+/**  Fenster anklicken. */
+"window" | 
+/**  Ganzer Bildschirm unter der Maus. */
+"screen";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

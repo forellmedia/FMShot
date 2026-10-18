@@ -10,8 +10,8 @@ use rusqlite::Connection;
 use crate::encode::{encode_png, encode_webp, thumbnail};
 use crate::index::{self, CaptureQuery, CaptureRecord};
 use crate::{
-    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, month_dir, original_file,
-    thumbnail_file,
+    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, microphone_file, month_dir,
+    original_file, screen_file, system_audio_file, thumbnail_file, video_file,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +39,33 @@ pub struct NewCapture {
     pub mode: String,
     /// Unix-Zeit in Millisekunden
     pub created_at_ms: i64,
+}
+
+/// Platz für eine Video-Aufnahme, die gerade läuft. Die ID ist reserviert;
+/// in die Galerie kommt sie erst mit [`Library::save_video`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoSlot {
+    pub id: String,
+    pub dir: PathBuf,
+    pub created_at_ms: i64,
+}
+
+impl VideoSlot {
+    pub fn screen_path(&self) -> PathBuf {
+        self.dir.join(screen_file(&self.id))
+    }
+
+    pub fn system_audio_path(&self) -> PathBuf {
+        self.dir.join(system_audio_file(&self.id))
+    }
+
+    pub fn microphone_path(&self) -> PathBuf {
+        self.dir.join(microphone_file(&self.id))
+    }
+
+    pub fn video_path(&self) -> PathBuf {
+        self.dir.join(video_file(&self.id))
+    }
 }
 
 /// Die Bibliothek aller Aufnahmen. Darf zwischen Threads geteilt werden
@@ -101,9 +128,61 @@ impl Library {
             scale_factor: capture.scale_factor,
             dir,
             starred: false,
+            duration_ms: None,
         };
         index::insert(&self.lock(), &self.root, &record)?;
         Ok(record)
+    }
+
+    /// Reserviert eine ID für ein Video, das gleich aufgenommen wird.
+    pub fn reserve_video(&self, created_at_ms: i64) -> Result<VideoSlot> {
+        let (id, dir) = self.reserve_id(created_at_ms)?;
+        Ok(VideoSlot {
+            id: id.to_string(),
+            dir,
+            created_at_ms,
+        })
+    }
+
+    /// Nimmt ein fertiges Video in die Galerie auf. `poster` ist ein
+    /// Standbild daraus (Vorschau, Texterkennung, Bildinhalt).
+    pub fn save_video(
+        &self,
+        slot: &VideoSlot,
+        poster: &RgbaImage,
+        scale_factor: f32,
+        duration_ms: i64,
+    ) -> Result<CaptureRecord> {
+        let id = slot.id.clone();
+        let png =
+            encode_png(poster, scale_factor).map_err(|e| LibraryError::Encode(e.to_string()))?;
+        write_atomic(&slot.dir.join(original_file(&id)), &png)?;
+        let doc = Document::from_capture_scaled(poster.width(), poster.height(), scale_factor);
+        write_atomic(
+            &slot.dir.join(document_file(&id)),
+            &serde_json::to_vec_pretty(&doc)?,
+        )?;
+        let thumb = encode_webp(&thumbnail(poster, THUMBNAIL_MAX))
+            .map_err(|e| LibraryError::Encode(e.to_string()))?;
+        write_atomic(&slot.dir.join(thumbnail_file(&id)), &thumb)?;
+        let record = CaptureRecord {
+            id,
+            created_at_ms: slot.created_at_ms,
+            mode: "video".into(),
+            width: poster.width(),
+            height: poster.height(),
+            scale_factor,
+            dir: slot.dir.clone(),
+            starred: false,
+            duration_ms: Some(duration_ms),
+        };
+        index::insert(&self.lock(), &self.root, &record)?;
+        Ok(record)
+    }
+
+    /// Verwirft ein abgebrochenes Video samt Reservierung.
+    pub fn discard_video(&self, slot: &VideoSlot) {
+        remove_files_of(&slot.dir, &slot.id);
     }
 
     /// Neueste Aufnahmen zuerst.
@@ -262,10 +341,7 @@ impl Library {
         let rec = self.get(id)?;
         for entry in fs::read_dir(&rec.dir)? {
             let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let belongs = name == document_file(id) || name.starts_with(&format!("{id}_"));
-            if belongs {
+            if belongs_to(&entry.file_name().to_string_lossy(), id) {
                 fs::remove_file(entry.path())?;
             }
         }
@@ -332,6 +408,22 @@ fn migrate(conn: &Connection, root: &Path) -> Result<()> {
         index::set_version(conn, index::SCHEMA_VERSION)?;
     }
     Ok(())
+}
+
+/// Gehört die Datei zur Aufnahme `id`?
+fn belongs_to(name: &str, id: &str) -> bool {
+    name == document_file(id) || name.starts_with(&format!("{id}_"))
+}
+
+fn remove_files_of(dir: &Path, id: &str) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if belongs_to(&entry.file_name().to_string_lossy(), id) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn move_if_exists(from: &Path, to: &Path) -> io::Result<()> {
@@ -402,6 +494,36 @@ mod tests {
         let doc = lib.load_document(id).unwrap();
         assert_eq!(doc.artboard.rect.width, 640.0);
         assert_eq!(lib.recent(10).unwrap(), vec![rec]);
+    }
+
+    #[test]
+    fn video_kommt_mit_dauer_in_die_galerie_und_wird_ganz_geloescht() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let slot = lib.reserve_video(1_792_172_712_083).unwrap();
+        fs::write(slot.screen_path(), b"mp4").unwrap();
+        fs::write(slot.microphone_path(), b"m4a").unwrap();
+        fs::write(slot.video_path(), b"mp4").unwrap();
+        let poster = RgbaImage::filled(320, 200, [0, 0, 0, 255]);
+        let rec = lib.save_video(&slot, &poster, 2.0, 12_345).unwrap();
+
+        assert!(rec.is_video());
+        assert_eq!(rec.video_path(), slot.video_path());
+        assert_eq!(lib.get(&rec.id).unwrap().duration_ms, Some(12_345));
+
+        lib.delete(&rec.id).unwrap();
+        assert!(files(&slot.dir).is_empty());
+    }
+
+    #[test]
+    fn abgebrochenes_video_hinterlaesst_nichts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let slot = lib.reserve_video(1_000).unwrap();
+        fs::write(slot.screen_path(), b"mp4").unwrap();
+        lib.discard_video(&slot);
+        assert!(files(&slot.dir).is_empty());
+        assert!(lib.recent(10).unwrap().is_empty());
     }
 
     #[test]

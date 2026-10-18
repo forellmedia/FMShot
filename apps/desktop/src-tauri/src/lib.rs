@@ -12,6 +12,7 @@ mod services;
 mod settings;
 mod tray;
 mod updater;
+mod video;
 mod vision;
 
 use std::sync::Arc;
@@ -40,6 +41,13 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         editor::set_starred,
         editor::reveal_capture,
         editor::start_capture,
+        editor::copy_video,
+        editor::save_video_as,
+        tray::open_main,
+        tray::quit_app,
+        tray::list_microphones,
+        tray::get_launch_at_login,
+        tray::set_launch_at_login,
         settings::get_settings,
         settings::set_settings,
         settings::get_hotkeys,
@@ -76,6 +84,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Mit der Anmeldung starten (Einstellungen). macOS: LaunchAgent.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -98,6 +111,8 @@ pub fn run() {
 
             app.manage(editor::EditorState::new());
             app.manage(scroll::ScrollState::default());
+            app.manage(video::VideoState::default());
+            app.manage(tray::PopoverState::default());
             app.manage(services::Services::new());
             app.manage(vision::VisionState::new(app.handle()));
             app.state::<capture::CaptureState>().capturer.warm_up();
@@ -116,14 +131,18 @@ pub fn run() {
             // Fenster schliessen = verstecken; die App läuft im Tray weiter.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                tray::hide_main_window(window.app_handle());
+                if window.label() == tray::POPOVER {
+                    tray::hide_popover(window.app_handle());
+                } else {
+                    tray::hide_main_window(window.app_handle());
+                }
             }
         })
         .run(tauri::generate_context!())
         .expect("FMShot konnte nicht gestartet werden");
 }
 
-/// Befehle aus der Kommandozeile: `capture region|screen|window|scroll|text`
+/// Befehle aus der Kommandozeile: `capture region|screen|window|scroll|text|video`
 /// oder `gallery`.
 fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
     let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
@@ -133,6 +152,7 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
         ["capture", "window", ..] => Some(capture::Mode::Window),
         ["capture", "scroll", ..] => Some(capture::Mode::Scroll),
         ["capture", "text", ..] => Some(capture::Mode::Text),
+        ["capture", "video", ..] => Some(capture::Mode::Video),
         ["gallery", ..] => {
             tray::show_main_window(app);
             None

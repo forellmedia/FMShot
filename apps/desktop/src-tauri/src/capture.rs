@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fmshot_capture::{Frame, ScreenCapturer, display_at};
+use fmshot_capture::{Frame, PrivacyPane, ScreenCapturer, display_at};
 use fmshot_core::RgbaImage;
 use fmshot_library::{CaptureRecord, Library, NewCapture};
 use fmshot_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
@@ -54,6 +54,8 @@ pub enum Mode {
     Scroll,
     /// Bereich wählen, FMShot scrollt selbst.
     ScrollAuto,
+    /// Video (ADR 0011) – Ziel aus den Einstellungen.
+    Video,
 }
 
 impl Mode {
@@ -72,6 +74,7 @@ impl Mode {
             Mode::Screen => "screen",
             Mode::Text => "text",
             Mode::Scroll | Mode::ScrollAuto => "scroll",
+            Mode::Video => "video",
         }
     }
 }
@@ -97,29 +100,34 @@ pub fn start(app: &AppHandle, mode: Mode) {
     if matches!(mode, Mode::Scroll | Mode::ScrollAuto) && crate::scroll::finish_running(app) {
         return;
     }
+    // Zweites Drücken während eines Videos = „Stopp“.
+    if mode == Mode::Video && crate::video::stop_running(app) {
+        return;
+    }
     let state = app.state::<CaptureState>();
     if state.busy.swap(true, Ordering::AcqRel) {
         return;
     }
     if !state.capturer.has_permission() {
         release(app);
-        // macOS zeigt sein eigenes Fenster nur bei der ersten Anfrage. Dann
-        // genügt das; erst danach braucht es den eigenen Hinweis.
-        if first_permission_request(app) {
+        // Beim ersten Mal fragt macOS mit eigenem Fenster (mit Knopf zu den
+        // Einstellungen). Danach fragt es nicht mehr – dann direkt dorthin.
+        if first_permission_request(app, "screen") {
             state.capturer.request_permission();
         } else {
-            show_permission_dialog(app);
+            open_privacy_settings(app, PrivacyPane::ScreenCapture);
         }
         return;
     }
     if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
-        state.capturer.request_input_permission();
         release(app);
-        show_info(
-            app,
-            &t("scroll.permission_title", &[]),
-            &t("scroll.permission_body", &[]),
-        );
+        // Trägt FMShot in die Liste „Bedienungshilfen“ ein (beim ersten Mal
+        // mit Systemfenster); die Einstellungen öffnen wir direkt.
+        let first = first_permission_request(app, "input");
+        state.capturer.request_input_permission();
+        if !first {
+            open_privacy_settings(app, PrivacyPane::Accessibility);
+        }
         return;
     }
     match mode {
@@ -128,6 +136,11 @@ pub fn start(app: &AppHandle, mode: Mode) {
         }
         Mode::Window => start_window(app),
         Mode::Screen => start_screen(app),
+        Mode::Video => {
+            // Das Video verwaltet seinen Zustand selbst.
+            release(app);
+            crate::video::start(app, None);
+        }
     }
 }
 
@@ -447,13 +460,13 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Erste Anfrage nach der Bildschirmaufnahme-Freigabe? Merkt sie sich in
-/// einer Markierungsdatei im Konfigurationsordner.
-fn first_permission_request(app: &AppHandle) -> bool {
+/// Erste Anfrage nach einer Freigabe (`screen`, `input`, …)? Merkt sie sich
+/// in einer Markierungsdatei im Konfigurationsordner.
+pub fn first_permission_request(app: &AppHandle, kind: &str) -> bool {
     let Ok(dir) = app.path().app_config_dir() else {
         return true;
     };
-    let marker = dir.join("screen-permission-requested");
+    let marker = dir.join(format!("{kind}-permission-requested"));
     if marker.exists() {
         return false;
     }
@@ -463,32 +476,16 @@ fn first_permission_request(app: &AppHandle) -> bool {
     true
 }
 
-fn show_permission_dialog(app: &AppHandle) {
-    let opener = app.clone();
-    app.dialog()
-        .message(t("permission.body", &[]))
-        .title(t("permission.title", &[]))
-        .kind(MessageDialogKind::Info)
-        .show(move |_| {
-            #[cfg(target_os = "macos")]
-            {
-                use tauri_plugin_opener::OpenerExt;
-                let url =
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-                if let Err(e) = opener.opener().open_url(url, None::<&str>) {
-                    log::error!("Systemeinstellungen öffnen: {e}");
-                }
-            }
-            let _ = &opener;
-        });
-}
-
-pub fn show_info(app: &AppHandle, title: &str, body: &str) {
-    app.dialog()
-        .message(body)
-        .title(title)
-        .kind(MessageDialogKind::Info)
-        .show(|_| {});
+/// Öffnet direkt die passende Stelle der Systemeinstellungen – ohne eigenen
+/// Hinweis dazwischen.
+pub fn open_privacy_settings(app: &AppHandle, pane: PrivacyPane) {
+    use tauri_plugin_opener::OpenerExt;
+    let Some(url) = fmshot_capture::privacy_settings_url(pane) else {
+        return;
+    };
+    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+        log::error!("Systemeinstellungen öffnen: {e}");
+    }
 }
 
 pub fn show_error(app: &AppHandle, error: &str) {

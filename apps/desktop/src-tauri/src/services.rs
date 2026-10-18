@@ -185,7 +185,14 @@ fn show_preview(
             .map(|(x, y)| PreviewPlacement::At(x as f64, y as f64))
             .unwrap_or(PreviewPlacement::Corner),
     };
-    let file = rec.original_path().to_string_lossy().into_owned();
+    // Ein Video wird als Video in andere Apps gezogen.
+    let file = if rec.is_video() {
+        rec.video_path()
+    } else {
+        rec.original_path()
+    }
+    .to_string_lossy()
+    .into_owned();
     let labels = [
         t("preview.copy", &[]),
         t("preview.save", &[]),
@@ -280,6 +287,10 @@ pub fn flattened(app: &AppHandle, library: &Library, id: &str) -> Result<RgbaIma
 
 fn copy_flattened(app: &AppHandle, id: &str) -> Result<(), String> {
     let library = app.state::<CaptureState>().library.clone();
+    let rec = library.get(id).map_err(|e| e.to_string())?;
+    if rec.is_video() {
+        return fmshot_clipboard::copy_file(&rec.video_path()).map_err(|e| e.to_string());
+    }
     let doc = library.load_document(id).map_err(|e| e.to_string())?;
     let img = flattened(app, &library, id)?;
     fmshot_clipboard::copy_image(&img, doc.pixel_ratio).map_err(|e| e.to_string())
@@ -301,14 +312,29 @@ pub fn export(
                 Some(f) => PathBuf::from(f),
                 None => app.path().desktop_dir().map_err(|e| e.to_string())?,
             };
-            unique(&folder.join(export_file_name(
-                &settings.pattern,
-                &rec.id,
-                &rec.mode,
-                settings.format,
-            )))
+            let name = export_file_name(&settings.pattern, &rec.id, &rec.mode, settings.format);
+            let name = if rec.is_video() {
+                Path::new(&name)
+                    .with_extension("mp4")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                name
+            };
+            unique(&folder.join(name))
         }
     };
+    // Videos werden nicht bearbeitet – die Datei wird nur kopiert.
+    if rec.is_video() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(rec.video_path(), &path).map_err(|e| e.to_string())?;
+        library
+            .set_export_path(&rec.id, &path)
+            .map_err(|e| e.to_string())?;
+        return Ok(path);
+    }
     let owned;
     let img = match image {
         Some(i) => i,

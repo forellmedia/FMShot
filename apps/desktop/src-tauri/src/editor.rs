@@ -44,6 +44,9 @@ pub struct CaptureInfo {
     pub thumbnail_path: String,
     /// Monatsordner; hineingezogene Bilder liegen als `<id>_asset_<hash>.png` darin.
     pub dir: String,
+    /// Nur bei Videos: Länge in Millisekunden und das abspielbare MP4.
+    pub duration_ms: Option<f64>,
+    pub video_path: Option<String>,
 }
 
 impl From<&CaptureRecord> for CaptureInfo {
@@ -59,6 +62,10 @@ impl From<&CaptureRecord> for CaptureInfo {
             original_path: r.original_path().to_string_lossy().into_owned(),
             thumbnail_path: r.thumbnail_path().to_string_lossy().into_owned(),
             dir: r.dir.to_string_lossy().into_owned(),
+            duration_ms: r.duration_ms.map(|d| d as f64),
+            video_path: r
+                .is_video()
+                .then(|| r.video_path().to_string_lossy().into_owned()),
         }
     }
 }
@@ -78,6 +85,7 @@ pub enum CaptureMode {
     Screen,
     Scroll,
     Text,
+    Video,
 }
 
 fn library(app: &AppHandle) -> std::sync::Arc<Library> {
@@ -190,6 +198,37 @@ pub async fn export_document(
             ExportFormat::Jpg => fmshot_library::encode_jpeg(&img, 90)?,
         };
         std::fs::write(&path, bytes).map_err(err)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Legt das Video als Datei in die Zwischenablage.
+#[tauri::command]
+#[specta::specta]
+pub fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
+    let rec = library(&app).get(&id).map_err(err)?;
+    fmshot_clipboard::copy_file(&rec.video_path()).map_err(err)
+}
+
+/// Fragt nach dem Ziel und kopiert das Video dorthin (`None` = abgebrochen).
+#[tauri::command]
+#[specta::specta]
+pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let rec = library(&app).get(&id).map_err(err)?;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_file_name(format!("FMShot {id}.mp4"))
+            .add_filter("MP4", &["mp4"])
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(err)?;
+        std::fs::copy(rec.video_path(), &path).map_err(err)?;
         Ok(Some(path.to_string_lossy().into_owned()))
     })
     .await
@@ -339,9 +378,11 @@ pub fn start_capture(app: AppHandle, mode: CaptureMode) {
         CaptureMode::Screen => capture::Mode::Screen,
         CaptureMode::Scroll => capture::Mode::scroll(&app),
         CaptureMode::Text => capture::Mode::Text,
+        CaptureMode::Video => capture::Mode::Video,
     };
     // Fenster erst verstecken, damit es nicht im Bild ist.
     crate::tray::hide_main_window(&app);
+    crate::tray::hide_popover(&app);
     let app2 = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(150));

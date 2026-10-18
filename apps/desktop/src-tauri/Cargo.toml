@@ -27,11 +27,13 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 fmshot-capture.workspace = true
 fmshot-clipboard.workspace = true
 fmshot-core = { workspace = true, features = ["specta"] }
 fmshot-hotkeys.workspace = true
 fmshot-library.workspace = true
+fmshot-media.workspace = true
 fmshot-ocr.workspace = true
 fmshot-overlay.workspace = true
 fmshot-render.workspace = true

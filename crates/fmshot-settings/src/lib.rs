@@ -49,6 +49,48 @@ pub enum ImageFormat {
     Jpg,
 }
 
+/// Was bei einer Video-Aufnahme aufgenommen wird.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum VideoTarget {
+    /// Bereich aufziehen.
+    Region,
+    /// Fenster anklicken.
+    Window,
+    /// Ganzer Bildschirm unter der Maus.
+    Screen,
+}
+
+/// Einstellungen der Video-Aufnahme (ADR 0011).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(default)]
+pub struct VideoSettings {
+    pub target: VideoTarget,
+    pub microphone: bool,
+    /// `None` = Standard-Mikrofon des Systems.
+    pub microphone_id: Option<String>,
+    pub system_audio: bool,
+    /// 3-Sekunden-Countdown vor dem Start.
+    pub countdown: bool,
+    /// Bilder pro Sekunde: 30 oder 60.
+    pub fps: u32,
+}
+
+impl Default for VideoSettings {
+    fn default() -> Self {
+        Self {
+            target: VideoTarget::Region,
+            microphone: true,
+            microphone_id: None,
+            system_audio: true,
+            countdown: true,
+            fps: 30,
+        }
+    }
+}
+
 /// Jede Aufnahme zusätzlich als Datei in einen Ordner schreiben.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -96,6 +138,7 @@ pub struct Settings {
     /// Bildinhalt erkennen, damit die Suche auch „Wald“ oder „Hund“ findet
     /// (ADR 0010). Läuft im Hintergrund.
     pub content_search: bool,
+    pub video: VideoSettings,
 }
 
 impl Default for Settings {
@@ -112,6 +155,7 @@ impl Default for Settings {
             retention_days: None,
             save_format: ImageFormat::Png,
             content_search: true,
+            video: VideoSettings::default(),
         }
     }
 }
@@ -124,6 +168,7 @@ pub fn action_key(action: Action) -> &'static str {
         Action::CaptureWindow => "capture_window",
         Action::CaptureScroll => "capture_scroll",
         Action::CaptureText => "capture_text",
+        Action::CaptureVideo => "capture_video",
         Action::OpenGallery => "open_gallery",
     }
 }

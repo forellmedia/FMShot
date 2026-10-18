@@ -22,6 +22,8 @@ pub struct CaptureRecord {
     /// Absoluter Monatsordner, in dem die Dateien der Aufnahme liegen
     pub dir: PathBuf,
     pub starred: bool,
+    /// Nur bei Videos: Länge in Millisekunden.
+    pub duration_ms: Option<i64>,
 }
 
 pub(crate) fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -43,6 +45,7 @@ pub(crate) fn open(path: &Path) -> rusqlite::Result<Connection> {
     )?;
     add_column(&conn, "ocr_done", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "export_path", "TEXT")?;
+    add_column(&conn, "duration_ms", "INTEGER")?;
     conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS captures_fts USING fts5(
             id UNINDEXED,
@@ -413,8 +416,9 @@ pub(crate) fn set_dir(conn: &Connection, id: &str, rel_dir: &str) -> rusqlite::R
 pub(crate) fn insert(conn: &Connection, root: &Path, rec: &CaptureRecord) -> rusqlite::Result<()> {
     let rel = rec.dir.strip_prefix(root).unwrap_or(&rec.dir);
     conn.execute(
-        "INSERT INTO captures (id, created_at, mode, width, height, scale_factor, rel_dir, starred)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO captures
+         (id, created_at, mode, width, height, scale_factor, rel_dir, starred, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             rec.id,
             rec.created_at_ms,
@@ -424,12 +428,14 @@ pub(crate) fn insert(conn: &Connection, root: &Path, rec: &CaptureRecord) -> rus
             rec.scale_factor,
             rel.to_string_lossy(),
             rec.starred,
+            rec.duration_ms,
         ],
     )?;
     Ok(())
 }
 
-const COLUMNS: &str = "id, created_at, mode, width, height, scale_factor, rel_dir, starred";
+const COLUMNS: &str =
+    "id, created_at, mode, width, height, scale_factor, rel_dir, starred, duration_ms";
 
 fn row(root: &Path, r: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRecord> {
     Ok(CaptureRecord {
@@ -441,6 +447,7 @@ fn row(root: &Path, r: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRecord> {
         scale_factor: r.get(5)?,
         dir: root.join(r.get::<_, String>(6)?),
         starred: r.get(7)?,
+        duration_ms: r.get(8)?,
     })
 }
 

@@ -34,10 +34,12 @@ und neu öffnen.
 | Fenster           | ⌥⌘3    |
 | Scroll-Aufnahme   | ⌥⌘4 (nochmals drücken = Fertig) |
 | Text erfassen     | ⌥⌘5    |
+| Video             | ⇧⌘6 (nochmals drücken = Stopp) |
 | Galerie / Editor  | ⌥⌘G    |
 | Einstellungen     | ⌘, (im Editor) |
 
-Alle Aufnahmemodi gibt es auch im Menüleisten-Symbol.
+Klick aufs Menüleisten-Symbol öffnet das Tray-Fenster (Tabs Bild, Video,
+Einstellungen), Rechtsklick das klassische Menü.
 
 ## Checkliste
 
@@ -66,6 +68,33 @@ Alle Aufnahmemodi gibt es auch im Menüleisten-Symbol.
 - [ ] Ergebnis öffnet im Editor, ohne doppelte Zeilen
 - [ ] Einstellungen → Allgemein → Scroll-Aufnahme „FMShot scrollt
       automatisch“: fragt einmal nach **Bedienungshilfen**, scrollt dann selbst
+- [ ] Bedienungshilfen ausgeschaltet → erneuter Versuch öffnet **direkt**
+      Systemeinstellungen → Bedienungshilfen (kein eigenes FMShot-Fenster)
+
+### 4a. Tray-Fenster
+- [ ] Klick aufs Menüleisten-Symbol: Fenster erscheint direkt darunter
+- [ ] Klick daneben oder nochmals aufs Symbol schliesst es
+- [ ] Rechtsklick aufs Symbol: klassisches Menü (inkl. „Video aufnehmen“)
+- [ ] Tab **Bild**: jede Aufnahmeart startet, das Fenster ist dabei weg
+- [ ] Tab **Einstellungen**: „Beim Anmelden starten“ an → abmelden/anmelden
+      → FMShot läuft; „Alle Einstellungen öffnen …“ zeigt die Einstellungen
+
+### 4b. Video (⇧⌘6, ADR 0011 Etappe 1)
+- [ ] Tab **Video**: Bereich wählen, Mikrofon an → beim ersten Mal fragt
+      macOS nach dem Mikrofon
+- [ ] Countdown 3–2–1 in der Leiste, roter Rahmen um den Bereich
+- [ ] Leiste zeigt Zeit und Mikrofon-Pegel (sprechen → Balken)
+- [ ] Pause → Zeit steht, „Weiter“ → läuft weiter; im Video fehlt die Pause
+- [ ] Stopp (Leiste oder ⇧⌘6) → Vorschau erscheint, Video liegt in der
+      Zwischenablage (in Finder/Mail einfügen)
+- [ ] Galerie: Kachel mit ▶ und Dauer; öffnen spielt das Video mit Ton
+      (Mikrofon und Ton des Computers, z. B. YouTube im Hintergrund)
+- [ ] Leiste und Rahmen sind im Video nicht zu sehen
+- [ ] Ziel **Fenster**: Fenster anklicken, Fenster verschieben → Video folgt
+- [ ] Ziel **Vollbild**: ganzer Monitor unter der Maus, Leiste unten
+- [ ] „Abbrechen“ → kein Eintrag in der Galerie
+- [ ] Mikrofon in den Systemeinstellungen verbieten → Start öffnet direkt
+      Systemeinstellungen → Mikrofon
 
 ### 5. Editor
 - [ ] Werkzeuge: Pfeil (A), Linie (L), Rechteck (R), Ellipse (O),

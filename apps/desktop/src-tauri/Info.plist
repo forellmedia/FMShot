@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Wird von Tauri in die Info.plist der App übernommen (ADR 0011). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>FMShot nimmt bei Video-Aufnahmen auf Wunsch das Mikrofon auf.</string>
+</dict>
+</plist>

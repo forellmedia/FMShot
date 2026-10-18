@@ -13,6 +13,7 @@
   import PropertiesBar from "./PropertiesBar.svelte";
   import Settings from "./Settings.svelte";
   import Toolbar from "./Toolbar.svelte";
+  import VideoView from "./VideoView.svelte";
   import { toolByKey } from "./tools";
 
   onMount(() => {
@@ -225,22 +226,26 @@
   </header>
 
   <main>
-    <Toolbar />
-    {#if editor.doc}
-      <Canvas />
+    {#if editor.current?.videoPath}
+      <VideoView capture={editor.current} />
     {:else}
-      <div class="start">
-        <h1>FMShot</h1>
-        <p>{t("start.hint")}</p>
-        <div class="start-buttons">
-          <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>
-          <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>⌥⌘3</kbd></button>
-          <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>⇧⌘1</kbd></button>
-          <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>⌥⌘4</kbd></button>
+      <Toolbar />
+      {#if editor.doc}
+        <Canvas />
+      {:else}
+        <div class="start">
+          <h1>FMShot</h1>
+          <p>{t("start.hint")}</p>
+          <div class="start-buttons">
+            <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>
+            <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>⌥⌘3</kbd></button>
+            <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>⇧⌘1</kbd></button>
+            <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>⌥⌘4</kbd></button>
+          </div>
         </div>
-      </div>
+      {/if}
     {/if}
-    {#if editor.layersPanel && editor.doc}
+    {#if editor.layersPanel && editor.doc && !editor.current?.videoPath}
       <LayersPanel />
     {/if}
   </main>

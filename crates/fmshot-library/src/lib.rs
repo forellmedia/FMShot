@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use encode::{encode_jpeg, encode_png, thumbnail};
 pub use index::{CaptureQuery, CaptureRecord};
-pub use store::{Library, LibraryError, NewCapture};
+pub use store::{Library, LibraryError, NewCapture, VideoSlot};
 
 /// Längste Kante der Vorschaubilder in Pixeln.
 pub const THUMBNAIL_MAX: u32 = 320;
@@ -98,6 +98,27 @@ pub fn asset_file(id: &str, hash: &str) -> String {
     format!("{id}_asset_{hash}.png")
 }
 
+/// Video (ADR 0011): Bildschirm-Spur, wie aufgenommen.
+pub fn screen_file(id: &str) -> String {
+    format!("{id}_screen.mp4")
+}
+
+/// Video: Ton des Systems.
+pub fn system_audio_file(id: &str) -> String {
+    format!("{id}_system.m4a")
+}
+
+/// Video: Mikrofon.
+pub fn microphone_file(id: &str) -> String {
+    format!("{id}_mic.m4a")
+}
+
+/// Video: alle Spuren zusammengeführt, überall abspielbar. Das Standbild
+/// liegt als `_original.png` daneben (Galerie, Suche).
+pub fn video_file(id: &str) -> String {
+    format!("{id}_video.mp4")
+}
+
 impl CaptureRecord {
     pub fn document_path(&self) -> PathBuf {
         self.dir.join(document_file(&self.id))
@@ -113,6 +134,15 @@ impl CaptureRecord {
 
     pub fn asset_path(&self, hash: &str) -> PathBuf {
         self.dir.join(asset_file(&self.id, hash))
+    }
+
+    pub fn is_video(&self) -> bool {
+        self.mode == "video"
+    }
+
+    /// Das abspielbare Video (nur bei Videos).
+    pub fn video_path(&self) -> PathBuf {
+        self.dir.join(video_file(&self.id))
     }
 }
 

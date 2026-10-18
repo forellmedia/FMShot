@@ -50,6 +50,20 @@ pub fn copy_text(text: &str) -> Result<(), ClipboardError> {
         .map_err(|e| ClipboardError::Unavailable(e.to_string()))
 }
 
+/// Legt eine Datei in die Zwischenablage (z. B. ein Video) – Einfügen in
+/// Finder, Mail oder Chat-Apps fügt die Datei ein.
+pub fn copy_file(path: &std::path::Path) -> Result<(), ClipboardError> {
+    #[cfg(target_os = "macos")]
+    return macos::copy_file(path);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err(ClipboardError::Unavailable(
+            "Dateien kopieren folgt auf dieser Plattform".into(),
+        ))
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -58,9 +72,21 @@ mod macos {
     use objc2::AllocAnyThread;
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{NSImage, NSPasteboard, NSPasteboardTypeString};
-    use objc2_foundation::{NSArray, NSData, NSString};
+    use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
     use super::*;
+
+    pub fn copy_file(path: &std::path::Path) -> Result<(), ClipboardError> {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        let objects = NSArray::from_slice(&[ProtocolObject::from_ref(&*url)]);
+        if pb.writeObjects(&objects) {
+            Ok(())
+        } else {
+            Err(ClipboardError::Unavailable("writeObjects".into()))
+        }
+    }
 
     pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardError> {
         let png = fmshot_library::encode_png(image, scale_factor)

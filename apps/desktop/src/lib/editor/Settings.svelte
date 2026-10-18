@@ -14,6 +14,7 @@
   let contentStatus = $state<ContentSearchStatus | null>(null);
   /** macOS-Kürzel ⇧⌘3/4/5 noch eingeschaltet? `null` = unbekannt. */
   let systemShortcuts = $state<boolean | null>(null);
+  let launchAtLogin = $state(false);
   let version = $state("");
   let tab = $state<"general" | "hotkeys" | "saving" | "about">("general");
   let recording = $state<string | null>(null);
@@ -27,7 +28,17 @@
     version = (await api.appInfo()).version;
     contentStatus = await api.contentSearchStatus().catch(() => null);
     systemShortcuts = await api.systemShortcutsActive().catch(() => null);
+    launchAtLogin = await api.getLaunchAtLogin().catch(() => false);
   });
+
+  async function toggleLaunchAtLogin(enabled: boolean) {
+    try {
+      await api.setLaunchAtLogin(enabled);
+    } catch (e) {
+      editor.flash(String(e));
+    }
+    launchAtLogin = await api.getLaunchAtLogin().catch(() => false);
+  }
 
   // Fortschritt der Bildinhalt-Erkennung live nachführen.
   $effect(() => {
@@ -167,6 +178,10 @@
               </select>
             </label>
           {/if}
+          <label class="row check">
+            <input type="checkbox" checked={launchAtLogin} onchange={(e) => toggleLaunchAtLogin(e.currentTarget.checked)} />
+            <span>{t("settings.launch_at_login")}</span>
+          </label>
           <label class="row check">
             <input type="checkbox" bind:checked={settings.copy_to_clipboard} onchange={save} />
             <span>{t("settings.copy_to_clipboard")}</span>

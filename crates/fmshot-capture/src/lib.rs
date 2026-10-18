@@ -151,6 +151,48 @@ pub fn display_at(displays: &[Display], p: (f32, f32)) -> Option<&Display> {
     })
 }
 
+/// Freigaben, die das System an einer eigenen Stelle der Einstellungen
+/// verwaltet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyPane {
+    /// Bildschirmaufnahme (macOS: „Bildschirm- und Systemaudioaufnahme“)
+    ScreenCapture,
+    /// Simulierte Eingaben, z. B. automatisches Scrollen (macOS: „Bedienungshilfen“)
+    Accessibility,
+    Microphone,
+    Camera,
+}
+
+/// Adresse, die direkt die passende Stelle der Systemeinstellungen öffnet.
+/// `None`, wenn das System dafür keine Freigabe kennt (Linux: Portal fragt selbst).
+pub fn privacy_settings_url(pane: PrivacyPane) -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some(match pane {
+            PrivacyPane::ScreenCapture => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
+            PrivacyPane::Accessibility => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            PrivacyPane::Microphone => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+            PrivacyPane::Camera => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+            }
+        })
+    } else if cfg!(target_os = "windows") {
+        match pane {
+            PrivacyPane::Microphone => Some("ms-settings:privacy-microphone"),
+            PrivacyPane::Camera => Some("ms-settings:privacy-webcam"),
+            // Bildschirm und Eingaben brauchen unter Windows keine Freigabe.
+            PrivacyPane::ScreenCapture | PrivacyPane::Accessibility => None,
+        }
+    } else {
+        None
+    }
+}
+
 /// Die Implementierung für die aktuelle Plattform.
 pub fn platform_capturer() -> Box<dyn ScreenCapturer> {
     #[cfg(target_os = "macos")]

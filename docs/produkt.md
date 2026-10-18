@@ -53,8 +53,17 @@ Einstellbar (global, pro Aufnahmemodus überschreibbar):
 - **Keine Telemetrie.** Logs lokal; „Fehler melden“ öffnet vorausgefülltes
   GitHub-Issue ohne Screenshots.
 
+### Video (nach v0.1, ADR 0011)
+- Bildschirm (Bereich, Fenster, Vollbild) mit Mikrofon, Systemton und Webcam,
+  jede Quelle als eigene Spur – alles bleibt nachträglich änderbar.
+- Webcam: Ecke, Form (Kreis, Quadrat, Quer-/Hochformat, Rundung), Vollbild oder
+  Kopf, Kopf verfolgen, Hintergrund unscharf/entfernt, Live-Blase.
+- Eigener Mauszeiger: Klicks hervorheben, Auto-Zoom auf Klicks.
+- Video-Editor mit Zeitleiste: Trimmen, Schneiden, Pfeile/Text mit Zeitbereich.
+- Export MP4 und GIF.
+
 ### Nicht in v0.1
-Video-Aufnahme, Cloud-Teilen, Lizenzschlüssel, Apple-Notarisierung,
+Cloud-Teilen, Lizenzschlüssel, Apple-Notarisierung,
 Windows-Signatur, Flatpak.
 
 ## Standard-Tastenkombinationen
@@ -66,6 +75,7 @@ Windows-Signatur, Flatpak.
 | Fenster         | ⌘⇧3*   | Ctrl+Shift+3             |
 | Scroll          | ⌘⇧4*   | Ctrl+Shift+4             |
 | Text (OCR)      | ⌘⇧5*   | Ctrl+Shift+5             |
+| Video           | ⌘⇧6    | Ctrl+Shift+6             |
 | Galerie öffnen  | ⌥⌘G    | Ctrl+Alt+G               |
 
 \* Vom System belegt. Erster Start bietet an, die Systemkürzel zu ersetzen
@@ -107,6 +117,12 @@ Pakete: AppImage, .deb.
 4. **Aufnahmemodi** – Vollbild, Fenster, Scroll (manuell, dann automatisch), OCR.
 5. **Editor komplett** – Ebenen/Bilder, Weichzeichnen, Auto-Schwärzen, Hintergrund …
 6. **Feinschliff** – Vorschau-Popup, Einstellungen, i18n, Auto-Export, Suche → **v0.1**.
+7. **Video: Bildschirm + Ton** – Aufnahmeleiste, Pause, Countdown, MP4 in der Bibliothek.
+8. **Video: Webcam** – Spur, Live-Blase, Lage, Form, Export zusammengesetzt (wgpu).
+9. **Video: Kopf und Hintergrund** – Gesicht erkennen, verfolgen, Hintergrund unscharf.
+10. **Video-Editor** – Zeitleiste, Trimmen, Schneiden, Layout je Abschnitt, GIF.
+11. **Video: Mauszeiger** – eigener Zeiger, Klicks hervorheben, Auto-Zoom.
+12. **Video: Ebenen** – Pfeile, Text usw. mit Zeitbereich.
 
 Jedes Feature zuerst macOS, dann Windows, dann Linux. Die CI baut immer alle.
 

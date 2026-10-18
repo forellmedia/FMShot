@@ -72,6 +72,7 @@
         <img src={urls[c.id]} alt="" draggable="false" />
       {/if}
       {#if c.starred}<span class="star">★</span>{/if}
+      {#if c.videoPath}<span class="play" aria-label={t("gallery.mode.video")}>▶</span>{/if}
     </button>
   {:else}
     <p class="empty">{t("gallery.empty")}</p>
@@ -142,6 +143,14 @@
     color: #fbc02d;
     text-shadow: 0 0 2px #000;
     font-size: 13px;
+  }
+  .play {
+    position: absolute;
+    left: 4px;
+    bottom: 3px;
+    color: #fff;
+    text-shadow: 0 0 3px #000;
+    font-size: 12px;
   }
   .empty {
     color: var(--text-muted);

@@ -11,7 +11,9 @@ passenden ADRs lesen; neue Grundsatzentscheidungen als neue ADR festhalten.
 crates/
   fmshot-core      Dokumentmodell (Ebenen, doc.json), gemeinsame Typen – kein I/O
   fmshot-render    Renderer (tiny-skia), nativ + WASM
-  fmshot-capture   Bildschirmaufnahme (Einzelbild + Stream), je Plattform
+  fmshot-capture   Bildschirmaufnahme (Einzelbild + Stream, Mausspur), je Plattform
+  fmshot-media     Mikrofon, Webcam, Video kodieren/dekodieren, je Plattform (ADR 0011)
+  fmshot-video     Video: Zeitachse, Webcam-Layout, Zoom, Export – plattformunabhängig
   fmshot-stitch    Scroll-Bilder zusammensetzen – plattformunabhängig
   fmshot-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
   fmshot-vision    Bildinhalt: Bild/Suchtext → Vektor (SigLIP 2, ONNX) – plattformunabhängig
@@ -29,7 +31,7 @@ apps/desktop/      Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 1. **Logik gehört in `crates/`.** `apps/desktop/src-tauri` verdrahtet nur
    (Commands, Fenster, Tray). Das Svelte-Frontend zeichnet nur Bedienelemente –
    die Leinwand zeichnet `fmshot-render`.
-2. **Plattformcode nur in `capture`, `clipboard`, `ocr`, `hotkeys`, `overlay`**, jeweils hinter
+2. **Plattformcode nur in `capture`, `clipboard`, `ocr`, `hotkeys`, `overlay`, `media`**, jeweils hinter
    einem Trait, Implementierungen in `src/<plattform>.rs` per `#[cfg(target_os)]`.
    Alle anderen Crates sind plattformunabhängig und ohne Bildschirm testbar.
 3. **Abhängigkeitsrichtung:** `core` hängt von nichts Internem ab; `render`,
