@@ -4,14 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use fmshot_core::{Document, RgbaImage};
+use fmshot_core::{Document, RgbaImage, VideoDoc};
 use rusqlite::Connection;
 
 use crate::encode::{encode_png, encode_webp, thumbnail};
 use crate::index::{self, CaptureQuery, CaptureRecord};
 use crate::{
-    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, microphone_file, month_dir,
-    original_file, screen_file, system_audio_file, thumbnail_file, video_file,
+    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, faces_file, input_file,
+    microphone_file, month_dir, original_file, screen_file, system_audio_file, thumbnail_file,
+    video_file, webcam_file,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -63,8 +64,20 @@ impl VideoSlot {
         self.dir.join(microphone_file(&self.id))
     }
 
+    pub fn webcam_path(&self) -> PathBuf {
+        self.dir.join(webcam_file(&self.id))
+    }
+
     pub fn video_path(&self) -> PathBuf {
         self.dir.join(video_file(&self.id))
+    }
+
+    pub fn faces_path(&self) -> PathBuf {
+        self.dir.join(faces_file(&self.id))
+    }
+
+    pub fn input_path(&self) -> PathBuf {
+        self.dir.join(input_file(&self.id))
     }
 }
 
@@ -145,19 +158,22 @@ impl Library {
     }
 
     /// Nimmt ein fertiges Video in die Galerie auf. `poster` ist ein
-    /// Standbild daraus (Vorschau, Texterkennung, Bildinhalt).
+    /// Standbild daraus (Vorschau, Texterkennung, Bildinhalt), `video` der
+    /// Video-Teil des Dokuments (Webcam-Layout, Abschnitte).
     pub fn save_video(
         &self,
         slot: &VideoSlot,
         poster: &RgbaImage,
         scale_factor: f32,
-        duration_ms: i64,
+        video: VideoDoc,
     ) -> Result<CaptureRecord> {
         let id = slot.id.clone();
+        let duration_ms = video.duration_ms as i64;
         let png =
             encode_png(poster, scale_factor).map_err(|e| LibraryError::Encode(e.to_string()))?;
         write_atomic(&slot.dir.join(original_file(&id)), &png)?;
-        let doc = Document::from_capture_scaled(poster.width(), poster.height(), scale_factor);
+        let mut doc = Document::from_capture_scaled(poster.width(), poster.height(), scale_factor);
+        doc.video = Some(video);
         write_atomic(
             &slot.dir.join(document_file(&id)),
             &serde_json::to_vec_pretty(&doc)?,
@@ -178,6 +194,19 @@ impl Library {
         };
         index::insert(&self.lock(), &self.root, &record)?;
         Ok(record)
+    }
+
+    /// Nach dem neuen Zusammensetzen im Editor: Standbild, Vorschaubild und
+    /// Länge nachführen.
+    pub fn refresh_video(&self, id: &str, poster: &RgbaImage, duration_ms: i64) -> Result<()> {
+        let rec = self.get(id)?;
+        let png = encode_png(poster, rec.scale_factor)
+            .map_err(|e| LibraryError::Encode(e.to_string()))?;
+        write_atomic(&rec.original_path(), &png)?;
+        let thumb = encode_webp(&thumbnail(poster, THUMBNAIL_MAX))
+            .map_err(|e| LibraryError::Encode(e.to_string()))?;
+        write_atomic(&rec.thumbnail_path(), &thumb)?;
+        Ok(index::set_duration(&self.lock(), id, duration_ms)?)
     }
 
     /// Verwirft ein abgebrochenes Video samt Reservierung.
@@ -503,13 +532,22 @@ mod tests {
         let slot = lib.reserve_video(1_792_172_712_083).unwrap();
         fs::write(slot.screen_path(), b"mp4").unwrap();
         fs::write(slot.microphone_path(), b"m4a").unwrap();
+        fs::write(slot.webcam_path(), b"mp4").unwrap();
         fs::write(slot.video_path(), b"mp4").unwrap();
         let poster = RgbaImage::filled(320, 200, [0, 0, 0, 255]);
-        let rec = lib.save_video(&slot, &poster, 2.0, 12_345).unwrap();
+        let video = VideoDoc {
+            duration_ms: 12_345,
+            fps: 30,
+            webcam: None,
+            ..VideoDoc::default()
+        };
+        let rec = lib.save_video(&slot, &poster, 2.0, video.clone()).unwrap();
 
         assert!(rec.is_video());
         assert_eq!(rec.video_path(), slot.video_path());
+        assert_eq!(rec.webcam_path(), slot.webcam_path());
         assert_eq!(lib.get(&rec.id).unwrap().duration_ms, Some(12_345));
+        assert_eq!(lib.load_document(&rec.id).unwrap().video, Some(video));
 
         lib.delete(&rec.id).unwrap();
         assert!(files(&slot.dir).is_empty());

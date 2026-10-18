@@ -96,6 +96,11 @@ pub trait ScreenCapturer: Send + Sync {
         None
     }
 
+    /// Ist die linke Maustaste gerade gedrückt? (Mausspur fürs Video, ADR 0011)
+    fn mouse_button_down(&self) -> bool {
+        false
+    }
+
     /// Bereitet die Aufnahme vor (Caches füllen), damit die erste schnell ist.
     fn warm_up(&self) {}
 

@@ -12,9 +12,10 @@ publish.workspace = true
 workspace = true
 
 [features]
-specta = ["dep:specta"]
+specta = ["dep:specta", "fmshot-core/specta"]
 
 [dependencies]
+fmshot-core.workspace = true
 fmshot-hotkeys.workspace = true
 serde.workspace = true
 serde_json.workspace = true

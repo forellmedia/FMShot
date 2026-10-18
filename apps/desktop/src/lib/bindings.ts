@@ -41,11 +41,26 @@ export const commands = {
 	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),
 	/**  Legt das Video als Datei in die Zwischenablage. */
 	copyVideo: (id: string) => typedError<null, string>(__TAURI_INVOKE("copy_video", { id })),
+	videoTracks: (id: string) => typedError<VideoTracks, string>(__TAURI_INVOKE("video_tracks", { id })),
+	/**
+	 *  Nach Änderungen im Editor: Video neu zusammensetzen. Ersetzt
+	 *  `<id>_video.mp4` erst, wenn alles fertig ist. Ein neuer Aufruf bricht
+	 *  einen laufenden ab (dieser meldet dann `abgebrochen`).
+	 */
+	exportVideo: (id: string) => typedError<CaptureInfo, string>(__TAURI_INVOKE("export_video", { id })),
+	/**  Fragt nach dem Ziel und schreibt ein GIF (`None` = abgebrochen). */
+	exportGif: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("export_gif", { id })),
+	/**
+	 *  Bild an der Stelle `output_ms` des fertigen Videos als neue Aufnahme in
+	 *  die Bibliothek.
+	 */
+	videoSnapshot: (id: string, outputMs: number | null) => typedError<CaptureInfo, string>(__TAURI_INVOKE("video_snapshot", { id, outputMs })),
 	/**  Fragt nach dem Ziel und kopiert das Video dorthin (`None` = abgebrochen). */
 	saveVideoAs: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("save_video_as", { id })),
 	openMain: (view: MainView) => __TAURI_INVOKE<void>("open_main", { view }),
 	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
 	listMicrophones: () => __TAURI_INVOKE<Microphone[]>("list_microphones"),
+	listCameras: () => __TAURI_INVOKE<Camera[]>("list_cameras"),
 	/**  Startet FMShot mit der Anmeldung am Computer? */
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
@@ -137,6 +152,12 @@ export type AssetRef =
 /**  Hineingezogenes Bild (Hash des Inhalts). */
 { source: "asset"; hash: string };
 
+/**  Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. */
+export type AudioMix = {
+	system?: number | null,
+	microphone?: number | null,
+};
+
 /**  Jede Aufnahme zusätzlich als Datei in einen Ordner schreiben. */
 export type AutoExport = {
 	enabled?: boolean,
@@ -145,6 +166,12 @@ export type AutoExport = {
 	/**  Platzhalter: `{date}`, `{time}`, `{id}`, `{mode}`. */
 	pattern?: string,
 	format?: ImageFormat,
+};
+
+/**  Eine Kamera für die Auswahl im Video-Tab. */
+export type Camera = {
+	id: string,
+	name: string,
 };
 
 /**  Eine Aufnahme für Galerie und Editor. */
@@ -188,6 +215,16 @@ export type ContentSearchStatus = {
 /**  Ecke, z. B. Richtung des Lupengriffs. */
 export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
+/**  Wie FMShot den Mauszeiger zeichnet (aus `<id>_input.json`). */
+export type CursorStyle = {
+	visible?: boolean,
+	/**  Grösse als Vielfaches der normalen Zeigergrösse (1 bis 3). */
+	size?: number | null,
+	/**  Klicks als Kreis hervorheben. */
+	highlight_clicks?: boolean,
+	click_color?: Color,
+};
+
 export type Diagnostics = {
 	version: string,
 	platform: string,
@@ -219,6 +256,8 @@ export type Document_Deserialize = {
 	artboard: Artboard,
 	/**  Reihenfolge = Zeichenreihenfolge; das erste Element liegt ganz unten. */
 	layers: Layer_Deserialize[],
+	/**  Nur bei Videos (ADR 0011): Webcam-Layout, Abschnitte. */
+	video?: VideoDoc_Deserialize | null,
 };
 
 /**
@@ -234,6 +273,8 @@ export type Document_Serialize = {
 	artboard: Artboard,
 	/**  Reihenfolge = Zeichenreihenfolge; das erste Element liegt ganz unten. */
 	layers: Layer_Serialize[],
+	/**  Nur bei Videos (ADR 0011): Webcam-Layout, Abschnitte. */
+	video?: VideoDoc_Serialize | null,
 };
 
 export type ExportFormat = "png" | "jpg";
@@ -343,6 +384,13 @@ feather?: number | null } |
 { type: "magnifier"; bounds: Rect; source: Rect; stroke: Stroke; 
 /**  Griff wie bei einer echten Lupe; `None` = nur der Kreis. */
 handle?: Corner | null };
+
+/**  Sichtbarkeit einer Ebene des Dokuments im Video. */
+export type LayerTime = {
+	layer: number,
+	start_ms: number,
+	end_ms: number,
+};
 
 export type Layer_Deserialize = {
 	id: LayerId,
@@ -492,6 +540,12 @@ export type TextStyle = {
 	valign?: VerticalAlign,
 };
 
+/**  Zeitspanne in ms (Zeit der Aufnahme), `start_ms < end_ms`. */
+export type TimeRange = {
+	start_ms: number,
+	end_ms: number,
+};
+
 export type UpdateInfo = {
 	version: string,
 	currentVersion: string,
@@ -501,6 +555,68 @@ export type UpdateInfo = {
 
 /**  Senkrechte Ausrichtung von Text in seinem Kasten. */
 export type VerticalAlign = "top" | "middle" | "bottom";
+
+/**
+ *  Alles, was ein Video über die aufgenommenen Spuren hinaus ausmacht.
+ *  Liegt in `<id>.json` neben den Spuren und bleibt bis zum Export änderbar.
+ */
+export type VideoDoc = VideoDoc_Serialize | VideoDoc_Deserialize;
+
+/**
+ *  Alles, was ein Video über die aufgenommenen Spuren hinaus ausmacht.
+ *  Liegt in `<id>.json` neben den Spuren und bleibt bis zum Export änderbar.
+ */
+export type VideoDoc_Deserialize = {
+	/**  Länge ohne Pausen. */
+	duration_ms: number,
+	/**  Bilder pro Sekunde der Aufnahme (Export übernimmt sie). */
+	fps?: number,
+	webcam?: WebcamTrack | null,
+	/**
+	 *  Herausgeschnittene Stellen (Zeit der Aufnahme), sortiert und ohne
+	 *  Überlappung. Trimmen = Schnitt am Anfang bzw. Ende (Etappe 4).
+	 */
+	cuts?: TimeRange[],
+	/**  Lautstärke je Tonspur (Etappe 4). */
+	audio?: AudioMix,
+	/**  Eigener Mauszeiger und Klicks (Etappe 5). */
+	cursor?: CursorStyle,
+	/**  Zoom-Abschnitte auf den Bildschirm (Zeit der Aufnahme, Etappe 5). */
+	zooms?: ZoomSection[],
+	/**
+	 *  Wann Ebenen (Pfeile, Text …) zu sehen sind (Etappe 6). Ebenen ohne
+	 *  Eintrag sind immer zu sehen.
+	 */
+	layer_times?: LayerTime[],
+};
+
+/**
+ *  Alles, was ein Video über die aufgenommenen Spuren hinaus ausmacht.
+ *  Liegt in `<id>.json` neben den Spuren und bleibt bis zum Export änderbar.
+ */
+export type VideoDoc_Serialize = {
+	/**  Länge ohne Pausen. */
+	duration_ms: number,
+	/**  Bilder pro Sekunde der Aufnahme (Export übernimmt sie). */
+	fps: number,
+	webcam?: WebcamTrack | null,
+	/**
+	 *  Herausgeschnittene Stellen (Zeit der Aufnahme), sortiert und ohne
+	 *  Überlappung. Trimmen = Schnitt am Anfang bzw. Ende (Etappe 4).
+	 */
+	cuts?: TimeRange[],
+	/**  Lautstärke je Tonspur (Etappe 4). */
+	audio: AudioMix,
+	/**  Eigener Mauszeiger und Klicks (Etappe 5). */
+	cursor: CursorStyle,
+	/**  Zoom-Abschnitte auf den Bildschirm (Zeit der Aufnahme, Etappe 5). */
+	zooms?: ZoomSection[],
+	/**
+	 *  Wann Ebenen (Pfeile, Text …) zu sehen sind (Etappe 6). Ebenen ohne
+	 *  Eintrag sind immer zu sehen.
+	 */
+	layer_times?: LayerTime[],
+};
 
 /**  Einstellungen der Video-Aufnahme (ADR 0011). */
 export type VideoSettings = {
@@ -513,6 +629,15 @@ export type VideoSettings = {
 	countdown?: boolean,
 	/**  Bilder pro Sekunde: 30 oder 60. */
 	fps?: number,
+	/**  Webcam zu Beginn eingeschaltet (während der Aufnahme umschaltbar). */
+	webcam?: boolean,
+	/**  `None` = Standard-Kamera des Systems. */
+	camera_id?: string | null,
+	/**
+	 *  Form, Grösse, Rahmen und Schatten der Webcam; die Lage gibt die
+	 *  Live-Blase vor.
+	 */
+	webcam_layout?: WebcamLayout,
 };
 
 /**  Was bei einer Video-Aufnahme aufgenommen wird. */
@@ -523,6 +648,111 @@ export type VideoTarget =
 "window" | 
 /**  Ganzer Bildschirm unter der Maus. */
 "screen";
+
+/**  Spuren eines Videos für die Vorschau im Editor (nur vorhandene). */
+export type VideoTracks = {
+	screen: string,
+	webcam: string | null,
+	systemAudio: string | null,
+	microphone: string | null,
+	/**  Mausspur (JSON, Etappe 5). */
+	input: string | null,
+};
+
+/**  Was mit dem Hintergrund hinter der Person geschieht. */
+export type WebcamBackground = "original" | 
+/**  Weichgezeichnet, die Person bleibt scharf. */
+"blur" | 
+/**  Entfernt: Über dem Bildschirm schwebt nur die Person. */
+"remove";
+
+export type WebcamBorder = {
+	/**  Breite als Anteil der kürzeren Seite der Webcam. */
+	width: number | null,
+	color: Color,
+};
+
+/**  Welcher Teil des Kamerabilds zu sehen ist. */
+export type WebcamFraming = 
+/**  Ganzes Kamerabild (mittig auf die Form zugeschnitten). */
+"full" | 
+/**  Ausschnitt um den erkannten Kopf (mit Schultern). */
+"head";
+
+/**  Lage und Aussehen der Webcam über dem Bildschirm. */
+export type WebcamLayout = {
+	position?: WebcamPosition,
+	/**  Breite als Anteil der Bildbreite (0.05 bis 0.6). */
+	size?: number | null,
+	shape?: WebcamShape,
+	/**
+	 *  Eckenradius als Anteil der kürzeren Seite (0 bis 0.5). Beim Kreis
+	 *  ohne Wirkung.
+	 */
+	corner_radius?: number | null,
+	/**
+	 *  `None` = ohne Rahmen (wird als `null` gespeichert, sonst gälte der
+	 *  Standardrahmen).
+	 */
+	border?: WebcamBorder | null,
+	shadow?: boolean,
+	/**  Spiegelbildlich wie in der Live-Blase. */
+	mirror?: boolean,
+	/**  Ganzes Kamerabild oder nur der Kopf (Etappe 3). */
+	framing?: WebcamFraming,
+	/**
+	 *  Beim Kopfausschnitt: dem Kopf weich folgen. Aus = einmal
+	 *  ausgerichtet, dann fest.
+	 */
+	follow?: boolean,
+	background?: WebcamBackground,
+};
+
+/**  Wie Webcam und Bildschirm zueinander stehen. */
+export type WebcamMode = 
+/**  Webcam klein über dem Bildschirm (nach [`WebcamLayout`]). */
+"overlay" | 
+/**  Webcam füllt das Bild, der Bildschirm liegt klein in der Ecke. */
+"large" | 
+/**  Nur der Bildschirm. */
+"hidden";
+
+/**  Ecke oder frei verschoben. */
+export type WebcamPosition = { type: "top_left" } | { type: "top_right" } | { type: "bottom_left" } | { type: "bottom_right" } | 
+/**  Mittelpunkt als Anteil von Breite und Höhe (0 bis 1). */
+{ type: "free"; x: number | null; y: number | null };
+
+export type WebcamSection = {
+	start_ms: number,
+	mode: WebcamMode,
+};
+
+export type WebcamShape = "circle" | "square" | 
+/**  Querformat 16:9. */
+"landscape" | 
+/**  Hochformat 9:16. */
+"portrait";
+
+/**  Webcam-Spur: Lage, Form und wann sie wie zu sehen ist. */
+export type WebcamTrack = {
+	layout: WebcamLayout,
+	/**
+	 *  Ab `start_ms` gilt `mode`, sortiert nach Zeit. Vor dem ersten
+	 *  Abschnitt ist die Webcam ausgeblendet.
+	 */
+	sections: WebcamSection[],
+};
+
+/**  Der Bildschirm wird in dieser Zeit vergrössert (weich hinein und hinaus). */
+export type ZoomSection = {
+	start_ms: number,
+	end_ms: number,
+	/**  Mitte als Anteil des Bildschirms (0 bis 1). */
+	x: number | null,
+	y: number | null,
+	/**  Vergrösserung (1 bis 4). */
+	scale: number | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

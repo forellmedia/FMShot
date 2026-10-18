@@ -4,6 +4,8 @@
 //! und lässt dann Ausschnitte zeichnen. Dokumente kommen als JSON – dasselbe
 //! Format wie in der Bibliothek.
 
+mod video;
+
 use std::collections::HashMap;
 
 use fmshot_core::{AssetRef, Document, Rect, RgbaImage, TextStyle};

@@ -4,7 +4,7 @@
 // kennt kein NaN). Im Editor arbeiten wir mit strengen Typen und prüfen die
 // Verträglichkeit unten zur Compile-Zeit.
 
-import type { Document_Deserialize } from "$lib/bindings";
+import type { Document_Deserialize, VideoDoc_Deserialize } from "$lib/bindings";
 
 export type Color = { r: number; g: number; b: number; a: number };
 export type Point = { x: number; y: number };
@@ -84,6 +84,8 @@ export type Doc = {
   pixel_ratio: number;
   artboard: { rect: Rect; background: Fill | null };
   layers: Layer[];
+  /** Nur bei Videos (ADR 0011). */
+  video?: VideoDoc_Deserialize | null;
 };
 
 // Compile-Zeit-Prüfung: Doc passt in den Typ, den Rust erwartet.

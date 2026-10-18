@@ -48,6 +48,72 @@ fn measure<S, T>(
     (times[times.len() / 2], times[0])
 }
 
+/// Ein Bild 1080p mit Webcam (720p) auf der Grafikkarte zusammensetzen.
+fn video_compose() -> Result<(Duration, Duration), String> {
+    use fmshot_core::{VideoDoc, WebcamLayout, WebcamMode, WebcamSection, WebcamTrack};
+    use fmshot_video::{Compositor, FrameRef, Source, scene_at};
+
+    let (w, h) = (1920, 1080);
+    let mut compositor = Compositor::new(w, h).map_err(|e| e.to_string())?;
+    if compositor.is_software() {
+        return Err(format!("nur Software-Grafik ({})", compositor.adapter()));
+    }
+    let screen = vec![128u8; w as usize * h as usize * 4];
+    let webcam = vec![200u8; 1280 * 720 * 4];
+    let doc = VideoDoc {
+        duration_ms: 10_000,
+        fps: 30,
+        webcam: Some(WebcamTrack {
+            layout: WebcamLayout::default(),
+            sections: vec![WebcamSection {
+                start_ms: 0,
+                mode: WebcamMode::Overlay,
+            }],
+        }),
+        ..VideoDoc::default()
+    };
+    let size = fmshot_core::Size::new(w as f32, h as f32);
+    let scene = scene_at(
+        &doc,
+        0.0,
+        size,
+        size,
+        Some(fmshot_core::Size::new(1280.0, 720.0)),
+    );
+    let mut failed = None;
+    let times = measure(
+        31,
+        || (),
+        |()| {
+            compositor.upload(
+                Source::Screen,
+                FrameRef {
+                    width: w,
+                    height: h,
+                    stride: w as usize * 4,
+                    data: &screen,
+                },
+            );
+            compositor.upload(
+                Source::Webcam,
+                FrameRef {
+                    width: 1280,
+                    height: 720,
+                    stride: 1280 * 4,
+                    data: &webcam,
+                },
+            );
+            if let Err(e) = compositor.render(&scene, |data, _| data[0]) {
+                failed = Some(e.to_string());
+            }
+        },
+    );
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(times),
+    }
+}
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -199,6 +265,20 @@ fn main() {
             |()| library.search("rechnung", 200).expect("suchen"),
         ),
     );
+
+    // Video-Export (ADR 0011, Ziel ≥ 2× Echtzeit bei 1080p30 = 16,7 ms je
+    // Bild): Bildschirm und Webcam hochladen, zusammensetzen, zurücklesen.
+    // Dekodieren und Kodieren laufen nebenher in der Hardware des Systems;
+    // gemessen wird der Teil, der Bild für Bild nacheinander geschieht. Ohne
+    // echte Grafikkarte (CI unter Linux/Windows) entfällt die Messung.
+    match video_compose() {
+        Ok(times) => add(
+            "Video-Export: 1080p-Bild mit Webcam zusammensetzen",
+            16,
+            times,
+        ),
+        Err(why) => println!("Video-Export übersprungen: {why}"),
+    }
 
     // Bericht
     let mut table =

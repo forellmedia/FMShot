@@ -2,11 +2,16 @@
   import { t } from "$lib/i18n";
   import { editor } from "./state.svelte";
   import Icon from "./Icon.svelte";
-  import { isActive, TOOLS } from "./tools";
+  import { isActive, TOOLS, VIDEO_TOOLS } from "./tools";
+
+  // Im Video gibt es nur Werkzeuge, die ohne das Bild darunter auskommen.
+  const tools = $derived(
+    TOOLS.filter((t) => !t.hidden && (!editor.current?.videoPath || VIDEO_TOOLS.includes(t.id))),
+  );
 </script>
 
 <nav class="tools" aria-label={t("editor.tools")}>
-  {#each TOOLS.filter((t) => !t.hidden) as tool (tool.id)}
+  {#each tools as tool (tool.id)}
     <button
       class:active={isActive(tool, editor.tool)}
       title="{t(tool.label)} ({tool.key.toUpperCase()})"

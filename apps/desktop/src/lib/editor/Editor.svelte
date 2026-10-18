@@ -13,8 +13,16 @@
   import PropertiesBar from "./PropertiesBar.svelte";
   import Settings from "./Settings.svelte";
   import Toolbar from "./Toolbar.svelte";
-  import VideoView from "./VideoView.svelte";
+  import Timeline from "./Timeline.svelte";
+  import { player } from "./video.svelte";
   import { toolByKey } from "./tools";
+
+  // Video geöffnet: Spuren laden; anderes Bild: Wiedergabe beenden.
+  $effect(() => {
+    const cap = editor.current;
+    if (cap?.videoPath) void player.load(cap);
+    else player.unload();
+  });
 
   onMount(() => {
     editor.init();
@@ -226,13 +234,10 @@
   </header>
 
   <main>
-    {#if editor.current?.videoPath}
-      <VideoView capture={editor.current} />
+    <Toolbar />
+    {#if editor.doc}
+      <Canvas />
     {:else}
-      <Toolbar />
-      {#if editor.doc}
-        <Canvas />
-      {:else}
         <div class="start">
           <h1>FMShot</h1>
           <p>{t("start.hint")}</p>
@@ -243,12 +248,14 @@
             <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>⌥⌘4</kbd></button>
           </div>
         </div>
-      {/if}
     {/if}
-    {#if editor.layersPanel && editor.doc && !editor.current?.videoPath}
+    {#if editor.layersPanel && editor.doc}
       <LayersPanel />
     {/if}
   </main>
+  {#if editor.current?.videoPath && editor.doc}
+    <Timeline />
+  {/if}
 
   <GalleryStrip />
 

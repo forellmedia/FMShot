@@ -18,10 +18,11 @@ use objc2::rc::Retained;
 use objc2_core_foundation::{CFArray, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGEvent, CGEventTapLocation, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID,
-    CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess, CGRequestPostEventAccess,
-    CGRequestScreenCaptureAccess, CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCreate,
-    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
+    CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess,
+    CGPreflightScreenCaptureAccess, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
+    CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCreate, CGWindowListOption,
+    kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -107,6 +108,14 @@ impl ScreenCapturer for MacCapturer {
         let event = CGEvent::new(None)?;
         let p = CGEvent::location(Some(&event));
         Some((p.x as f32, p.y as f32))
+    }
+
+    fn mouse_button_down(&self) -> bool {
+        // Liest nur den Zustand – braucht keine Freigabe.
+        CGEventSource::button_state(
+            CGEventSourceStateID::CombinedSessionState,
+            CGMouseButton::Left,
+        )
     }
 
     fn warm_up(&self) {

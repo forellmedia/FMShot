@@ -34,6 +34,7 @@ fmshot-core = { workspace = true, features = ["specta"] }
 fmshot-hotkeys.workspace = true
 fmshot-library.workspace = true
 fmshot-media.workspace = true
+fmshot-video = { workspace = true, features = ["gpu", "gif", "layers"] }
 fmshot-ocr.workspace = true
 fmshot-overlay.workspace = true
 fmshot-render.workspace = true

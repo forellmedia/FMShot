@@ -43,7 +43,8 @@ use windows::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI, SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    VK_LBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetWindowDisplayAffinity,
@@ -98,6 +99,12 @@ impl ScreenCapturer for WindowsCapturer {
         let mut p = POINT::default();
         unsafe { GetCursorPos(&mut p) }.ok()?;
         Some((p.x as f32, p.y as f32))
+    }
+
+    fn mouse_button_down(&self) -> bool {
+        // Höchstes Bit = Taste gerade gedrückt.
+        let state = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) };
+        state < 0
     }
 
     fn windows(&self) -> Result<Vec<WindowInfo>> {

@@ -16,5 +16,6 @@ fmshot-core.workspace = true
 fmshot-render.workspace = true
 fmshot-library.workspace = true
 fmshot-stitch.workspace = true
+fmshot-video = { workspace = true, features = ["gpu"] }
 serde_json.workspace = true
 tempfile = "3"

@@ -3,8 +3,8 @@
   // (Windows: Taskleiste). Tabs Bild, Video, Einstellungen.
 
   import { onMount } from "svelte";
-  import { api, on, type HotkeyInfo, type Microphone, type Settings } from "$lib/api";
-  import type { CaptureMode, VideoTarget } from "$lib/bindings";
+  import { api, on, type Camera, type HotkeyInfo, type Microphone, type Settings } from "$lib/api";
+  import type { CaptureMode, VideoTarget, WebcamLayout, WebcamShape } from "$lib/bindings";
   import Icon from "$lib/editor/Icon.svelte";
   import { t, type MessageKey } from "$lib/i18n";
 
@@ -37,6 +37,23 @@
     { id: "screen", label: "video.target_screen", icon: ICONS.screen },
   ];
 
+  const SHAPES: { id: WebcamShape; label: MessageKey }[] = [
+    { id: "circle", label: "video.shape_circle" },
+    { id: "square", label: "video.shape_square" },
+    { id: "landscape", label: "video.shape_landscape" },
+    { id: "portrait", label: "video.shape_portrait" },
+  ];
+
+  // Breite der Webcam als Anteil der Bildbreite.
+  const SIZES: { value: number; label: MessageKey }[] = [
+    { value: 0.15, label: "video.size_small" },
+    { value: 0.2, label: "video.size_medium" },
+    { value: 0.28, label: "video.size_large" },
+  ];
+
+  const DEFAULT_BORDER = { width: 0.025, color: { r: 255, g: 255, b: 255, a: 255 } };
+  const DEFAULT_RADIUS = 0.12;
+
   function storedTab(): Tab {
     try {
       const v = localStorage.getItem(TAB_KEY);
@@ -51,6 +68,7 @@
   let settings = $state<Settings | null>(null);
   let hotkeys = $state<HotkeyInfo[]>([]);
   let microphones = $state<Microphone[]>([]);
+  let cameras = $state<Camera[]>([]);
   let launchAtLogin = $state(false);
 
   $effect(() => {
@@ -67,7 +85,7 @@
       api.getHotkeys(),
       api.getLaunchAtLogin(),
     ]);
-    microphones = await api.listMicrophones();
+    [microphones, cameras] = await Promise.all([api.listMicrophones(), api.listCameras()]);
   }
 
   onMount(() => {
@@ -88,6 +106,19 @@
     if (!settings) return;
     settings.video = { ...settings.video, ...patch };
     await api.setSettings($state.snapshot(settings) as Settings);
+  }
+
+  const layout = $derived<WebcamLayout>(video?.webcam_layout ?? {});
+
+  // Nächste Stufe zur gespeicherten Grösse (auch wenn sie frei gesetzt wurde).
+  const sizeValue = $derived(
+    SIZES.reduce((a, b) =>
+      Math.abs(b.value - (layout.size ?? 0.2)) < Math.abs(a.value - (layout.size ?? 0.2)) ? b : a,
+    ).value,
+  );
+
+  async function setLayout(patch: Partial<WebcamLayout>) {
+    await setVideo({ webcam_layout: { ...layout, ...patch } });
   }
 
   async function toggleLaunchAtLogin(enabled: boolean) {
@@ -168,6 +199,89 @@
             onchange={(e) => setVideo({ system_audio: e.currentTarget.checked })}
           />
         </label>
+        <label class="row">
+          <span>{t("video.webcam")}</span>
+          <input
+            type="checkbox"
+            class="switch"
+            disabled={cameras.length === 0}
+            checked={(video.webcam ?? false) && cameras.length > 0}
+            onchange={(e) => setVideo({ webcam: e.currentTarget.checked })}
+          />
+        </label>
+        {#if (video.webcam ?? false) && cameras.length > 0}
+          <select
+            class="mic"
+            aria-label={t("video.webcam")}
+            value={video.camera_id ?? ""}
+            onchange={(e) => setVideo({ camera_id: e.currentTarget.value || null })}
+          >
+            <option value="">{t("video.camera_default")}</option>
+            {#each cameras as c (c.id)}
+              <option value={c.id}>{c.name}</option>
+            {/each}
+          </select>
+          <div class="webcam">
+            <label class="row">
+              <span>{t("video.webcam_shape")}</span>
+              <select
+                value={layout.shape ?? "circle"}
+                onchange={(e) => setLayout({ shape: e.currentTarget.value as WebcamShape })}
+              >
+                {#each SHAPES as s (s.id)}
+                  <option value={s.id}>{t(s.label)}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="row">
+              <span>{t("video.webcam_size")}</span>
+              <select value={String(sizeValue)} onchange={(e) => setLayout({ size: Number(e.currentTarget.value) })}>
+                {#each SIZES as s (s.value)}
+                  <option value={String(s.value)}>{t(s.label)}</option>
+                {/each}
+              </select>
+            </label>
+            {#if (layout.shape ?? "circle") !== "circle"}
+              <label class="row">
+                <span>{t("video.webcam_rounded")}</span>
+                <input
+                  type="checkbox"
+                  class="switch"
+                  checked={(layout.corner_radius ?? DEFAULT_RADIUS) > 0}
+                  onchange={(e) => setLayout({ corner_radius: e.currentTarget.checked ? DEFAULT_RADIUS : 0 })}
+                />
+              </label>
+            {/if}
+            <label class="row">
+              <span>{t("video.webcam_border")}</span>
+              <input
+                type="checkbox"
+                class="switch"
+                checked={layout.border !== null}
+                onchange={(e) => setLayout({ border: e.currentTarget.checked ? DEFAULT_BORDER : null })}
+              />
+            </label>
+            <label class="row">
+              <span>{t("video.webcam_shadow")}</span>
+              <input
+                type="checkbox"
+                class="switch"
+                checked={layout.shadow ?? true}
+                onchange={(e) => setLayout({ shadow: e.currentTarget.checked })}
+              />
+            </label>
+            <label class="row">
+              <span>{t("video.webcam_mirror")}</span>
+              <input
+                type="checkbox"
+                class="switch"
+                checked={layout.mirror ?? true}
+                onchange={(e) => setLayout({ mirror: e.currentTarget.checked })}
+              />
+            </label>
+            <p class="hint left">{t("video.webcam_hint")}</p>
+          </div>
+        {/if}
         <label class="row">
           <span>{t("video.countdown_setting")}</span>
           <input
@@ -456,6 +570,24 @@
     font-size: 12px;
     color: var(--text-muted);
     text-align: center;
+  }
+
+  .hint.left {
+    text-align: left;
+  }
+
+  /* Einstellungen der Webcam, eingerückt unter dem Schalter. */
+  .webcam {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border);
+  }
+
+  .switch:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   footer {

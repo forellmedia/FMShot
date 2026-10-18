@@ -3,6 +3,10 @@
 //! liefern Zeitstempel der Systemuhr (Host-Zeit); so passen die Spuren ohne
 //! Abgleich zusammen.
 //!
+//! Die Webcam läuft in einer eigenen `AVCaptureSession` und lässt sich
+//! während der Aufnahme ein- und ausschalten; ihre Spur entsteht beim ersten
+//! Einschalten und beginnt am selben Nullpunkt wie alle anderen.
+//!
 //! Ablauf: Der Stream läuft schon während des Countdowns, damit das erste
 //! Bild sofort da ist. Erst [`Recording::begin`] legt den Nullpunkt fest; das
 //! letzte Bild davor wird auf ihn gelegt (ein ruhiger Bildschirm liefert sonst
@@ -16,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+
+pub(crate) mod codec;
 use std::time::Duration;
 
 use block2::RcBlock;
@@ -29,10 +35,13 @@ use objc2_av_foundation::{
     AVAssetImageGenerator, AVAssetWriter, AVAssetWriterInput, AVAssetWriterStatus,
     AVAuthorizationStatus, AVCaptureAudioDataOutput, AVCaptureAudioDataOutputSampleBufferDelegate,
     AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput, AVCaptureOutput, AVCaptureSession,
-    AVFileTypeAppleM4A, AVFileTypeMPEG4, AVMediaTypeAudio, AVMediaTypeVideo, AVMutableComposition,
-    AVURLAsset, AVVideoAllowFrameReorderingKey, AVVideoAverageBitRateKey, AVVideoCodecKey,
-    AVVideoCodecTypeHEVC, AVVideoCompressionPropertiesKey, AVVideoExpectedSourceFrameRateKey,
-    AVVideoHeightKey, AVVideoMaxKeyFrameIntervalKey, AVVideoWidthKey,
+    AVCaptureSessionPreset1280x720, AVCaptureSessionPreset1920x1080, AVCaptureVideoDataOutput,
+    AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureVideoPreviewLayer, AVFileTypeAppleM4A,
+    AVFileTypeMPEG4, AVLayerVideoGravityResizeAspectFill, AVMediaTypeAudio, AVMediaTypeVideo,
+    AVMutableComposition, AVURLAsset, AVVideoAllowFrameReorderingKey, AVVideoAverageBitRateKey,
+    AVVideoCodecKey, AVVideoCodecTypeHEVC, AVVideoCompressionPropertiesKey,
+    AVVideoExpectedSourceFrameRateKey, AVVideoHeightKey, AVVideoMaxKeyFrameIntervalKey,
+    AVVideoWidthKey,
 };
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
@@ -42,9 +51,13 @@ use objc2_core_graphics::{
 };
 use objc2_core_media::{
     CMAudioFormatDescriptionGetStreamBasicDescription, CMClock, CMSampleBuffer, CMSampleTimingInfo,
-    CMTime, CMTimeRange, kCMTimeInvalid, kCMTimeZero,
+    CMTime, CMTimeRange, CMVideoFormatDescriptionGetDimensions, kCMTimeInvalid, kCMTimeZero,
+};
+use objc2_core_video::{
+    kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSError, NSNumber, NSString, NSURL};
+use objc2_quartz_core::CALayer;
 use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCFrameStatus, SCRunningApplication, SCShareableContent, SCStream,
     SCStreamConfiguration, SCStreamDelegate, SCStreamFrameInfoStatus, SCStreamOutput,
@@ -52,18 +65,18 @@ use objc2_screen_capture_kit::{
 };
 
 use crate::{
-    AudioDevice, Levels, MediaError, Permission, RecordFiles, RecordOptions, RecordSummary,
-    RecordTarget, Recording, Result, even, screen_bitrate,
+    Device, Levels, MediaError, Permission, PreviewLayer, RecordFiles, RecordOptions,
+    RecordSummary, RecordTarget, Recording, Result, camera_bitrate, even, screen_bitrate,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// Abschliessen der Dateien kann bei langen Videos dauern.
-const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 /// `420v`: YCbCr 4:2:0 – das Format, das der Encoder ohnehin braucht.
 const PIXEL_FORMAT_420V: u32 = 0x3432_3076;
 /// `aac `
-const AUDIO_FORMAT_AAC: u32 = 0x6161_6320;
-const SAMPLE_RATE: u32 = 48_000;
+pub(crate) const AUDIO_FORMAT_AAC: u32 = 0x6161_6320;
+pub(crate) const SAMPLE_RATE: u32 = 48_000;
 const AUDIO_FORMAT_FLAG_IS_FLOAT: u32 = 1;
 
 /// Objective-C-Objekte, die nur unter dem Mutex benutzt werden.
@@ -76,6 +89,19 @@ unsafe impl<T> Sync for SendRetained<T> {}
 struct SendCf<T: 'static>(CFRetained<T>);
 // SAFETY: CMSampleBuffer ist nach dem Erzeugen unveränderlich.
 unsafe impl<T> Send for SendCf<T> {}
+
+/// Live-Bild der Webcam für die Blase.
+pub(crate) struct SendLayer(Retained<CALayer>);
+// SAFETY: Die Ebene wird nur im Haupt-Thread verändert (`fmshot-overlay`).
+unsafe impl Send for SendLayer {}
+// SAFETY: wie oben.
+unsafe impl Sync for SendLayer {}
+
+impl SendLayer {
+    pub(crate) fn as_ptr(&self) -> *mut c_void {
+        Retained::as_ptr(&self.0) as *mut c_void
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -154,6 +180,8 @@ struct State {
     screen: Track,
     system: Option<Track>,
     mic: Option<Track>,
+    /// Entsteht beim ersten Einschalten der Webcam.
+    webcam: Option<Track>,
     failure: Option<String>,
 }
 
@@ -175,6 +203,7 @@ enum Source {
     Screen,
     System,
     Mic,
+    Webcam,
 }
 
 fn host_now() -> CMTime {
@@ -322,6 +351,7 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
                 return;
             }
         }
+        Source::Webcam => {}
     }
     let mut st = shared.lock();
     if matches!(source, Source::Screen) {
@@ -340,6 +370,7 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
         Source::Screen => Some(&mut st.screen),
         Source::System => st.system.as_mut(),
         Source::Mic => st.mic.as_mut(),
+        Source::Webcam => st.webcam.as_mut(),
     };
     let Some(track) = track else { return };
     let ok = if offset.value == 0 {
@@ -415,12 +446,54 @@ impl StreamOutput {
     }
 }
 
+// Gleicher Selektor wie beim Mikrofon – darum eine eigene Klasse.
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "FMShotWebcamOutput"]
+    #[ivars = OutputIvars]
+    struct WebcamOutput;
+
+    unsafe impl NSObjectProtocol for WebcamOutput {}
+
+    unsafe impl AVCaptureVideoDataOutputSampleBufferDelegate for WebcamOutput {
+        #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
+        fn did_capture(
+            &self,
+            _output: &AVCaptureOutput,
+            sample: &CMSampleBuffer,
+            _connection: &AVCaptureConnection,
+        ) {
+            on_sample(&self.ivars().shared, Source::Webcam, sample);
+        }
+    }
+);
+
+impl WebcamOutput {
+    fn new(shared: Arc<Shared>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(OutputIvars { shared });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 // --- Aufnahme ---------------------------------------------------------------------
+
+/// Laufende Kamera (nach dem ersten Einschalten).
+struct Webcam {
+    session: SendRetained<AVCaptureSession>,
+    _output: SendRetained<AVCaptureVideoDataOutput>,
+    _delegate: SendRetained<WebcamOutput>,
+    preview: Option<SendRetained<AVCaptureVideoPreviewLayer>>,
+    running: bool,
+}
 
 pub(crate) struct MacRecording {
     shared: Arc<Shared>,
     stream: SendRetained<SCStream>,
     mic_session: Option<SendRetained<AVCaptureSession>>,
+    webcam: Mutex<Option<Webcam>>,
+    webcam_file: Option<PathBuf>,
+    camera_id: Option<String>,
+    webcam_queue: SendQueue,
     // Am Leben halten, solange der Stream läuft.
     _output: SendRetained<StreamOutput>,
     _queues: Vec<SendQueue>,
@@ -444,7 +517,13 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
     let (width, height) = (even(width), even(height));
     let fps = options.fps.clamp(1, 60);
 
-    let screen = video_track(&options.files.screen, width, height, fps)?;
+    let screen = video_track(
+        &options.files.screen,
+        width,
+        height,
+        fps,
+        screen_bitrate(width, height, fps),
+    )?;
     let system = match &options.files.system_audio {
         Some(p) => Some(audio_track(p, 2)?),
         None => None,
@@ -463,6 +542,7 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
             screen,
             system,
             mic,
+            webcam: None,
             failure: None,
         }),
         system_peak: AtomicU32::new(0),
@@ -552,6 +632,10 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
         shared,
         stream: SendRetained(stream),
         mic_session: mic_session.map(SendRetained),
+        webcam: Mutex::new(None),
+        webcam_file: options.files.webcam.clone(),
+        camera_id: options.camera_id.clone(),
+        webcam_queue: SendQueue(DispatchQueue::new("ch.forellmedia.fmshot.webcam", None)),
         _output: SendRetained(output),
         _queues: vec![
             SendQueue(screen_queue),
@@ -565,10 +649,10 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
 fn cancel_tracks(shared: &Shared) {
     let st = shared.lock();
     st.screen.cancel();
-    if let Some(t) = &st.system {
-        t.cancel();
-    }
-    if let Some(t) = &st.mic {
+    for t in [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()]
+        .into_iter()
+        .flatten()
+    {
         t.cancel();
     }
 }
@@ -585,6 +669,41 @@ impl MacRecording {
         if let Some(session) = &self.mic_session {
             unsafe { session.0.stopRunning() };
         }
+        if let Some(cam) = self.lock_webcam().as_mut()
+            && cam.running
+        {
+            unsafe { cam.session.0.stopRunning() };
+            cam.running = false;
+        }
+    }
+
+    fn lock_webcam(&self) -> MutexGuard<'_, Option<Webcam>> {
+        self.webcam.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Kamera anlegen und Spur dafür öffnen (beim ersten Einschalten).
+    fn open_webcam(&self) -> Result<Webcam> {
+        let path = self
+            .webcam_file
+            .as_ref()
+            .ok_or_else(|| MediaError::Backend("Keine Datei für die Webcam".into()))?;
+        let delegate = WebcamOutput::new(self.shared.clone());
+        let (session, output, (width, height)) =
+            start_camera(self.camera_id.as_deref(), &delegate, &self.webcam_queue.0)?;
+        let track = video_track(path, width, height, 30, camera_bitrate(width, height, 30))?;
+        let mut st = self.shared.lock();
+        // Läuft die Aufnahme schon, beginnt auch diese Spur am Nullpunkt.
+        if matches!(st.phase, Phase::Recording | Phase::Paused) {
+            unsafe { track.writer.0.startSessionAtSourceTime(st.t0) };
+        }
+        st.webcam = Some(track);
+        Ok(Webcam {
+            session: SendRetained(session),
+            _output: SendRetained(output),
+            _delegate: SendRetained(delegate),
+            preview: None,
+            running: false,
+        })
     }
 }
 
@@ -597,7 +716,12 @@ impl Recording for MacRecording {
         let t0 = host_now();
         st.t0 = t0;
         st.phase = Phase::Recording;
-        let tracks = [Some(&st.screen), st.system.as_ref(), st.mic.as_ref()];
+        let tracks = [
+            Some(&st.screen),
+            st.system.as_ref(),
+            st.mic.as_ref(),
+            st.webcam.as_ref(),
+        ];
         for track in tracks.into_iter().flatten() {
             unsafe { track.writer.0.startSessionAtSourceTime(t0) };
         }
@@ -680,9 +804,12 @@ impl Recording for MacRecording {
         if !st.screen.finish(end).map_err(MediaError::Backend)? {
             return Err(MediaError::Empty);
         }
-        for track in [st.system.as_ref(), st.mic.as_ref()].into_iter().flatten() {
+        for track in [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             if let Err(e) = track.finish(end) {
-                log::warn!("Tonspur {}: {e}", track.path.display());
+                log::warn!("Spur {}: {e}", track.path.display());
             }
         }
         Ok(RecordSummary {
@@ -697,6 +824,64 @@ impl Recording for MacRecording {
         self.stop_sources();
         cancel_tracks(&self.shared);
     }
+
+    fn set_webcam(&self, on: bool) -> Result<()> {
+        if self.shared.lock().phase == Phase::Stopped {
+            return Ok(());
+        }
+        let mut guard = self.lock_webcam();
+        if guard.is_none() {
+            if !on {
+                return Ok(());
+            }
+            *guard = Some(self.open_webcam()?);
+        }
+        let Some(cam) = guard.as_mut() else {
+            return Ok(());
+        };
+        if cam.running != on {
+            // startRunning/stopRunning blockieren, bis die Kamera läuft bzw. steht.
+            unsafe {
+                if on {
+                    cam.session.0.startRunning();
+                } else {
+                    cam.session.0.stopRunning();
+                }
+            }
+            cam.running = on;
+        }
+        Ok(())
+    }
+
+    fn webcam_on(&self) -> bool {
+        self.lock_webcam().as_ref().is_some_and(|c| c.running)
+    }
+
+    fn webcam_preview(&self, mirror: bool) -> Option<PreviewLayer> {
+        let mut guard = self.lock_webcam();
+        let cam = guard.as_mut()?;
+        let layer = cam.preview.get_or_insert_with(|| {
+            let layer = unsafe { AVCaptureVideoPreviewLayer::layerWithSession(&cam.session.0) };
+            unsafe {
+                if let Some(gravity) = AVLayerVideoGravityResizeAspectFill {
+                    layer.setVideoGravity(gravity);
+                }
+            }
+            SendRetained(layer)
+        });
+        unsafe {
+            if let Some(connection) = layer.0.connection()
+                && connection.isVideoMirroringSupported()
+            {
+                connection.setAutomaticallyAdjustsVideoMirroring(false);
+                connection.setVideoMirrored(mirror);
+            }
+        }
+        let base: Retained<CALayer> = Retained::into_super(layer.0.clone());
+        Some(PreviewLayer {
+            layer: SendLayer(base),
+        })
+    }
 }
 
 // --- Dateien ------------------------------------------------------------------------
@@ -707,6 +892,12 @@ fn file_url(path: &Path) -> Retained<NSURL> {
 
 fn backend(e: &NSError) -> MediaError {
     MediaError::Backend(e.localizedDescription().to_string())
+}
+
+/// Schlüssel aus Core Video als `NSString`.
+fn cf_key(key: &'static objc2_core_foundation::CFString) -> &'static NSString {
+    // SAFETY: CFString und NSString sind gebührenfrei austauschbar.
+    unsafe { &*(key as *const objc2_core_foundation::CFString as *const NSString) }
 }
 
 fn number(v: u32) -> Retained<NSNumber> {
@@ -752,7 +943,7 @@ fn add_and_start(writer: &AVAssetWriter, input: &AVAssetWriterInput) -> Result<(
     Ok(())
 }
 
-fn video_track(path: &Path, width: u32, height: u32, fps: u32) -> Result<Track> {
+fn video_track(path: &Path, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Track> {
     let file_type = unsafe { AVFileTypeMPEG4 }.ok_or(MediaError::NotImplemented)?;
     let writer = new_writer(path, file_type)?;
     // Alle 2 s ein Fragment: Nach einem Absturz bleibt das Video bis dahin lesbar.
@@ -760,7 +951,7 @@ fn video_track(path: &Path, width: u32, height: u32, fps: u32) -> Result<Track> 
 
     let key = |k: Option<&'static NSString>| k.ok_or(MediaError::NotImplemented);
     let (bitrate, fps_n, key_interval, no_reorder) = (
-        number(screen_bitrate(width, height, fps)),
+        number(bitrate),
         number(fps),
         number(fps * 2),
         NSNumber::new_bool(false),
@@ -839,21 +1030,33 @@ fn audio_media_type() -> Result<&'static NSString> {
     unsafe { AVMediaTypeAudio }.ok_or(MediaError::NotImplemented)
 }
 
-pub(crate) fn microphones() -> Vec<AudioDevice> {
-    let Ok(media) = audio_media_type() else {
+fn video_media_type() -> Result<&'static NSString> {
+    unsafe { AVMediaTypeVideo }.ok_or(MediaError::NotImplemented)
+}
+
+fn devices(media: Result<&'static NSString>) -> Vec<Device> {
+    let Ok(media) = media else {
         return Vec::new();
     };
     unsafe { AVCaptureDevice::devicesWithMediaType(media) }
         .iter()
-        .map(|d| AudioDevice {
+        .map(|d| Device {
             id: unsafe { d.uniqueID() }.to_string(),
             name: unsafe { d.localizedName() }.to_string(),
         })
         .collect()
 }
 
-pub(crate) fn microphone_permission() -> Permission {
-    let Ok(media) = audio_media_type() else {
+pub(crate) fn microphones() -> Vec<Device> {
+    devices(audio_media_type())
+}
+
+pub(crate) fn cameras() -> Vec<Device> {
+    devices(video_media_type())
+}
+
+fn permission(media: Result<&'static NSString>) -> Permission {
+    let Ok(media) = media else {
         return Permission::Denied;
     };
     match unsafe { AVCaptureDevice::authorizationStatusForMediaType(media) } {
@@ -863,8 +1066,24 @@ pub(crate) fn microphone_permission() -> Permission {
     }
 }
 
+pub(crate) fn microphone_permission() -> Permission {
+    permission(audio_media_type())
+}
+
+pub(crate) fn camera_permission() -> Permission {
+    permission(video_media_type())
+}
+
 pub(crate) fn request_microphone_permission() -> bool {
-    let Ok(media) = audio_media_type() else {
+    request_permission(audio_media_type())
+}
+
+pub(crate) fn request_camera_permission() -> bool {
+    request_permission(video_media_type())
+}
+
+fn request_permission(media: Result<&'static NSString>) -> bool {
+    let Ok(media) = media else {
         return false;
     };
     let (tx, rx) = mpsc::sync_channel(1);
@@ -905,6 +1124,75 @@ fn start_microphone(
         session.startRunning();
     }
     Ok(session)
+}
+
+// --- Webcam -----------------------------------------------------------------------
+
+/// `420v`-Bilder in der Grösse des Kameraformats.
+type Camera = (
+    Retained<AVCaptureSession>,
+    Retained<AVCaptureVideoDataOutput>,
+    (u32, u32),
+);
+
+/// Richtet die Kamera ein (höchstens 1080p), startet sie aber noch nicht.
+fn start_camera(
+    id: Option<&str>,
+    delegate: &WebcamOutput,
+    queue: &DispatchQueue,
+) -> Result<Camera> {
+    let media = video_media_type()?;
+    let device = id
+        .and_then(|id| unsafe { AVCaptureDevice::deviceWithUniqueID(&NSString::from_str(id)) })
+        .or_else(|| unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) })
+        .ok_or_else(|| MediaError::Backend("Keine Kamera gefunden".into()))?;
+    let input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&device) }
+        .map_err(|e| backend(&e))?;
+    let session = unsafe { AVCaptureSession::new() };
+    let output = unsafe { AVCaptureVideoDataOutput::new() };
+    unsafe {
+        session.beginConfiguration();
+        for preset in [
+            AVCaptureSessionPreset1920x1080,
+            AVCaptureSessionPreset1280x720,
+        ] {
+            if session.canSetSessionPreset(preset) {
+                session.setSessionPreset(preset);
+                break;
+            }
+        }
+        if !session.canAddInput(&input) || !session.canAddOutput(&output) {
+            session.commitConfiguration();
+            return Err(MediaError::Backend(
+                "Kamera kann nicht verwendet werden".into(),
+            ));
+        }
+        session.addInput(&input);
+        session.addOutput(&output);
+        session.commitConfiguration();
+    }
+    let dims = unsafe {
+        CMVideoFormatDescriptionGetDimensions(&device.activeFormat().formatDescription())
+    };
+    let (width, height) = (
+        even(dims.width.max(2) as u32),
+        even(dims.height.max(2) as u32),
+    );
+    // Grösse festhalten: Die Spur ist schon mit ihr angelegt.
+    let (format, w, h) = (number(PIXEL_FORMAT_420V), number(width), number(height));
+    let settings = unsafe {
+        dict(&[
+            (cf_key(kCVPixelBufferPixelFormatTypeKey), &format),
+            (cf_key(kCVPixelBufferWidthKey), &w),
+            (cf_key(kCVPixelBufferHeightKey), &h),
+        ])
+    };
+    unsafe {
+        output.setVideoSettings(Some(&settings));
+        output.setAlwaysDiscardsLateVideoFrames(true);
+        output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(delegate)), Some(queue));
+    }
+    Ok((session, output, (width, height)))
 }
 
 // --- Ziel -------------------------------------------------------------------------

@@ -96,6 +96,58 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] Mikrofon in den Systemeinstellungen verbieten → Start öffnet direkt
       Systemeinstellungen → Mikrofon
 
+### 4c. Webcam (ADR 0011 Etappe 2)
+- [ ] Tab **Video**: Schalter **Webcam** an, Kamera wählen (z. B.
+      FaceTime-Kamera oder iPhone); ohne Kamera am Mac ist der Schalter grau
+- [ ] Beim ersten Start fragt macOS nach der **Kamera** – erlauben
+- [ ] Während des Countdowns erscheint die **Blase** (rund, weisser Rahmen,
+      Schatten) unten rechts im aufgenommenen Bereich, gespiegelt wie ein
+      Spiegel
+- [ ] Blase mit der Maus verschieben; Scrollrad/Trackpad über der Blase
+      ändert die Grösse
+- [ ] Die Blase ist im Bildschirmvideo nicht doppelt zu sehen: Im fertigen
+      Video liegt die Webcam genau dort, wo die Blase zuletzt war (nahe einer
+      Ecke rastet sie in der Ecke ein)
+- [ ] Leiste: **Webcam aus** → Blase verschwindet, im Video blendet die
+      Webcam weich aus; **Webcam an** → kommt nach ca. 1 s wieder
+- [ ] Leiste: **Gross** → im Video füllt die Webcam das Bild, der Bildschirm
+      liegt klein in der Ecke; **Klein** → zurück (weicher Übergang)
+- [ ] Webcam im Tab aus, während der Aufnahme mit **Webcam an** zuschalten
+      → Webcam erscheint im Video ab diesem Moment
+- [ ] Formen im Tab: Quadrat (mit/ohne **Ecken abrunden**), 16:9,
+      Hochformat; **Rahmen**, **Schatten**, **Spiegeln** aus → Blase und
+      Video folgen
+- [ ] Grösse Klein/Mittel/Gross → Blase und Webcam im Video entsprechend
+- [ ] Pause mit Webcam: im Video fehlt die Pause auch bei der Webcam,
+      Ton und Lippen bleiben synchron
+- [ ] Nach dem Stopp zeigt die Leiste „Video wird erstellt … n %“, dann
+      erscheint die Vorschau; Messwerte (Info → Messwerte) nennen
+      „zusammengesetzt … (Apple …)“
+- [ ] Im Monatsordner liegen `<id>_screen.mp4`, `<id>_webcam.mp4`,
+      `<id>_video.mp4` und `<id>.json` mit `"video": { … "webcam": … }`
+- [ ] Kamera in den Systemeinstellungen verbieten → Start mit Webcam öffnet
+      direkt Systemeinstellungen → Kamera (kein eigenes Hinweisfenster)
+
+### 4d. Video-Editor, Zeiger, Ebenen (ADR 0011 Etappe 4–6)
+- [ ] Video in der Galerie öffnen: Leinwand zeigt das Video, darunter die
+      Zeitleiste; Leertaste spielt ab und hält an (mit Ton)
+- [ ] Mauszeiger ist im Video zu sehen (FMShot zeichnet ihn), Klicks als
+      roter Kreis; Zeitleiste → Zeiger-Symbol: Grösse, Klicks aus
+- [ ] Auf der Zeitleiste einen Bereich ziehen → **Ausschneiden**: Länge wird
+      kürzer, roter Strich zeigt den Schnitt; Abspielen springt darüber
+- [ ] **Nur Auswahl behalten** (Trimmen); **Schnitte zurücknehmen**
+- [ ] Webcam: Bereich wählen → **Gross** / **Klein** / **Aus**
+- [ ] **Zoom hinzufügen** an der Stelle; Zoom-Block anklicken → Stärke,
+      Links/Rechts, Oben/Unten, löschen; **Auto-Zoom** aus den Klicks
+- [ ] Pfeil oder Text zeichnen: erscheint ab der aktuellen Stelle für 4 s
+      (orange Spur); **Ab hier** / **Bis hier** / **Immer zeigen**
+- [ ] Ton-Symbol: Lautstärke Computer/Mikrofon
+- [ ] Nach Änderungen „Video wird aktualisiert … %“ → danach Galerie-Video,
+      Kopieren (⌘C), Sichern unter (⌘S) mit allen Änderungen
+- [ ] **Einzelbild** landet als Bild in der Galerie; **GIF** sichern und in
+      einem Browser öffnen
+- [ ] ⌘Z nimmt Schnitte, Webcam-Wechsel, Zooms und Ebenen zurück
+
 ### 5. Editor
 - [ ] Werkzeuge: Pfeil (A), Linie (L), Rechteck (R), Ellipse (O),
       Freihand (P), Text (T), Sprechblase (B), Nummern (N), Marker (H),

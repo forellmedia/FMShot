@@ -78,6 +78,10 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   - Export-Ablauf
   - Sie entscheidet, was in jedem Bild wo liegt. Editor-Vorschau und Export
     nutzen dieselbe Rechnung.
+  - Sie kennt Dekoder und Encoder nur als Schnittstellen (`FrameSource`,
+    `FrameSink`); `fmshot-media` setzt sie mit den Bordmitteln des Systems um
+    und hängt dafür von `fmshot-video` ab (ohne die GPU-Funktion). Der
+    Export lässt sich so mit erzeugten Bildern testen.
 
 ### Webcam
 - **Ein/aus** vor und während der Aufnahme; Kamera wählbar.
@@ -155,6 +159,94 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   `device.camera` wegen Hardened Runtime). Beim ersten Mal fragt das System
   selbst; ist die Freigabe verweigert, öffnet FMShot direkt die passende
   Stelle der Systemeinstellungen – nie ein eigener Hinweis.
+
+### Nachtrag Etappe 2: gewählte Standards
+- **Abschnitte:** Webcam ein/aus und gross/klein schreiben während der
+  Aufnahme Abschnitte (`video.webcam.sections` in `<id>.json`, Zeiten in ms
+  als `u32`). Übergang 300 ms (weich): Die hintere Spur steht sofort an
+  ihrem Ziel, die vordere gleitet bzw. blendet – so scheint nie Schwarz durch.
+- **Webcam aus** stoppt die Kamera (Lämpchen aus). Die Spur entsteht beim
+  ersten Einschalten und beginnt am gemeinsamen Nullpunkt; die Kamera läuft
+  parallel zum Countdown an (bis ~1 s), der Start wartet nicht auf sie.
+- **Kamera:** höchstens 1080p (Preset 1920×1080, sonst 1280×720), HEVC
+  mit ≈ 0,1 bit/Pixel (2–16 Mbit/s).
+- **Layout-Standard:** Kreis, 20 % der Bildbreite, unten rechts, Abstand
+  3 % der kürzeren Bildseite, weisser Rahmen 2,5 %, Schatten, gespiegelt.
+  Eckenradius sonst 12 % der kürzeren Seite. Grösse 5–60 % der Breite.
+- **Webcam gross:** Webcam füllt das Bild (mittig beschnitten), der
+  Bildschirm liegt mit mindestens 28 % Breite in der Ecke der Webcam.
+- **Live-Blase:** 80–640 Punkte breit, Scrollrad ändert die Grösse. Ihre
+  Lage beim Stopp wird das Startlayout; liegt sie höchstens 8 % der kürzeren
+  Seite neben einer Ecke oder ganz ausserhalb des Bereichs, rastet sie in
+  der (nächsten) Ecke ein, sonst bleibt sie frei.
+- **Export:** H.264 High mit ≈ 1,6× der Datenrate des Bildschirmvideos,
+  gleiche Bildrate wie die Aufnahme, Ton gemischt (AAC 160 kbit/s). Schlägt
+  das Zusammensetzen fehl (keine GPU), entsteht das Video wie in Etappe 1
+  ohne Webcam.
+
+### Nachtrag Etappe 2: Erweiterungspunkte für Etappe 3–6
+- `fmshot_video::layout::scene_at` liefert pro Bild eine `Scene`: Spuren
+  (`Source`) mit `Placement` (Ziel, Ausschnitt `crop`, Radius, Rahmen,
+  Schatten, Deckkraft). **Kopfausschnitt** (3) setzt nur `crop` der Webcam
+  aus `faces.json`; **Zoom** (5) setzt `crop` des Bildschirms.
+- **Hintergrundmaske** (3): zusätzliche Textur je Spur im Compositor
+  (`gpu.rs`, Bindung 3) und Mischung im Shader `compose.wgsl`.
+- **Zeiger und Ebenen** (5, 6): weitere `Source`-Arten, deren Bild
+  `fmshot-render` zeichnet und `Compositor::upload` hochlädt; sie kommen
+  oben auf die Szene. Ebenen mit Zeitbereich filtert `scene_at` nach `t`.
+- Snapshot-Tests (`crates/fmshot-video/tests/snapshots.rs`) laufen mit
+  erzeugten Spuren; neue Fälle dort ergänzen.
+
+### Nachtrag Etappe 3 (teilweise)
+- Fertig: Datenmodell (`framing` Ganzes Bild/Kopf, `follow`, `background`
+  Original/unscharf/entfernt im Webcam-Layout; `FaceTrack` in
+  `<id>_faces.json`), Kopfausschnitt mit kritisch gedämpfter Feder und
+  Totzone (`fmshot_video::head`), Personen-Maske im Shader (Weichzeichnen
+  mit 48 Abtastpunkten, Entfernen bzw. dunkle Fläche bei grosser Webcam).
+- **Erkennung unter macOS mit Apple Vision statt ONNX** (Gesicht:
+  `VNDetectFaceRectanglesRequest`, Person: `VNGeneratePersonSegmentationRequest`):
+  kein Modell-Download, läuft auf der Neural Engine. Für Windows/Linux kommt
+  ein ONNX-Modell hinter denselben Schnittstellen (`Segmenter`, Gesichter als
+  `FaceTrack`).
+- Offen: Erkennung während der Aufnahme und `<id>_faces.json` schreiben,
+  Live-Blase mit Kopfausschnitt und Hintergrund, Maske im Export, Schalter
+  im Tray-Tab *Video*.
+
+### Nachtrag Etappe 4–6: Video-Editor, Zeiger, Ebenen
+- **Ein Editor für Bild und Video:** Ein Video öffnet in der normalen
+  Leinwand. An der Stelle der Aufnahme (unterste Bild-Ebene) liegt die
+  Vorschau aus `<video>`-Elementen; Pfeile, Text usw. zeichnet wie immer
+  `fmshot-render`. Werkzeuge, die die Bildpunkte darunter brauchen
+  (Weichzeichnen, Lupe, Spotlight) oder die Zeichenfläche ändern
+  (Zuschneiden, Hintergrund), fehlen im Video.
+- **Zeitachse:** Alles im Dokument steht in Zeit der Aufnahme; Schnitte
+  (`video.cuts`) fallen im fertigen Video weg (`fmshot_video::timeline`).
+  Editor (WASM `VideoPreview`) und Export rechnen dieselbe Umrechnung.
+  Bearbeiten (`fmshot_video::edit`) gibt immer ein neues Dokument zurück –
+  Rückgängig funktioniert wie bei Bildern.
+- **Fertiges Video:** Nach jeder Änderung setzt FMShot `<id>_video.mp4`
+  1,5 s später im Hintergrund neu zusammen (ein neuer Auftrag bricht den
+  alten ab) und ersetzt die Datei erst am Ende. Kopieren, Sichern und
+  Einzelbild warten darauf.
+- **Ton:** Lautstärke je Spur 0–1 (AVAudioMix kann nicht verstärken), die
+  bleibenden Stücke werden hintereinandergehängt.
+- **GIF:** höchstens 960 px, 12 Bilder/s, Farben je Bild (NeuQuant).
+- **Mauszeiger (Etappe 5):** Aufgenommen wird ohne Zeiger; die Mausspur
+  (`<id>_input.json`, ~60 Proben/s, Lage relativ zum Bereich, Taste
+  gedrückt) liest nur den Zustand (`CGEventSourceButtonState`) und braucht
+  keine Freigabe. Der Zeiger ist ein eigener Pfeil (Form wie macOS, keine
+  Wechsel zu I-Balken usw.), Grösse 1–3×, Klicks als Kreis (600 ms).
+  Beim Fenster-Ziel gilt die Fensterlage beim Start.
+- **Zoom:** Abschnitte mit Mitte und Stärke (1–4×), 500 ms weich hinein und
+  hinaus; Zeiger und Klicks folgen dem Zoom. *Auto-Zoom* fasst Klicks mit
+  weniger als 3 s Abstand zusammen (0,7 s Vorlauf, 1,8 s Nachlauf, 1,8×).
+- **Ebenen mit Zeitbereich (Etappe 6):** `video.layer_times`; neue Ebenen
+  sind ab der aktuellen Stelle 4 s zu sehen, „Ab hier“/„Bis hier“/„Immer“
+  ändern das. Im Export zeichnet `fmshot_video::overlay` die sichtbaren
+  Ebenen nur neu, wenn sich die Auswahl ändert, und legt sie oben auf.
+- **Compositor:** Ein gemeinsamer Uniform-Puffer mit dynamischem Versatz
+  (bis 64 Ebenen pro Bild); Texturen bringen ihre Deckkraft mit (Zeiger,
+  Kreise, Ebenen).
 
 ### Budgets (Apple M1)
 | Messpunkt                                  | Ziel              |

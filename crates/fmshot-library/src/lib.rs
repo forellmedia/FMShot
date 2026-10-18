@@ -113,8 +113,23 @@ pub fn microphone_file(id: &str) -> String {
     format!("{id}_mic.m4a")
 }
 
+/// Video: Webcam (ADR 0011, Etappe 2).
+pub fn webcam_file(id: &str) -> String {
+    format!("{id}_webcam.mp4")
+}
+
 /// Video: alle Spuren zusammengeführt, überall abspielbar. Das Standbild
 /// liegt als `_original.png` daneben (Galerie, Suche).
+/// Video: erkannte Gesichter der Webcam (Etappe 3).
+pub fn faces_file(id: &str) -> String {
+    format!("{id}_faces.json")
+}
+
+/// Video: Mausspur (Etappe 5).
+pub fn input_file(id: &str) -> String {
+    format!("{id}_input.json")
+}
+
 pub fn video_file(id: &str) -> String {
     format!("{id}_video.mp4")
 }
@@ -143,6 +158,31 @@ impl CaptureRecord {
     /// Das abspielbare Video (nur bei Videos).
     pub fn video_path(&self) -> PathBuf {
         self.dir.join(video_file(&self.id))
+    }
+
+    /// Spuren eines Videos (zum erneuten Zusammensetzen).
+    pub fn screen_path(&self) -> PathBuf {
+        self.dir.join(screen_file(&self.id))
+    }
+
+    pub fn webcam_path(&self) -> PathBuf {
+        self.dir.join(webcam_file(&self.id))
+    }
+
+    pub fn system_audio_path(&self) -> PathBuf {
+        self.dir.join(system_audio_file(&self.id))
+    }
+
+    pub fn faces_path(&self) -> PathBuf {
+        self.dir.join(faces_file(&self.id))
+    }
+
+    pub fn input_path(&self) -> PathBuf {
+        self.dir.join(input_file(&self.id))
+    }
+
+    pub fn microphone_path(&self) -> PathBuf {
+        self.dir.join(microphone_file(&self.id))
     }
 }
 

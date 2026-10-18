@@ -1,6 +1,7 @@
 // Zustand des Editors: aktuelle Aufnahme, Dokument, Auswahl, Werkzeug, Stil,
 // Rückgängig/Wiederholen und Ansicht (Zoom/Verschieben).
 
+import { player } from "./video.svelte";
 import { api, on, type AssetInfo, type CaptureInfo, type OcrBlock } from "$lib/api";
 import { t } from "$lib/i18n";
 import {
@@ -720,6 +721,8 @@ export class Editor {
 
   async copy() {
     if (!this.current || !this.doc) return;
+    // Video: das fertige Video als Datei kopieren.
+    if (this.current.videoPath) return player.copy();
     try {
       await api.copyDocument(this.current.id, $state.snapshot(this.doc) as Doc);
       this.flash(t("editor.copied"));
@@ -730,6 +733,7 @@ export class Editor {
 
   /** Speichern im Format aus den Einstellungen (⌘S). */
   async save() {
+    if (this.current?.videoPath) return player.saveAs();
     const format = (await api.getSettings()).save_format ?? "png";
     await this.exportAs(format);
   }

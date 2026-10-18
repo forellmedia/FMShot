@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use fmshot_core::WebcamLayout;
 use fmshot_hotkeys::{Action, Platform, Shortcut, conflicts, default_bindings};
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +64,7 @@ pub enum VideoTarget {
 }
 
 /// Einstellungen der Video-Aufnahme (ADR 0011).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(default)]
 pub struct VideoSettings {
@@ -76,6 +77,13 @@ pub struct VideoSettings {
     pub countdown: bool,
     /// Bilder pro Sekunde: 30 oder 60.
     pub fps: u32,
+    /// Webcam zu Beginn eingeschaltet (während der Aufnahme umschaltbar).
+    pub webcam: bool,
+    /// `None` = Standard-Kamera des Systems.
+    pub camera_id: Option<String>,
+    /// Form, Grösse, Rahmen und Schatten der Webcam; die Lage gibt die
+    /// Live-Blase vor.
+    pub webcam_layout: WebcamLayout,
 }
 
 impl Default for VideoSettings {
@@ -87,6 +95,9 @@ impl Default for VideoSettings {
             system_audio: true,
             countdown: true,
             fps: 30,
+            webcam: false,
+            camera_id: None,
+            webcam_layout: WebcamLayout::default(),
         }
     }
 }

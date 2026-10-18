@@ -4,10 +4,20 @@
 import init, { WasmRenderer } from "$lib/wasm/fmshot_render";
 import type { Doc, Rect } from "./model";
 
+let module: Promise<unknown> | null = null;
 let ready: Promise<WasmRenderer> | null = null;
 
+/**
+ * Lädt das WASM-Modul genau einmal. Zwei gleichzeitige `init()` legen zwei
+ * Instanzen an – Objekte der ersten zeigen dann in fremden Speicher.
+ */
+export function wasmModule(): Promise<unknown> {
+  module ??= init();
+  return module;
+}
+
 export function renderer(): Promise<WasmRenderer> {
-  ready ??= init().then(() => new WasmRenderer());
+  ready ??= wasmModule().then(() => new WasmRenderer());
   return ready;
 }
 

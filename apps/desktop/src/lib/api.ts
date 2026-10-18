@@ -5,6 +5,7 @@
 import {
   commands,
   type AssetInfo,
+  type Camera,
   type CaptureInfo,
   type CaptureMode,
   type ContentSearchStatus,
@@ -18,10 +19,11 @@ import {
   type Microphone,
   type Settings,
   type VideoSettings,
+  type VideoTracks,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Microphone, Settings, VideoSettings };
+export type { AssetInfo, Camera, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Microphone, Settings, VideoSettings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -105,6 +107,16 @@ export const api = {
   contentSearchStatus: (): Promise<ContentSearchStatus> =>
     isTauri ? unwrap(commands.contentSearchStatus()) : Promise.resolve({ available: true, done: 3, total: 4 }),
   reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
+  videoTracks: (id: string): Promise<VideoTracks> =>
+    isTauri
+      ? unwrap(commands.videoTracks(id))
+      : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: null, input: null }),
+  exportVideo: (id: string): Promise<CaptureInfo> =>
+    isTauri ? unwrap(commands.exportVideo(id)) : mock.getCapture(id),
+  exportGif: (id: string): Promise<string | null> =>
+    isTauri ? unwrap(commands.exportGif(id)) : Promise.resolve(null),
+  videoSnapshot: (id: string, outputMs: number): Promise<CaptureInfo> =>
+    isTauri ? unwrap(commands.videoSnapshot(id, outputMs)) : mock.getCapture(id),
   copyVideo: (id: string): Promise<null> => (isTauri ? unwrap(commands.copyVideo(id)) : Promise.resolve(null)),
   saveVideoAs: (id: string): Promise<string | null> =>
     isTauri ? unwrap(commands.saveVideoAs(id)) : Promise.resolve(null),
@@ -116,6 +128,13 @@ export const api = {
       : Promise.resolve([
           { id: "builtin", name: "MacBook Pro-Mikrofon" },
           { id: "usb", name: "USB-Headset" },
+        ]),
+  listCameras: (): Promise<Camera[]> =>
+    isTauri
+      ? commands.listCameras()
+      : Promise.resolve([
+          { id: "facetime", name: "FaceTime HD-Kamera" },
+          { id: "iphone", name: "iPhone-Kamera" },
         ]),
   getLaunchAtLogin: (): Promise<boolean> =>
     isTauri ? commands.getLaunchAtLogin() : Promise.resolve(mock.launchAtLogin),
@@ -212,7 +231,25 @@ const mock = (() => {
       retention_days: null,
       save_format: "png",
       content_search: true,
-      video: { target: "region", microphone: true, microphone_id: null, system_audio: true, countdown: true, fps: 30 },
+      video: {
+        target: "region",
+        microphone: true,
+        microphone_id: null,
+        system_audio: true,
+        countdown: true,
+        fps: 30,
+        webcam: true,
+        camera_id: null,
+        webcam_layout: {
+          position: { type: "bottom_right" },
+          size: 0.2,
+          shape: "circle",
+          corner_radius: 0.12,
+          border: { width: 0.025, color: { r: 255, g: 255, b: 255, a: 255 } },
+          shadow: true,
+          mirror: true,
+        },
+      },
     } as Settings,
     launchAtLogin: false,
     hotkeys: [
@@ -274,7 +311,12 @@ const mock = (() => {
     async loadDocument(id: string): Promise<Doc> {
       const c = await this.getCapture(id);
       const r = { x: 0, y: 0, width: c.width, height: c.height };
+      const video =
+        c.mode === "video"
+          ? { duration_ms: c.durationMs ?? 10_000, fps: 30, cuts: [{ start_ms: 20_000, end_ms: 25_000 }], zooms: [{ start_ms: 5000, end_ms: 9000, x: 0.3, y: 0.3, scale: 2 }] }
+          : null;
       return {
+        video,
         schema_version: 1,
         pixel_ratio: 2,
         artboard: { rect: r, background: null },

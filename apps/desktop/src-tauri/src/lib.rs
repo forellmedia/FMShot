@@ -13,6 +13,7 @@ mod settings;
 mod tray;
 mod updater;
 mod video;
+mod video_edit;
 mod vision;
 
 use std::sync::Arc;
@@ -42,10 +43,15 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         editor::reveal_capture,
         editor::start_capture,
         editor::copy_video,
+        video_edit::video_tracks,
+        video_edit::export_video,
+        video_edit::export_gif,
+        video_edit::video_snapshot,
         editor::save_video_as,
         tray::open_main,
         tray::quit_app,
         tray::list_microphones,
+        tray::list_cameras,
         tray::get_launch_at_login,
         tray::set_launch_at_login,
         settings::get_settings,
@@ -112,6 +118,7 @@ pub fn run() {
             app.manage(editor::EditorState::new());
             app.manage(scroll::ScrollState::default());
             app.manage(video::VideoState::default());
+            app.manage(video_edit::VideoEditState::default());
             app.manage(tray::PopoverState::default());
             app.manage(services::Services::new());
             app.manage(vision::VisionState::new(app.handle()));

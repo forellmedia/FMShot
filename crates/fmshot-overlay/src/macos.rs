@@ -42,9 +42,9 @@ use objc2_quartz_core::{
 };
 
 use crate::{
-    DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction, PreviewPlacement,
-    RecordAction, RecordLabels, ScrollAction, Selection, WindowTarget, points_to_pixels,
-    rect_from_points, window_at,
+    BubbleStyle, DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction,
+    PreviewPlacement, RecordAction, RecordLabels, ScrollAction, Selection, WindowTarget,
+    bubble_resize, points_to_pixels, rect_from_points, window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -712,7 +712,7 @@ impl OverlayView {
 
 const BAR_HEIGHT: f64 = 44.0;
 const BAR_STATUS_WIDTH: f64 = 176.0;
-const BAR_BUTTON_WIDTH: f64 = 76.0;
+const BAR_BUTTON_WIDTH: f64 = 84.0;
 const BAR_GAP: f64 = 6.0;
 
 /// Rahmen um den Bereich (optional) und eine Leiste mit Status und Knöpfen.
@@ -759,19 +759,25 @@ impl ScrollUi {
     }
 }
 
-pub(crate) struct RecordUi(Bar);
+pub(crate) struct RecordUi {
+    bar: Bar,
+    /// Aktion je Knopf, in der Reihenfolge der Leiste.
+    actions: Vec<RecordAction>,
+}
 
 impl RecordUi {
     pub fn set_status(&self, text: &str) {
-        self.0.set_status(text);
+        self.bar.set_status(text);
     }
 
-    pub fn set_pause_label(&self, text: &str) {
-        self.0.set_label(0, text);
+    pub fn set_label(&self, action: RecordAction, text: &str) {
+        if let Some(i) = self.actions.iter().position(|a| *a == action) {
+            self.bar.set_label(i, text);
+        }
     }
 
     pub fn close(&self) {
-        self.0.close();
+        self.bar.close();
     }
 }
 
@@ -1015,24 +1021,220 @@ pub(crate) fn open_record_ui(
     labels: &RecordLabels<'_>,
     on_action: Box<dyn Fn(RecordAction)>,
 ) -> Result<RecordUi, OverlayError> {
-    open_bar(
+    let mut buttons = vec![(labels.pause, false, RecordAction::Pause)];
+    if let Some(webcam) = labels.webcam {
+        buttons.push((webcam, false, RecordAction::Webcam));
+        if let Some(large) = labels.webcam_large {
+            buttons.push((large, false, RecordAction::WebcamLarge));
+        }
+    }
+    buttons.push((labels.stop, true, RecordAction::Stop));
+    buttons.push((labels.cancel, false, RecordAction::Cancel));
+    let actions: Vec<RecordAction> = buttons.iter().map(|b| b.2).collect();
+    let bar_buttons: Vec<BarButton<'_>> = buttons.iter().map(|b| (b.0, b.1)).collect();
+    let click = actions.clone();
+    let bar = open_bar(
         display_id,
         rect,
         labels.status,
-        &[
-            (labels.pause, false),
-            (labels.stop, true),
-            (labels.cancel, false),
-        ],
+        &bar_buttons,
         Box::new(move |i| {
-            on_action(match i {
-                0 => RecordAction::Pause,
-                1 => RecordAction::Stop,
-                _ => RecordAction::Cancel,
-            })
+            if let Some(action) = click.get(i) {
+                on_action(*action);
+            }
         }),
-    )
-    .map(RecordUi)
+    )?;
+    Ok(RecordUi { bar, actions })
+}
+
+// --- Webcam-Blase ------------------------------------------------------------
+
+/// Kleinste und grösste Breite der Blase in Punkten.
+const BUBBLE_MIN: f64 = 80.0;
+const BUBBLE_MAX: f64 = 640.0;
+
+struct BubbleIvars {
+    /// Schneidet das Kamerabild in Form und trägt den Rahmen.
+    container: Retained<CALayer>,
+    preview: Retained<CALayer>,
+    style: BubbleStyle,
+}
+
+define_class!(
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FMShotBubbleView"]
+    #[ivars = BubbleIvars]
+    struct BubbleView;
+
+    impl BubbleView {
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            if let Some(window) = self.window() {
+                window.performWindowDragWithEvent(event);
+            }
+        }
+
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            let mut delta = event.scrollingDeltaY();
+            if !event.hasPreciseScrollingDeltas() {
+                // Mausrad: wenige, grobe Schritte
+                delta *= 4.0;
+            }
+            if delta.abs() < f64::EPSILON {
+                return;
+            }
+            let Some(window) = self.window() else {
+                return;
+            };
+            let f = window.frame();
+            let (w, h) = bubble_resize(
+                (f.size.width, f.size.height),
+                delta,
+                BUBBLE_MIN,
+                BUBBLE_MAX,
+            );
+            let frame = NSRect::new(
+                CGPoint::new(
+                    f.origin.x + (f.size.width - w) / 2.0,
+                    f.origin.y + (f.size.height - h) / 2.0,
+                ),
+                CGSize::new(w, h),
+            );
+            window.setFrame_display(frame, true);
+            self.layout_layers(frame.size);
+            window.invalidateShadow();
+        }
+
+        #[unsafe(method(resetCursorRects))]
+        fn reset_cursor_rects(&self) {
+            self.addCursorRect_cursor(self.bounds(), &NSCursor::openHandCursor());
+        }
+    }
+);
+
+impl BubbleView {
+    /// Form, Rahmen und Kamerabild an die Grösse anpassen.
+    fn layout_layers(&self, size: CGSize) {
+        let iv = self.ivars();
+        let bounds = CGRect::new(CGPoint::new(0.0, 0.0), size);
+        let short = size.width.min(size.height);
+        without_animation(|| {
+            iv.container.setFrame(bounds);
+            iv.container
+                .setCornerRadius(iv.style.corner_radius.clamp(0.0, 0.5) * short);
+            match iv.style.border {
+                Some((width, [r, g, b, a])) => {
+                    iv.container.setBorderWidth((width * short).max(1.0));
+                    iv.container
+                        .setBorderColor(Some(&CGColor::new_srgb(r, g, b, a)));
+                }
+                None => iv.container.setBorderWidth(0.0),
+            }
+            iv.preview.setFrame(bounds);
+        });
+    }
+}
+
+pub(crate) struct Bubble {
+    panel: Retained<OverlayPanel>,
+    preview: Retained<CALayer>,
+    /// Monitor beim Öffnen (Cocoa-Koordinaten) und sein Massstab.
+    screen: NSRect,
+    scale: f64,
+}
+
+impl Bubble {
+    pub fn frame(&self) -> (f64, f64, f64, f64) {
+        let f = self.panel.frame();
+        let sf = self.screen;
+        let s = self.scale;
+        (
+            (f.origin.x - sf.origin.x) * s,
+            (sf.origin.y + sf.size.height - f.origin.y - f.size.height) * s,
+            f.size.width * s,
+            f.size.height * s,
+        )
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        if visible {
+            self.panel.orderFrontRegardless();
+        } else {
+            self.panel.orderOut(None);
+        }
+    }
+
+    pub fn close(&self) {
+        self.panel.orderOut(None);
+        self.preview.removeFromSuperlayer();
+    }
+}
+
+/// # Safety
+/// `layer` zeigt auf einen gültigen `CALayer`.
+pub(crate) unsafe fn open_bubble(
+    display_id: u32,
+    rect: (f64, f64, f64, f64),
+    style: BubbleStyle,
+    layer: *mut c_void,
+) -> Result<Bubble, OverlayError> {
+    let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
+    // SAFETY: vom Aufrufer zugesichert; wir halten eine eigene Referenz.
+    let preview = unsafe { Retained::retain(layer as *mut CALayer) }
+        .ok_or_else(|| OverlayError::Backend("Kein Kamerabild".into()))?;
+    let screens = NSScreen::screens(mtm);
+    let screen = screens
+        .iter()
+        .find(|s| screen_number(s) == Some(display_id))
+        .or_else(|| screens.firstObject())
+        .ok_or(OverlayError::NoScreens)?;
+    let sf = screen.frame();
+    let scale = screen.backingScaleFactor().max(1.0);
+    // Grösse begrenzen, Seitenverhältnis und Mittelpunkt behalten.
+    let (w0, h0) = ((rect.2 / scale).max(1.0), (rect.3 / scale).max(1.0));
+    let w = w0.clamp(BUBBLE_MIN, BUBBLE_MAX);
+    let h = h0 * w / w0;
+    let x = rect.0 / scale + (w0 - w) / 2.0;
+    let y = rect.1 / scale + (h0 - h) / 2.0;
+    let frame = NSRect::new(
+        CGPoint::new(sf.origin.x + x, sf.origin.y + sf.size.height - y - h),
+        CGSize::new(w, h),
+    );
+    let panel = OverlayPanel::new(mtm, frame);
+    panel.setHasShadow(style.shadow);
+    panel.setHidesOnDeactivate(false);
+
+    let container = CALayer::new();
+    container.setMasksToBounds(true);
+    container.setBackgroundColor(Some(&CGColor::new_srgb(0.1, 0.1, 0.11, 1.0)));
+    container.addSublayer(&preview);
+    let view = BubbleView::alloc(mtm).set_ivars(BubbleIvars {
+        container: container.clone(),
+        preview: preview.clone(),
+        style,
+    });
+    let view: Retained<BubbleView> = unsafe {
+        msg_send![super(view), initWithFrame: NSRect::new(CGPoint::new(0.0, 0.0), frame.size)]
+    };
+    view.setWantsLayer(true);
+    view.layer().expect("Ebene").addSublayer(&container);
+    view.layout_layers(frame.size);
+    panel.setContentView(Some(&view));
+    panel.orderFrontRegardless();
+    panel.invalidateShadow();
+    Ok(Bubble {
+        panel,
+        preview,
+        screen: sf,
+        scale,
+    })
 }
 
 // --- Schnellzugriff-Vorschau ---------------------------------------------------

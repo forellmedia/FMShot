@@ -1,10 +1,11 @@
-//! Video und Ton (ADR 0011): Bildschirm als Video aufnehmen, Systemton und
-//! Mikrofon, Kodieren und Zusammenführen zu einem MP4.
+//! Video und Ton (ADR 0011): Bildschirm als Video aufnehmen, Systemton,
+//! Mikrofon und Webcam, Dekodieren und Kodieren für den Export.
 //!
 //! Kodiert wird immer mit den Bordmitteln des Systems (Hardware), nie mit
 //! FFmpeg (LGPL/GPL, Regel 5):
-//! - macOS: ScreenCaptureKit-Stream → AVAssetWriter (HEVC/AAC); Mikrofon über
-//!   AVFoundation, damit alle Spuren dieselbe Systemuhr haben
+//! - macOS: ScreenCaptureKit-Stream → AVAssetWriter (HEVC/AAC); Mikrofon und
+//!   Webcam über AVFoundation, damit alle Spuren dieselbe Systemuhr haben;
+//!   Export: AVAssetReader → `fmshot-video` (wgpu) → AVAssetWriter
 //! - Windows: Media Foundation – folgt
 //! - Linux: PipeWire + openh264 – folgt
 //!
@@ -12,6 +13,7 @@
 //! liegt die Video-Aufnahme hier und nicht in `fmshot-capture`, das nur
 //! Einzelbilder liefert.
 
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -63,6 +65,9 @@ pub struct RecordFiles {
     pub system_audio: Option<PathBuf>,
     /// Mikrofon (M4A, AAC).
     pub microphone: Option<PathBuf>,
+    /// Webcam (MP4, HEVC). Wird nur geschrieben, wenn die Webcam während
+    /// der Aufnahme einmal eingeschaltet war.
+    pub webcam: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +80,9 @@ pub struct RecordOptions {
     pub microphone_id: Option<String>,
     /// Mauszeiger mit aufnehmen. Ab Etappe 5 zeichnet FMShot ihn selbst.
     pub show_cursor: bool,
+    /// `None` = Standard-Kamera des Systems. Eingeschaltet wird sie mit
+    /// [`Recording::set_webcam`] (braucht `files.webcam`).
+    pub camera_id: Option<String>,
 }
 
 /// Lautstärke-Spitzen seit der letzten Abfrage, 0.0 bis 1.0.
@@ -112,6 +120,30 @@ pub trait Recording: Send + Sync {
     fn stop(&self) -> Result<RecordSummary>;
     /// Bricht ab und löscht die Dateien.
     fn cancel(&self);
+    /// Webcam ein- oder ausschalten. Blockiert, bis die Kamera läuft bzw.
+    /// steht (bis etwa 1 s) – nicht im Haupt-Thread aufrufen.
+    fn set_webcam(&self, on: bool) -> Result<()>;
+    fn webcam_on(&self) -> bool;
+    /// Live-Bild der Webcam für die Blase; `None`, solange die Webcam nie
+    /// eingeschaltet war. Im Haupt-Thread aufrufen.
+    fn webcam_preview(&self, mirror: bool) -> Option<PreviewLayer>;
+}
+
+/// Live-Bild der Webcam als Ebene des Systems (macOS: `CALayer`), das die
+/// Blase in `fmshot-overlay` anzeigt.
+pub struct PreviewLayer {
+    #[cfg(target_os = "macos")]
+    pub(crate) layer: macos::SendLayer,
+}
+
+impl PreviewLayer {
+    /// Zeiger auf die Ebene (macOS: `CALayer *`), gültig, solange `self` lebt.
+    pub fn as_ptr(&self) -> *mut c_void {
+        #[cfg(target_os = "macos")]
+        return self.layer.as_ptr();
+        #[cfg(not(target_os = "macos"))]
+        std::ptr::null_mut()
+    }
 }
 
 /// Startet eine Aufnahme. Blockiert, bis der Bildschirm-Stream läuft.
@@ -125,16 +157,25 @@ pub fn start_recording(options: RecordOptions) -> Result<Box<dyn Recording>> {
     }
 }
 
-/// Ein Mikrofon des Systems.
+/// Ein Mikrofon oder eine Kamera des Systems.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AudioDevice {
+pub struct Device {
     pub id: String,
     pub name: String,
 }
 
-pub fn microphones() -> Vec<AudioDevice> {
+pub type AudioDevice = Device;
+
+pub fn microphones() -> Vec<Device> {
     #[cfg(target_os = "macos")]
     return macos::microphones();
+    #[cfg(not(target_os = "macos"))]
+    Vec::new()
+}
+
+pub fn cameras() -> Vec<Device> {
+    #[cfg(target_os = "macos")]
+    return macos::cameras();
     #[cfg(not(target_os = "macos"))]
     Vec::new()
 }
@@ -162,6 +203,62 @@ pub fn request_microphone_permission() -> bool {
     return macos::request_microphone_permission();
     #[cfg(not(target_os = "macos"))]
     true
+}
+
+pub fn camera_permission() -> Permission {
+    #[cfg(target_os = "macos")]
+    return macos::camera_permission();
+    #[cfg(not(target_os = "macos"))]
+    Permission::Granted
+}
+
+/// Fragt die Kamera-Freigabe an (Systemfenster), blockiert bis zur Antwort.
+pub fn request_camera_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::request_camera_permission();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// Öffnet eine Videospur zum Lesen, Bild für Bild als BGRA (Export).
+pub fn open_video(path: &Path) -> Result<Box<dyn fmshot_video::FrameSource>> {
+    #[cfg(target_os = "macos")]
+    return macos::codec::open_video(path)
+        .map(|r| Box::new(r) as Box<dyn fmshot_video::FrameSource>);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err(MediaError::NotImplemented)
+    }
+}
+
+/// Eine Tonspur für den Export, Lautstärke 0 (stumm) bis 1 (wie aufgenommen).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioInput {
+    pub path: PathBuf,
+    pub volume: f32,
+}
+
+/// Legt ein MP4 (H.264 + AAC) an, das die zusammengesetzten Bilder
+/// aufnimmt. Die Tonspuren in `audio` werden gemischt. `kept` sind die
+/// Stücke der Aufnahme, die bleiben (leer = alles); sie werden
+/// hintereinandergehängt und auf `duration` gekürzt.
+pub fn create_mp4(
+    path: &Path,
+    size: (u32, u32),
+    fps: u32,
+    audio: &[AudioInput],
+    kept: &[fmshot_core::TimeRange],
+    duration: Duration,
+) -> Result<Box<dyn fmshot_video::FrameSink>> {
+    #[cfg(target_os = "macos")]
+    return macos::codec::create_mp4(path, size, fps, audio, kept, duration)
+        .map(|w| Box::new(w) as Box<dyn fmshot_video::FrameSink>);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, size, fps, audio, kept, duration);
+        Err(MediaError::NotImplemented)
+    }
 }
 
 /// Führt die Spuren zu einem MP4 (H.264 + AAC) zusammen, das überall
@@ -199,6 +296,17 @@ pub fn screen_bitrate(width: u32, height: u32, fps: u32) -> u32 {
     bits.clamp(2_000_000.0, 40_000_000.0) as u32
 }
 
+/// Datenrate der Webcam (Kamerabild, kein Text).
+pub fn camera_bitrate(width: u32, height: u32, fps: u32) -> u32 {
+    let bits = width as f64 * height as f64 * fps.max(1) as f64 * 0.1;
+    bits.clamp(2_000_000.0, 16_000_000.0) as u32
+}
+
+/// Datenrate des fertigen Videos (H.264 braucht mehr als HEVC).
+pub fn export_bitrate(width: u32, height: u32, fps: u32) -> u32 {
+    (screen_bitrate(width, height, fps) as f64 * 1.6).min(60_000_000.0) as u32
+}
+
 /// Wandelt eine Lautstärke-Spitze in einen Balken mit `steps` Stufen
 /// (logarithmisch, −50 dB … 0 dB).
 pub fn level_steps(peak: f32, steps: u32) -> u32 {
@@ -226,6 +334,13 @@ mod tests {
         assert_eq!(screen_bitrate(100, 100, 30), 2_000_000);
         assert_eq!(screen_bitrate(1920, 1080, 30), 4_976_640);
         assert_eq!(screen_bitrate(6016, 3384, 60), 40_000_000);
+    }
+
+    #[test]
+    fn webcam_und_export_datenrate() {
+        assert_eq!(camera_bitrate(1920, 1080, 30), 6_220_800);
+        assert_eq!(camera_bitrate(640, 480, 30), 2_000_000);
+        assert_eq!(export_bitrate(1920, 1080, 30), 7_962_624);
     }
 
     #[test]

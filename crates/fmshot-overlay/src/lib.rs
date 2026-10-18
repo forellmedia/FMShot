@@ -176,6 +176,10 @@ pub fn open_scroll_ui(
 pub enum RecordAction {
     /// Pause bzw. Weiter.
     Pause,
+    /// Webcam ein/aus.
+    Webcam,
+    /// Webcam gross / Bildschirm klein und zurück.
+    WebcamLarge,
     Stop,
     Cancel,
 }
@@ -185,6 +189,10 @@ pub enum RecordAction {
 pub struct RecordLabels<'a> {
     pub status: &'a str,
     pub pause: &'a str,
+    /// Knopf „Webcam aus/an“; `None` = kein Knopf (keine Kamera).
+    pub webcam: Option<&'a str>,
+    /// Knopf „Gross/Klein“; nur mit Webcam-Knopf.
+    pub webcam_large: Option<&'a str>,
     pub stop: &'a str,
     pub cancel: &'a str,
 }
@@ -204,12 +212,12 @@ impl RecordUi {
         let _ = text;
     }
 
-    /// Text des Pause-Knopfs („Pause“ / „Weiter“).
-    pub fn set_pause_label(&self, text: &str) {
+    /// Text eines Knopfs, z. B. Pause → „Weiter“, Webcam → „Webcam an“.
+    pub fn set_label(&self, action: RecordAction, text: &str) {
         #[cfg(target_os = "macos")]
-        self.inner.set_pause_label(text);
+        self.inner.set_label(action, text);
         #[cfg(not(target_os = "macos"))]
-        let _ = text;
+        let _ = (action, text);
     }
 
     pub fn close(&self) {
@@ -235,6 +243,79 @@ pub fn open_record_ui(
         let _ = (display_id, rect, labels, on_action);
         Err(OverlayError::NotImplemented)
     }
+}
+
+/// Aussehen der Webcam-Blase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BubbleStyle {
+    /// Eckenradius als Anteil der kürzeren Seite (0.5 = Kreis bzw. Pille).
+    pub corner_radius: f64,
+    /// Rahmenbreite als Anteil der kürzeren Seite und Farbe (RGBA, 0 bis 1).
+    pub border: Option<(f64, [f64; 4])>,
+    pub shadow: bool,
+}
+
+/// Live-Bild der Webcam während der Aufnahme (ADR 0011): schwebt über
+/// allem, lässt sich ziehen, das Scrollrad ändert die Grösse. FMShot selbst
+/// ist nie im Bildschirmvideo – die Blase also auch nicht.
+pub struct WebcamBubble {
+    #[cfg(target_os = "macos")]
+    inner: macos::Bubble,
+}
+
+impl WebcamBubble {
+    /// Lage und Grösse in physischen Pixeln relativ zum Monitor, auf dem
+    /// die Blase geöffnet wurde (darf ausserhalb liegen).
+    pub fn frame(&self) -> (f64, f64, f64, f64) {
+        #[cfg(target_os = "macos")]
+        return self.inner.frame();
+        #[cfg(not(target_os = "macos"))]
+        (0.0, 0.0, 0.0, 0.0)
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_visible(visible);
+        #[cfg(not(target_os = "macos"))]
+        let _ = visible;
+    }
+
+    pub fn close(&self) {
+        #[cfg(target_os = "macos")]
+        self.inner.close();
+    }
+}
+
+/// Öffnet die Webcam-Blase auf `display_id` an `rect` (physische Pixel
+/// relativ zum Monitor). Muss im Haupt-Thread laufen.
+///
+/// # Safety
+/// `layer` muss auf eine gültige Ebene des Systems zeigen (macOS: `CALayer`,
+/// z. B. aus `fmshot_media::PreviewLayer`). Die Blase hält sie selbst fest.
+pub unsafe fn open_webcam_bubble(
+    display_id: u32,
+    rect: (f64, f64, f64, f64),
+    style: BubbleStyle,
+    layer: *mut std::ffi::c_void,
+) -> Result<WebcamBubble, OverlayError> {
+    #[cfg(target_os = "macos")]
+    // SAFETY: vom Aufrufer zugesichert.
+    return unsafe { macos::open_bubble(display_id, rect, style, layer) }
+        .map(|inner| WebcamBubble { inner });
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (display_id, rect, style, layer);
+        Err(OverlayError::NotImplemented)
+    }
+}
+
+/// Neue Grösse der Blase nach einem Schritt am Scrollrad (Punkte): Höhe
+/// folgt dem Seitenverhältnis, die Breite bleibt in `min`…`max`.
+pub fn bubble_resize(size: (f64, f64), delta: f64, min: f64, max: f64) -> (f64, f64) {
+    let aspect = size.0 / size.1.max(1.0);
+    let factor = (1.0 + delta * 0.02).clamp(0.8, 1.25);
+    let width = (size.0 * factor).clamp(min, max);
+    (width, width / aspect)
 }
 
 /// Knöpfe der Schnellzugriff-Vorschau.
@@ -351,6 +432,20 @@ mod tests {
         assert_eq!(
             rect_from_points((50.0, 40.0), (10.0, 20.0)),
             (10.0, 20.0, 40.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn blase_waechst_mit_scrollrad_und_bleibt_in_grenzen() {
+        let (w, h) = bubble_resize((200.0, 100.0), 5.0, 80.0, 600.0);
+        assert!((w - 220.0).abs() < 1e-9 && (h - 110.0).abs() < 1e-9);
+        assert_eq!(
+            bubble_resize((590.0, 590.0), 20.0, 80.0, 600.0),
+            (600.0, 600.0)
+        );
+        assert_eq!(
+            bubble_resize((82.0, 82.0), -20.0, 80.0, 600.0),
+            (80.0, 80.0)
         );
     }
 

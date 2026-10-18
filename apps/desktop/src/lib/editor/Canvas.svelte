@@ -44,6 +44,9 @@
   import { measureText, render, renderer } from "./renderer";
   import { LayerCache, type Surface } from "./layerCache";
   import { LAYER_MARKER } from "./clipboard";
+  import { player } from "./video.svelte";
+  import { visibleVideoLayers, withVisible } from "./videoLayers";
+  import VideoStage from "./VideoStage.svelte";
   import { snap, type Guides } from "./snap";
 
   let container: HTMLDivElement;
@@ -103,8 +106,13 @@
 
   // --- Zeichnen ---------------------------------------------------------------
 
+  /** Video: Die Aufnahme liegt als Video darunter; Ebenen nur in ihrer Zeit. */
+  const isVideo = $derived(!!editor.current?.videoPath);
+  const videoLayers = $derived(isVideo && editor.doc ? visibleVideoLayers(editor.doc, player.scene.sourceMs) : null);
+
   /** Dokument zum Zeichnen: Text in Bearbeitung wird ausgeblendet. */
   function renderDoc(): { doc: Doc; skip: number } {
+    if (videoLayers) return { doc: withVisible(editor.doc!, videoLayers), skip: editor.editingTextId ?? 0 };
     const doc = editor.doc!;
     const editing = editor.editingTextId;
     if (!editing) return { doc, skip: 0 };
@@ -118,7 +126,8 @@
     return { doc, skip: editing };
   }
 
-  function draw(canvas: HTMLCanvasElement, from: number, to: number, background: boolean) {
+  function draw(canvas: HTMLCanvasElement | undefined, from: number, to: number, background: boolean) {
+    if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!wasm || !editor.doc || from >= (to < 0 ? editor.doc.layers.length : to)) return;
@@ -131,7 +140,7 @@
         scale: editor.zoom * dpr,
         from,
         to,
-        background,
+        background: background && !isVideo,
         skip,
       });
       if (img) ctx.putImageData(img, 0, 0);
@@ -140,8 +149,8 @@
     }
   }
 
-  function clear(canvas: HTMLCanvasElement) {
-    canvas.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
+  function clear(canvas: HTMLCanvasElement | undefined) {
+    canvas?.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
   }
 
   const surfaces = (): Record<Surface, HTMLCanvasElement> => ({
@@ -190,6 +199,21 @@
     void editor.revision;
     void editor.editingTextId;
     scheduleRender();
+  });
+
+  // Video: andere Ebenen sichtbar (Zeit läuft) – alles neu zeichnen.
+  $effect(() => {
+    void videoLayers?.join(",");
+    untrack(() => {
+      cache.invalidate();
+      scheduleRender();
+    });
+  });
+
+  // Video: Dokument geändert → Vorschau nachführen.
+  $effect(() => {
+    void editor.revision;
+    if (isVideo) untrack(() => player.syncDoc());
   });
 
   // Andere Ansicht: auch die zwischengespeicherten Flächen neu zeichnen.
@@ -1088,7 +1112,13 @@
       commitText();
       return;
     }
-    if (e.code === "Space" && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLInputElement)) {
+    // Im Video gehört die Leertaste der Wiedergabe (Zeitleiste).
+    if (
+      e.code === "Space" &&
+      !isVideo &&
+      !(e.target instanceof HTMLTextAreaElement) &&
+      !(e.target instanceof HTMLInputElement)
+    ) {
       spaceDown = e.type === "keydown";
       if (e.type === "keydown") e.preventDefault();
     }
@@ -1210,11 +1240,16 @@
   {#if artboard}
     <div
       class="board"
+      class:video={isVideo}
       style:left="{artboard.x}px"
       style:top="{artboard.y}px"
       style:width="{artboard.w}px"
       style:height="{artboard.h}px"
-    ></div>
+    >
+      {#if isVideo}
+        <VideoStage zoom={editor.zoom} />
+      {/if}
+    </div>
   {/if}
   <canvas bind:this={baseCanvas}></canvas>
   <canvas bind:this={activeCanvas}></canvas>
@@ -1324,6 +1359,11 @@
     background: var(--canvas-bg);
     touch-action: none;
     user-select: none;
+  }
+  .board.video {
+    background: #000;
+    isolation: isolate;
+    overflow: hidden;
   }
   .board {
     position: absolute;

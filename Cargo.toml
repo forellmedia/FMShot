@@ -25,6 +25,7 @@ fmshot-hotkeys = { path = "crates/fmshot-hotkeys" }
 fmshot-overlay = { path = "crates/fmshot-overlay" }
 fmshot-vision = { path = "crates/fmshot-vision" }
 fmshot-media = { path = "crates/fmshot-media" }
+fmshot-video = { path = "crates/fmshot-video", default-features = false }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

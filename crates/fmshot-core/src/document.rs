@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::{Color, Point, Rect, Size};
+use crate::video::VideoDoc;
 
 /// Version des Dokument-Schemas. Bei inkompatiblen Änderungen erhöhen und
 /// eine Migration ergänzen.
@@ -20,6 +21,9 @@ pub struct Document {
     pub artboard: Artboard,
     /// Reihenfolge = Zeichenreihenfolge; das erste Element liegt ganz unten.
     pub layers: Vec<Layer>,
+    /// Nur bei Videos (ADR 0011): Webcam-Layout, Abschnitte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoDoc>,
 }
 
 fn one() -> f32 {
@@ -471,6 +475,7 @@ impl Document {
                     shadow: None,
                 },
             }],
+            video: None,
         }
     }
 

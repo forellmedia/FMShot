@@ -306,6 +306,29 @@ pub async fn list_microphones() -> Vec<Microphone> {
     .unwrap_or_default()
 }
 
+/// Eine Kamera für die Auswahl im Video-Tab.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct Camera {
+    pub id: String,
+    pub name: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_cameras() -> Vec<Camera> {
+    tauri::async_runtime::spawn_blocking(|| {
+        fmshot_media::cameras()
+            .into_iter()
+            .map(|d| Camera {
+                id: d.id,
+                name: d.name,
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Startet FMShot mit der Anmeldung am Computer?
 #[tauri::command]
 #[specta::specta]

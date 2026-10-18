@@ -49,6 +49,23 @@ export const TOOLS: Tool[] = [
   { id: "background", key: "g", label: "tool.background", icon: "M3 3h18v18H3zM7 7h10v10H7z" },
 ];
 
+/**
+ * Werkzeuge im Video-Editor: Was Bildpunkte darunter braucht (Weichzeichnen,
+ * Lupe, Spotlight) oder die Zeichenfläche ändert (Zuschneiden), fehlt.
+ */
+export const VIDEO_TOOLS: ToolId[] = [
+  "select",
+  "arrow",
+  "line",
+  "rectangle",
+  "ellipse",
+  "pen",
+  "text",
+  "callout",
+  "step",
+  "highlight",
+];
+
 /** Ist `tool` gerade aktiv? Der Knopf „Unkenntlich machen“ steht für beide Arten. */
 export function isActive(tool: Tool, current: ToolId): boolean {
   return tool.id === current || (tool.id === "blur" && current === "pixelate");

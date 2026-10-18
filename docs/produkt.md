@@ -90,12 +90,15 @@ Windows-Signatur, Flatpak.
 | Editor öffnen (warm)                   | < 200 ms    |
 | Leerlauf RAM / CPU                     | < 120 MB / ~0 % |
 | Download-Grösse (mit Bildmodell, ADR 0010) | < 450 MB |
+| Video-Export 1080p30 mit Webcam (ADR 0011) | ≥ 2× Echtzeit |
 
 Unter Wayland gilt „so schnell wie das Portal erlaubt“.
 Die App misst diese Werte selbst (Info → Messwerte). `crates/fmshot-bench`
 misst die Pfade ohne Bildschirm (Speichern + Vorschaubild, Editor öffnen,
-Zeichnen, Export, Scroll-Zusammensetzen, Suche); die CI schlägt fehl, wenn ein
-Wert sein Budget überschreitet.
+Zeichnen, Export, Scroll-Zusammensetzen, Suche, Video-Bild zusammensetzen);
+die CI schlägt fehl, wenn ein Wert sein Budget überschreitet. Den ganzen
+Video-Export (Dekodieren, GPU, Kodieren) misst
+`cargo test -p fmshot-media --release --test export -- --ignored`.
 
 ## Plattformen
 

@@ -480,6 +480,14 @@ pub(crate) fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub(crate) fn set_duration(conn: &Connection, id: &str, duration_ms: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE captures SET duration_ms = ?2 WHERE id = ?1",
+        params![id, duration_ms],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn set_starred(conn: &Connection, id: &str, starred: bool) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE captures SET starred = ?2 WHERE id = ?1",
