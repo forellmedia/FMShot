@@ -41,6 +41,9 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
         Action::CaptureText => capture::start(app, capture::Mode::Text),
         Action::CaptureVideo => capture::start(app, capture::Mode::Video),
+        Action::CaptureWebcam => capture::start(app, capture::Mode::Webcam),
+        Action::RecordDraw => crate::video::toggle(app, crate::video::Toggle::Draw),
+        Action::RecordPause => crate::video::toggle(app, crate::video::Toggle::Pause),
         Action::OpenGallery => {
             show_main_window(app);
             let _ = app.emit("open-gallery", ());

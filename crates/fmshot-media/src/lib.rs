@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fmshot_core::RgbaImage;
+use fmshot_core::{RgbaImage, VideoCodec, VideoEncoding, VideoQuality, WebcamLayout};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -59,8 +59,8 @@ pub enum RecordTarget {
 /// aufgenommen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordFiles {
-    /// Bildschirm als Video (MP4, HEVC).
-    pub screen: PathBuf,
+    /// Bildschirm als Video (MP4, HEVC); `None` bei „nur Webcam“.
+    pub screen: Option<PathBuf>,
     /// Ton des Systems (M4A, AAC).
     pub system_audio: Option<PathBuf>,
     /// Mikrofon (M4A, AAC).
@@ -68,11 +68,19 @@ pub struct RecordFiles {
     /// Webcam (MP4, HEVC). Wird nur geschrieben, wenn die Webcam während
     /// der Aufnahme einmal eingeschaltet war.
     pub webcam: Option<PathBuf>,
+    /// Erkannte Gesichter der Webcam (`<id>_faces.json`, [`FaceTrack`]),
+    /// etwa 10 je Sekunde – für den Kopfausschnitt (Etappe 3).
+    ///
+    /// [`FaceTrack`]: fmshot_core::FaceTrack
+    pub faces: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordOptions {
-    pub target: RecordTarget,
+    /// `None` = nur Webcam: kein Bildschirm, kein Systemton. Die Kamera
+    /// wird mit [`Recording::set_webcam`] eingeschaltet, und zwar vor
+    /// [`Recording::begin`].
+    pub target: Option<RecordTarget>,
     pub files: RecordFiles,
     /// Bilder pro Sekunde (höchstens; ein ruhiger Bildschirm liefert weniger).
     pub fps: u32,
@@ -125,8 +133,9 @@ pub trait Recording: Send + Sync {
     fn set_webcam(&self, on: bool) -> Result<()>;
     fn webcam_on(&self) -> bool;
     /// Live-Bild der Webcam für die Blase; `None`, solange die Webcam nie
-    /// eingeschaltet war. Im Haupt-Thread aufrufen.
-    fn webcam_preview(&self, mirror: bool) -> Option<PreviewLayer>;
+    /// eingeschaltet war. Zeigt es wie `layout` (Spiegeln, Kopfausschnitt,
+    /// Hintergrund). Im Haupt-Thread aufrufen.
+    fn webcam_preview(&self, layout: &WebcamLayout) -> Option<PreviewLayer>;
 }
 
 /// Live-Bild der Webcam als Ebene des Systems (macOS: `CALayer`), das die
@@ -239,24 +248,25 @@ pub struct AudioInput {
     pub volume: f32,
 }
 
-/// Legt ein MP4 (H.264 + AAC) an, das die zusammengesetzten Bilder
-/// aufnimmt. Die Tonspuren in `audio` werden gemischt. `kept` sind die
+/// Legt ein MP4 (H.264 bzw. HEVC nach `encoding`, Ton AAC) an, das die
+/// zusammengesetzten Bilder aufnimmt. Die Tonspuren in `audio` werden gemischt. `kept` sind die
 /// Stücke der Aufnahme, die bleiben (leer = alles); sie werden
 /// hintereinandergehängt und auf `duration` gekürzt.
 pub fn create_mp4(
     path: &Path,
     size: (u32, u32),
     fps: u32,
+    encoding: &VideoEncoding,
     audio: &[AudioInput],
     kept: &[fmshot_core::TimeRange],
     duration: Duration,
 ) -> Result<Box<dyn fmshot_video::FrameSink>> {
     #[cfg(target_os = "macos")]
-    return macos::codec::create_mp4(path, size, fps, audio, kept, duration)
+    return macos::codec::create_mp4(path, size, fps, encoding, audio, kept, duration)
         .map(|w| Box::new(w) as Box<dyn fmshot_video::FrameSink>);
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, size, fps, audio, kept, duration);
+        let _ = (path, size, fps, encoding, audio, kept, duration);
         Err(MediaError::NotImplemented)
     }
 }
@@ -271,6 +281,15 @@ pub fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
         let _ = (files, output);
         Err(MediaError::NotImplemented)
     }
+}
+
+/// Trennt die Person vom Hintergrund der Webcam (Export mit Hintergrund
+/// unscharf/entfernt). `None` = auf dieser Plattform noch nicht möglich.
+pub fn segmenter() -> Option<Box<dyn fmshot_video::Segmenter>> {
+    #[cfg(target_os = "macos")]
+    return Some(Box::new(macos::vision::VisionSegmenter::new()));
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 /// Ein Bild aus dem Video (für Vorschaubild und Galerie), `at` ab Beginn.
@@ -302,9 +321,20 @@ pub fn camera_bitrate(width: u32, height: u32, fps: u32) -> u32 {
     bits.clamp(2_000_000.0, 16_000_000.0) as u32
 }
 
-/// Datenrate des fertigen Videos (H.264 braucht mehr als HEVC).
-pub fn export_bitrate(width: u32, height: u32, fps: u32) -> u32 {
-    (screen_bitrate(width, height, fps) as f64 * 1.6).min(60_000_000.0) as u32
+/// Datenrate des fertigen Videos: Standard ist 1,6× die Datenrate der
+/// Aufnahme bei H.264; HEVC braucht rund 40 % weniger.
+pub fn export_bitrate(width: u32, height: u32, fps: u32, encoding: &VideoEncoding) -> u32 {
+    let codec = match encoding.codec {
+        VideoCodec::H264 => 1.0,
+        VideoCodec::Hevc => 0.6,
+    };
+    let quality = match encoding.quality {
+        VideoQuality::Small => 0.5,
+        VideoQuality::Standard => 1.0,
+        VideoQuality::High => 2.0,
+    };
+    let base = (screen_bitrate(width, height, fps) as f64 * 1.6).min(60_000_000.0);
+    (base * codec * quality).clamp(1_000_000.0, 100_000_000.0) as u32
 }
 
 /// Wandelt eine Lautstärke-Spitze in einen Balken mit `steps` Stufen
@@ -340,7 +370,19 @@ mod tests {
     fn webcam_und_export_datenrate() {
         assert_eq!(camera_bitrate(1920, 1080, 30), 6_220_800);
         assert_eq!(camera_bitrate(640, 480, 30), 2_000_000);
-        assert_eq!(export_bitrate(1920, 1080, 30), 7_962_624);
+        let standard = VideoEncoding::default();
+        assert_eq!(export_bitrate(1920, 1080, 30, &standard), 7_962_624);
+        let small_hevc = VideoEncoding {
+            codec: VideoCodec::Hevc,
+            quality: VideoQuality::Small,
+            ..standard
+        };
+        assert_eq!(export_bitrate(1920, 1080, 30, &small_hevc), 2_388_787);
+        let high = VideoEncoding {
+            quality: VideoQuality::High,
+            ..standard
+        };
+        assert_eq!(export_bitrate(1920, 1080, 30, &high), 15_925_248);
     }
 
     #[test]

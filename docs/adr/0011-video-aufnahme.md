@@ -197,20 +197,42 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 - Snapshot-Tests (`crates/fmshot-video/tests/snapshots.rs`) laufen mit
   erzeugten Spuren; neue Fälle dort ergänzen.
 
-### Nachtrag Etappe 3 (teilweise)
-- Fertig: Datenmodell (`framing` Ganzes Bild/Kopf, `follow`, `background`
+### Nachtrag Etappe 3: Kopf und Hintergrund
+- Datenmodell: `framing` Ganzes Bild/Kopf, `follow`, `background`
   Original/unscharf/entfernt im Webcam-Layout; `FaceTrack` in
-  `<id>_faces.json`), Kopfausschnitt mit kritisch gedämpfter Feder und
+  `<id>_faces.json`. Kopfausschnitt mit kritisch gedämpfter Feder und
   Totzone (`fmshot_video::head`), Personen-Maske im Shader (Weichzeichnen
   mit 48 Abtastpunkten, Entfernen bzw. dunkle Fläche bei grosser Webcam).
 - **Erkennung unter macOS mit Apple Vision statt ONNX** (Gesicht:
-  `VNDetectFaceRectanglesRequest`, Person: `VNGeneratePersonSegmentationRequest`):
-  kein Modell-Download, läuft auf der Neural Engine. Für Windows/Linux kommt
-  ein ONNX-Modell hinter denselben Schnittstellen (`Segmenter`, Gesichter als
-  `FaceTrack`).
-- Offen: Erkennung während der Aufnahme und `<id>_faces.json` schreiben,
-  Live-Blase mit Kopfausschnitt und Hintergrund, Maske im Export, Schalter
-  im Tray-Tab *Video*.
+  `VNDetectFaceRectanglesRequest`, Person: `VNGeneratePersonSegmentationRequest`,
+  Qualität *balanced* – von Apple für Video gedacht): kein Modell-Download,
+  läuft auf der Neural Engine. Für Windows/Linux kommt ein ONNX-Modell hinter
+  denselben Schnittstellen (`Segmenter`, Gesichter als `FaceTrack`).
+- **Während der Aufnahme** erkennt `fmshot-media` das grösste Gesicht etwa
+  10× pro Sekunde, immer wenn die Webcam läuft – so lässt sich der
+  Kopfausschnitt auch nachträglich einschalten. Zeit ohne Pausen, Rechteck
+  oben links, nicht gespiegelt; beim Stopp nach `<id>_faces.json`
+  (`RecordFiles::faces`).
+- **Eigene Warteschlange:** Erkennung und Blasenbild laufen nicht im
+  Callback der Kamera. Ist die Warteschlange noch beschäftigt, fällt das
+  Bild nur für Erkennung und Blase aus; die Webcam-Spur bekommt jedes Bild.
+- **Live-Blase:** Bei Ganzes Bild + Original bleibt es beim
+  `AVCaptureVideoPreviewLayer` (ohne Verzögerung). Sonst füllt
+  `fmshot-media` eine eigene Ebene mit CoreImage: Zuschnitt aus
+  `fmshot_video::LiveHead` (dieselbe Feder wie im Export; ohne Folgen der
+  Median der ersten 20 Erkennungen), Maske mit `CIBlendWithMask`
+  (Gauss mit 2 % der Breite ≈ Scheibe des Shaders), höchstens 720 px.
+  Bei *Entfernen* ist die Blase durchsichtig, ohne Rahmen und Schatten –
+  wie im Export.
+- **Export:** `fmshot_media::segmenter()` liefert die Maske je Webcam-Bild
+  (BGRA → `CVPixelBuffer` → Maske R8); die App setzt ihn nur, wenn der
+  Hintergrund nicht *Original* ist.
+- **Vorschau im Editor:** Den Kopfausschnitt rechnet die WASM-Vorschau mit
+  derselben `HeadPath` aus `<id>_faces.json` wie der Export. Hintergrund
+  unscharf oder entfernt zeigt vorerst nur das fertige Video.
+- Die Schalter (Ausschnitt, Kopf folgen, Hintergrund) stehen im Tray-Tab
+  *Video* und gelten für die nächste Aufnahme; im Editor sind sie noch nicht
+  änderbar.
 
 ### Nachtrag Etappe 4–6: Video-Editor, Zeiger, Ebenen
 - **Ein Editor für Bild und Video:** Ein Video öffnet in der normalen
@@ -247,6 +269,78 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 - **Compositor:** Ein gemeinsamer Uniform-Puffer mit dynamischem Versatz
   (bis 64 Ebenen pro Bild); Texturen bringen ihre Deckkraft mit (Zeiger,
   Kreise, Ebenen).
+
+### Nachtrag: Nur Webcam
+- **Tray-Tabs:** *Bild · Bildschirm · Webcam · Einstellungen*. *Bildschirm*
+  ist der frühere Tab *Video*; *Webcam* nimmt nur die Kamera auf.
+- **Start:** Knopf im Tab, Tray-Menü oder ⌘⇧7 / Ctrl+Shift+7 (nochmals =
+  Stopp). Keine Bildschirm-Freigabe, kein Systemton, keine Mausspur.
+- **Format:** Quer 16:9, Hoch 9:16 oder Quadrat 1:1 (`VideoDoc.camera_only`).
+  Die kürzere Seite wie die Kamera, höchstens 1080 Pixel (Hochformat
+  1080×1920). Die Webcam füllt das Bild; Kopfausschnitt, Hintergrund und
+  Spiegeln wie bei der Blase, eigene Einstellungen (`settings.video.camera`).
+- **Aufnahme:** `RecordOptions::target = None`, `RecordFiles::screen = None`.
+  Die Webcam-Spur ist dann die Hauptspur; die Aufnahme beginnt erst, wenn die
+  Kamera läuft. Die Blase steht mitten auf dem Monitor unter der Maus, im
+  Seitenverhältnis des Formats.
+- **Export:** An der Stelle des Bildschirms steht `BlankSource` (gibt nur die
+  Grösse vor); `scene_full` legt nur die Webcam ins Bild. Im Editor gibt die
+  Webcam den Takt vor; Zoom und Webcam-Lage fehlen dort.
+
+### Nachtrag: Einstellungen für das fertige Video
+- Einstellungen → *Video*: **Auflösung** (wie aufgenommen, 2160p, 1440p,
+  1080p, 720p = kürzere Seite höchstens so lang, nie vergrössert),
+  **Codec** (H.264 Standard, HEVC wählbar), **Qualität** (klein ½×,
+  Standard, hoch 2× der Datenrate; HEVC 0,6× von H.264, 1–100 Mbit/s) und
+  Bilder pro Sekunde (`settings.video.encoding`, `VideoEncoding` in `core`).
+- Aufgenommen wird weiter in voller Qualität. Die Einstellung gilt beim
+  Zusammensetzen (`fmshot_video::export_size`, `ExportExtras::size`,
+  `fmshot_media::create_mp4`) – direkt nach der Aufnahme und nach jeder
+  Änderung im Editor. Der Ausweg ohne GPU (`export_mp4`) bleibt beim
+  Standard.
+- Das Dokument bezieht sich immer auf die volle Grösse (`save_video` bekommt
+  sie getrennt vom Standbild); so passen Ebenen bei jeder Auflösung.
+
+### Nachtrag: Live zeichnen während der Aufnahme
+- **Bedienung:** Knopf *Zeichnen* in der Aufnahmeleiste oder ⌘⇧8 /
+  Ctrl+Shift+8. Links erscheint eine Werkzeugleiste: Pfeil, Linie, Rahmen,
+  Kreis, Freihand, Nummer, Textmarker (Tasten wie im Editor: A, L, R, O, P,
+  N, H), vier Farben und *Fertig*. Shift rastet Linien in 45° ein und macht
+  Rahmen quadratisch. Kein Text (zu langsam während einer Aufnahme).
+- **Verschwinden:** Was zu sehen ist, bildet eine Gruppe. Sie verschwindet
+  3 s nach der letzten Zeichnung (Uhrzeit, läuft auch in der Pause) oder
+  sofort mit Esc; ein zweites Esc beendet das Zeichnen. Danach beginnen die
+  Nummern wieder bei 1.
+- **Nichts eingebrannt:** Die Zeichenfläche ist ein Panel von FMShot und
+  damit nicht im Bildschirmvideo. Jede Zeichnung wird eine Ebene mit
+  Zeitbereich (`video.layer_times`) – im Editor verschieb- und löschbar.
+  Das erste Zusammensetzen nach der Aufnahme zeichnet sie schon mit.
+- **Logik** in `fmshot_video::sketch::LiveSketch` (plattformunabhängig,
+  getestet), **Fläche** in `fmshot-overlay` (`DrawSurface`; macOS: Panel
+  unter Leiste und Blase, Werkzeuge als SF Symbols). Auf dem Bildschirm
+  zeichnet `fmshot-render` in Punkt-Auflösung; das Video in voller Grösse.
+- Textmarker mit 45 % Deckkraft: Auf durchsichtigem Grund wirkt
+  „Multiplizieren“ nicht.
+- **Pause** hat jetzt auch ein Kürzel: ⌘⇧9 / Ctrl+Shift+9.
+- **Lupe** folgt: Sie braucht ein Live-Bild des Bildschirms in der Fläche
+  und im Export eine zusätzliche Bildschirm-Lage im Compositor.
+
+### Nachtrag: Zeitleiste mit Zeilen je Werkzeug
+- Unter Video, Webcam und *Vergrössern* (früher „Zoom“, mit Erklärung beim
+  Darüberfahren) steht je Werkzeug eine Zeile: Pfeile, Linien, Rahmen,
+  Kreise, Freihand, Nummern, Textmarker, Text, Sprechblasen, Bilder,
+  Weitere. Jede Ebene ist ein Block in ihrer Farbe (Nummer bzw. Textanfang
+  als Beschriftung); überlappende Blöcke kommen in weitere Zeilen derselben
+  Gruppe (`layerLanes` in `videoLayers.ts`, reine Darstellung).
+- **Block:** Klick wählt die Ebene (und springt hin, wenn sie gerade nicht
+  zu sehen ist), Ziehen verschiebt, die Ränder ändern die Länge
+  (mindestens 100 ms). Übernommen wird beim Loslassen – ein Schritt fürs
+  Rückgängigmachen (`layerTime` wie bisher). Ebenen ohne Zeitbereich
+  liegen blass über die ganze Länge.
+- Unter der Zeitleiste: Ab hier / Bis hier / Wie Auswahl / Immer und
+  **Löschen**. Zeitbereiche gelöschter Ebenen werden im selben Schritt
+  entfernt, sonst erbte eine neue Ebene mit derselben Nummer ihren Bereich.
+- Neue Textmarker im Video haben 45 % Deckkraft (wie live gezeichnete).
 
 ### Budgets (Apple M1)
 | Messpunkt                                  | Ziel              |

@@ -16,7 +16,8 @@ pub use document::{
 pub use geometry::{Color, Point, Rect, Size};
 pub use image::{ImageError, RgbaImage};
 pub use video::{
-    AudioMix, CursorStyle, FaceSample, FaceTrack, InputSample, InputTrack, LayerTime, TimeRange,
-    VideoDoc, WebcamBackground, WebcamBorder, WebcamFraming, WebcamLayout, WebcamMode,
-    WebcamPosition, WebcamSection, WebcamShape, WebcamTrack, ZoomSection,
+    AudioMix, CameraFormat, CursorStyle, FaceSample, FaceTrack, InputSample, InputTrack, LayerTime,
+    TimeRange, VideoCodec, VideoDoc, VideoEncoding, VideoQuality, VideoResolution,
+    WebcamBackground, WebcamBorder, WebcamFraming, WebcamLayout, WebcamMode, WebcamPosition,
+    WebcamSection, WebcamShape, WebcamTrack, ZoomSection,
 };

@@ -551,8 +551,16 @@ export function moveBlock(doc: Doc, ids: number[], delta: 1 | -1) {
   doc.layers = [...rest.slice(0, at), ...block, ...rest.slice(at)];
 }
 
+/**
+ * Deckkraft des Textmarkers im Video: Ebenen liegen dort auf durchsichtigem
+ * Grund, „Multiplizieren“ wirkt nicht (wie `HIGHLIGHT_OPACITY` in Rust).
+ */
+export const VIDEO_HIGHLIGHT_OPACITY = 0.45;
+
 export function newLayer(doc: Doc, kind: LayerKind): Layer {
-  return { id: nextLayerId(doc), visible: true, locked: false, opacity: 1, rotation: 0, kind };
+  const isVideo = !!(doc as { video?: unknown }).video;
+  const opacity = isVideo && kind.type === "highlight" ? VIDEO_HIGHLIGHT_OPACITY : 1;
+  return { id: nextLayerId(doc), visible: true, locked: false, opacity, rotation: 0, kind };
 }
 
 export function clone<T>(v: T): T {

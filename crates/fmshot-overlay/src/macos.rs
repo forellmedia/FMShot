@@ -41,6 +41,8 @@ use objc2_quartz_core::{
     kCAFilterNearest, kCAGravityResize,
 };
 
+pub(crate) mod draw;
+
 use crate::{
     BubbleStyle, DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction,
     PreviewPlacement, RecordAction, RecordLabels, ScrollAction, Selection, WindowTarget,
@@ -1022,6 +1024,9 @@ pub(crate) fn open_record_ui(
     on_action: Box<dyn Fn(RecordAction)>,
 ) -> Result<RecordUi, OverlayError> {
     let mut buttons = vec![(labels.pause, false, RecordAction::Pause)];
+    if let Some(draw) = labels.draw {
+        buttons.push((draw, false, RecordAction::Draw));
+    }
     if let Some(webcam) = labels.webcam {
         buttons.push((webcam, false, RecordAction::Webcam));
         if let Some(large) = labels.webcam_large {
@@ -1213,7 +1218,9 @@ pub(crate) unsafe fn open_bubble(
 
     let container = CALayer::new();
     container.setMasksToBounds(true);
-    container.setBackgroundColor(Some(&CGColor::new_srgb(0.1, 0.1, 0.11, 1.0)));
+    if !style.transparent {
+        container.setBackgroundColor(Some(&CGColor::new_srgb(0.1, 0.1, 0.11, 1.0)));
+    }
     container.addSublayer(&preview);
     let view = BubbleView::alloc(mtm).set_ivars(BubbleIvars {
         container: container.clone(),

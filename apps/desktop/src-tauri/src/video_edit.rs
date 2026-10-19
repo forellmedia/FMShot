@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fmshot_core::{
-    AssetRef, Document, FaceTrack, InputTrack, LayerKind, RgbaImage, VideoDoc, WebcamFraming,
+    AssetRef, Document, FaceTrack, InputTrack, LayerKind, RgbaImage, VideoDoc, VideoEncoding,
+    WebcamBackground, WebcamFraming,
 };
 use fmshot_library::{CaptureRecord, Library, NewCapture};
 use fmshot_media::{AudioInput, RecordFiles};
@@ -46,17 +47,23 @@ fn existing(p: PathBuf) -> Option<PathBuf> {
 /// Spuren einer Aufnahme aus der Bibliothek.
 pub fn record_files(rec: &CaptureRecord) -> RecordFiles {
     RecordFiles {
-        screen: rec.screen_path(),
+        screen: existing(rec.screen_path()),
         system_audio: existing(rec.system_audio_path()),
         microphone: existing(rec.microphone_path()),
         webcam: existing(rec.webcam_path()),
+        faces: existing(rec.faces_path()),
     }
 }
 
-/// Datei neben der Bildschirm-Spur, z. B. `_faces.json`.
-fn sidecar(files: &RecordFiles, suffix: &str) -> PathBuf {
-    let screen = files.screen.to_string_lossy();
-    PathBuf::from(screen.replace("_screen.mp4", suffix))
+/// Datei neben den Spuren, z. B. `_input.json`.
+fn sidecar(files: &RecordFiles, suffix: &str) -> Option<PathBuf> {
+    if let Some(screen) = &files.screen {
+        return Some(PathBuf::from(
+            screen.to_string_lossy().replace("_screen.mp4", suffix),
+        ));
+    }
+    let webcam = files.webcam.as_ref()?.to_string_lossy();
+    Some(PathBuf::from(webcam.replace("_webcam.mp4", suffix)))
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
@@ -99,10 +106,16 @@ pub fn extras(
         .as_ref()
         .filter(|w| w.layout.framing == WebcamFraming::Head)
         .and_then(|w| {
-            let faces: FaceTrack = read_json(&sidecar(files, "_faces.json"))?;
+            let faces: FaceTrack = read_json(files.faces.as_deref()?)?;
             HeadPath::new(&faces, w.layout.follow)
         });
-    let cursor = read_json::<InputTrack>(&sidecar(files, "_input.json"))
+    let segmenter = video
+        .webcam
+        .as_ref()
+        .filter(|w| w.layout.background != WebcamBackground::Original)
+        .and_then(|_| fmshot_media::segmenter());
+    let cursor = sidecar(files, "_input.json")
+        .and_then(|p| read_json::<InputTrack>(&p))
         .map(|t| CursorTrack::new(&t))
         .filter(|t| !t.is_empty());
     let overlay = layers
@@ -110,10 +123,11 @@ pub fn extras(
         .map(|o| Box::new(o) as Box<dyn fmshot_video::OverlaySource>);
     ExportExtras {
         head,
-        segmenter: None,
+        segmenter,
         cursor,
         cursor_px: CURSOR_POINTS * scale.max(1.0),
         overlay,
+        size: None,
     }
 }
 
@@ -126,7 +140,11 @@ fn compose_into(
     sink: &mut dyn FrameSink,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<fmshot_video::ExportStats, String> {
-    let screen = fmshot_media::open_video(&files.screen).map_err(err)?;
+    let screen: Box<dyn fmshot_video::FrameSource> = match &files.screen {
+        Some(path) => fmshot_media::open_video(path).map_err(err)?,
+        // Nur Webcam: eine leere Spur gibt die Grösse vor.
+        None => Box::new(fmshot_video::BlankSource::new(frame_size(files, video)?)),
+    };
     let webcam = match (&video.webcam, &files.webcam) {
         (Some(_), Some(path)) => match fmshot_media::open_video(path) {
             Ok(w) => Some(w),
@@ -140,22 +158,34 @@ fn compose_into(
     fmshot_video::export_with(video, screen, webcam, extras, sink, progress).map_err(err)
 }
 
-fn screen_size(files: &RecordFiles) -> Result<(u32, u32), String> {
-    Ok(fmshot_video::output_size(
-        fmshot_media::open_video(&files.screen).map_err(err)?.size(),
-    ))
+/// Grösse des fertigen Videos: wie der Bildschirm bzw. bei „nur Webcam“
+/// aus Format und Kamerabild.
+pub fn frame_size(files: &RecordFiles, video: &VideoDoc) -> Result<(u32, u32), String> {
+    match (video.camera_only, &files.screen, &files.webcam) {
+        (None, Some(screen), _) => Ok(fmshot_video::output_size(
+            fmshot_media::open_video(screen).map_err(err)?.size(),
+        )),
+        (Some(format), _, Some(webcam)) => Ok(fmshot_video::camera_frame_size(
+            format,
+            fmshot_media::open_video(webcam).map_err(err)?.size(),
+        )),
+        _ => Err("Spur fehlt".into()),
+    }
 }
 
 /// Setzt Bildschirm, Webcam, Zeiger und Ebenen auf der Grafikkarte zusammen
-/// und mischt den Ton dazu (mit Schnitten und Lautstärke).
+/// und mischt den Ton dazu (mit Schnitten und Lautstärke). Auflösung, Codec
+/// und Qualität aus den Einstellungen (`encoding`).
 pub fn compose(
     files: &RecordFiles,
     video: &VideoDoc,
-    extras: ExportExtras,
+    mut extras: ExportExtras,
+    encoding: &VideoEncoding,
     out: &Path,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<fmshot_video::ExportStats, String> {
-    let size = screen_size(files)?;
+    let size = fmshot_video::export_size(frame_size(files, video)?, encoding.resolution);
+    extras.size = Some(size);
     let mut audio = Vec::new();
     if let Some(p) = &files.system_audio {
         audio.push(AudioInput {
@@ -173,6 +203,7 @@ pub fn compose(
         out,
         size,
         video.fps,
+        encoding,
         &audio,
         &kept(video),
         Duration::from_millis(output_duration(video) as u64),
@@ -185,12 +216,15 @@ pub fn compose(
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoTracks {
-    pub screen: String,
+    /// `None` bei „nur Webcam“.
+    pub screen: Option<String>,
     pub webcam: Option<String>,
     pub system_audio: Option<String>,
     pub microphone: Option<String>,
     /// Mausspur (JSON, Etappe 5).
     pub input: Option<String>,
+    /// Kopfpositionen der Webcam (JSON, Etappe 3).
+    pub faces: Option<String>,
 }
 
 #[tauri::command]
@@ -200,11 +234,12 @@ pub fn video_tracks(app: AppHandle, id: String) -> Result<VideoTracks, String> {
     let s = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().into_owned());
     let files = record_files(&rec);
     Ok(VideoTracks {
-        screen: rec.screen_path().to_string_lossy().into_owned(),
+        screen: s(files.screen),
         webcam: s(files.webcam),
         system_audio: s(files.system_audio),
         microphone: s(files.microphone),
         input: s(existing(rec.input_path())),
+        faces: s(files.faces),
     })
 }
 
@@ -281,7 +316,8 @@ pub async fn export_video(app: AppHandle, id: String) -> Result<CaptureInfo, Str
                 Some((&doc, layer_assets(&rec, &doc))),
             );
             let mut progress = progress_reporter(&app, &id, cancel);
-            compose(&files, &video, extras, &temp, &mut progress)?;
+            let encoding = crate::settings::get(&app).video.encoding;
+            compose(&files, &video, extras, &encoding, &temp, &mut progress)?;
             std::fs::rename(&temp, &target).map_err(err)?;
             let poster = fmshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
             lib.refresh_video(&id, &poster, output_duration(&video) as i64)
@@ -316,7 +352,7 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
         let doc = lib.load_document(&id).map_err(err)?;
         let video = doc.video.clone().ok_or("kein Video")?;
         let files = record_files(&rec);
-        let mut sink = fmshot_video::GifSink::create(&path, screen_size(&files)?)?;
+        let mut sink = fmshot_video::GifSink::create(&path, frame_size(&files, &video)?)?;
         let extras = extras(
             &files,
             &video,

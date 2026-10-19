@@ -2,8 +2,8 @@
   // Vorschau eines Videos auf der Leinwand (ADR 0011): Bildschirm und Webcam
   // als <video>, Zeiger und Klicks auf einer Canvas – an der Stelle, die
   // `fmshot-video` rechnet. Was darüber liegt (Pfeile, Text …), zeichnet die
-  // Leinwand. Weichzeichnen/Entfernen des Webcam-Hintergrunds und der
-  // Kopfausschnitt sind nur im fertigen Video zu sehen.
+  // Leinwand. Weichzeichnen/Entfernen des Webcam-Hintergrunds ist nur im
+  // fertigen Video zu sehen. Bei „nur Webcam“ fehlt der Bildschirm.
 
   import { editor } from "./state.svelte";
   import { player, type SceneLayer } from "./video.svelte";

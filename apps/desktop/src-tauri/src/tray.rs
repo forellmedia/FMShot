@@ -44,6 +44,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let scroll_auto = item("capture_scroll_auto", "capture.scroll_auto")?;
     let text = item("capture_text", "capture.text")?;
     let video = item("capture_video", "tray.capture_video")?;
+    let webcam = item("capture_webcam", "tray.capture_webcam")?;
     let open = item("open_window", "tray.open_window")?;
     let library = item("open_library", "tray.open_library")?;
     let settings = item("settings", "tray.settings")?;
@@ -60,6 +61,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &text,
             &separator,
             &video,
+            &webcam,
             &separator,
             &open,
             &library,
@@ -99,6 +101,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "capture_scroll" => capture::start(app, capture::Mode::Scroll),
             "capture_scroll_auto" => capture::start(app, capture::Mode::ScrollAuto),
             "capture_video" => capture::start(app, capture::Mode::Video),
+            "capture_webcam" => capture::start(app, capture::Mode::Webcam),
             "open_window" => show_main_window(app),
             "open_library" => open_library(app),
             "settings" => open_settings(app),

@@ -174,6 +174,24 @@ export type Camera = {
 	name: string,
 };
 
+/**  Seitenverhältnis einer Aufnahme nur mit Webcam. */
+export type CameraFormat = 
+/**  Querformat 16:9. */
+"landscape" | 
+/**  Hochformat 9:16 (Reels, Shorts, Stories). */
+"portrait" | 
+/**  Quadrat 1:1. */
+"square";
+
+/**  Einstellungen für Videos nur mit der Webcam. */
+export type CameraSettings = {
+	format?: CameraFormat,
+	framing?: WebcamFraming,
+	follow?: boolean,
+	background?: WebcamBackground,
+	mirror?: boolean,
+};
+
 /**  Eine Aufnahme für Galerie und Editor. */
 export type CaptureInfo = {
 	id: string,
@@ -194,7 +212,7 @@ export type CaptureInfo = {
 	videoPath: string | null,
 };
 
-export type CaptureMode = "region" | "window" | "screen" | "scroll" | "text" | "video";
+export type CaptureMode = "region" | "window" | "screen" | "scroll" | "text" | "video" | "webcam";
 
 /**  Farbe mit gerader (nicht vormultiplizierter) Deckkraft. */
 export type Color = {
@@ -556,6 +574,15 @@ export type UpdateInfo = {
 /**  Senkrechte Ausrichtung von Text in seinem Kasten. */
 export type VerticalAlign = "top" | "middle" | "bottom";
 
+export type VideoCodec = 
+/**  Läuft überall (Standard). */
+"h264" | 
+/**
+ *  Halb so gross bei gleicher Qualität; ältere Geräte und manche
+ *  Webseiten können es nicht abspielen.
+ */
+"hevc";
+
 /**
  *  Alles, was ein Video über die aufgenommenen Spuren hinaus ausmacht.
  *  Liegt in `<id>.json` neben den Spuren und bleibt bis zum Export änderbar.
@@ -588,6 +615,11 @@ export type VideoDoc_Deserialize = {
 	 *  Eintrag sind immer zu sehen.
 	 */
 	layer_times?: LayerTime[],
+	/**
+	 *  Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
+	 *  füllt dann das ganze Bild.
+	 */
+	camera_only?: CameraFormat | null,
 };
 
 /**
@@ -616,7 +648,38 @@ export type VideoDoc_Serialize = {
 	 *  Eintrag sind immer zu sehen.
 	 */
 	layer_times?: LayerTime[],
+	/**
+	 *  Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
+	 *  füllt dann das ganze Bild.
+	 */
+	camera_only?: CameraFormat | null,
 };
+
+/**
+ *  Wie das fertige Video kodiert wird. Die Aufnahme selbst bleibt in
+ *  voller Qualität; dies gilt beim Zusammensetzen (auch nach jeder Änderung
+ *  im Editor).
+ */
+export type VideoEncoding = {
+	resolution?: VideoResolution,
+	codec?: VideoCodec,
+	quality?: VideoQuality,
+};
+
+/**  Datenrate des fertigen Videos. */
+export type VideoQuality = 
+/**  Halbe Datenrate – zum Verschicken. */
+"small" | "standard" | 
+/**  Doppelte Datenrate – für feine Details und viel Bewegung. */
+"high";
+
+/**
+ *  Grösse des fertigen Videos: höchstens so viele Pixel auf der kürzeren
+ *  Seite (nie grösser als die Aufnahme).
+ */
+export type VideoResolution = 
+/**  Wie aufgenommen. */
+"original" | "p2160" | "p1440" | "p1080" | "p720";
 
 /**  Einstellungen der Video-Aufnahme (ADR 0011). */
 export type VideoSettings = {
@@ -638,6 +701,13 @@ export type VideoSettings = {
 	 *  Live-Blase vor.
 	 */
 	webcam_layout?: WebcamLayout,
+	/**
+	 *  Aufnahme nur mit der Webcam (Tab *Webcam*). Kamera, Mikrofon und
+	 *  Countdown gelten wie oben.
+	 */
+	camera?: CameraSettings,
+	/**  Auflösung, Codec und Qualität des fertigen Videos. */
+	encoding?: VideoEncoding,
 };
 
 /**  Was bei einer Video-Aufnahme aufgenommen wird. */
@@ -651,12 +721,15 @@ export type VideoTarget =
 
 /**  Spuren eines Videos für die Vorschau im Editor (nur vorhandene). */
 export type VideoTracks = {
-	screen: string,
+	/**  `None` bei „nur Webcam“. */
+	screen: string | null,
 	webcam: string | null,
 	systemAudio: string | null,
 	microphone: string | null,
 	/**  Mausspur (JSON, Etappe 5). */
 	input: string | null,
+	/**  Kopfpositionen der Webcam (JSON, Etappe 3). */
+	faces: string | null,
 };
 
 /**  Was mit dem Hintergrund hinter der Person geschieht. */

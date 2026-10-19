@@ -7,7 +7,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use fmshot_core::WebcamLayout;
+use fmshot_core::{
+    CameraFormat, VideoEncoding, WebcamBackground, WebcamFraming, WebcamLayout, WebcamShape,
+};
 use fmshot_hotkeys::{Action, Platform, Shortcut, conflicts, default_bindings};
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +86,57 @@ pub struct VideoSettings {
     /// Form, Grösse, Rahmen und Schatten der Webcam; die Lage gibt die
     /// Live-Blase vor.
     pub webcam_layout: WebcamLayout,
+    /// Aufnahme nur mit der Webcam (Tab *Webcam*). Kamera, Mikrofon und
+    /// Countdown gelten wie oben.
+    pub camera: CameraSettings,
+    /// Auflösung, Codec und Qualität des fertigen Videos.
+    pub encoding: VideoEncoding,
+}
+
+/// Einstellungen für Videos nur mit der Webcam.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(default)]
+pub struct CameraSettings {
+    pub format: CameraFormat,
+    pub framing: WebcamFraming,
+    pub follow: bool,
+    pub background: WebcamBackground,
+    pub mirror: bool,
+}
+
+impl Default for CameraSettings {
+    fn default() -> Self {
+        Self {
+            format: CameraFormat::Landscape,
+            framing: WebcamFraming::Full,
+            follow: true,
+            background: WebcamBackground::Original,
+            mirror: true,
+        }
+    }
+}
+
+impl CameraSettings {
+    /// Webcam-Layout fürs Dokument (Rahmen, Schatten usw. gelten hier
+    /// nicht; die Form gibt das Seitenverhältnis für Blase und Kopf vor).
+    pub fn layout(&self) -> WebcamLayout {
+        WebcamLayout {
+            shape: match self.format {
+                CameraFormat::Landscape => WebcamShape::Landscape,
+                CameraFormat::Portrait => WebcamShape::Portrait,
+                CameraFormat::Square => WebcamShape::Square,
+            },
+            corner_radius: 0.0,
+            framing: self.framing,
+            follow: self.follow,
+            background: self.background,
+            mirror: self.mirror,
+            border: None,
+            shadow: false,
+            ..WebcamLayout::default()
+        }
+    }
 }
 
 impl Default for VideoSettings {
@@ -98,6 +151,8 @@ impl Default for VideoSettings {
             webcam: false,
             camera_id: None,
             webcam_layout: WebcamLayout::default(),
+            camera: CameraSettings::default(),
+            encoding: VideoEncoding::default(),
         }
     }
 }
@@ -180,6 +235,9 @@ pub fn action_key(action: Action) -> &'static str {
         Action::CaptureScroll => "capture_scroll",
         Action::CaptureText => "capture_text",
         Action::CaptureVideo => "capture_video",
+        Action::CaptureWebcam => "capture_webcam",
+        Action::RecordDraw => "record_draw",
+        Action::RecordPause => "record_pause",
         Action::OpenGallery => "open_gallery",
     }
 }

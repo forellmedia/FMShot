@@ -110,7 +110,7 @@ export const api = {
   videoTracks: (id: string): Promise<VideoTracks> =>
     isTauri
       ? unwrap(commands.videoTracks(id))
-      : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: null, input: null }),
+      : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: null, input: null, faces: null }),
   exportVideo: (id: string): Promise<CaptureInfo> =>
     isTauri ? unwrap(commands.exportVideo(id)) : mock.getCapture(id),
   exportGif: (id: string): Promise<string | null> =>
@@ -249,6 +249,8 @@ const mock = (() => {
           shadow: true,
           mirror: true,
         },
+        camera: { format: "landscape", framing: "full", follow: true, background: "original", mirror: true },
+        encoding: { resolution: "original", codec: "h264", quality: "standard" },
       },
     } as Settings,
     launchAtLogin: false,
@@ -259,6 +261,9 @@ const mock = (() => {
       { action: "capture_scroll", shortcut: "Primary+Alt+4", label: "⌥⌘4", conflict: false },
       { action: "capture_text", shortcut: "Primary+Alt+5", label: "⌥⌘5", conflict: false },
       { action: "capture_video", shortcut: "Primary+Shift+6", label: "⇧⌘6", conflict: false },
+      { action: "capture_webcam", shortcut: "Primary+Shift+7", label: "⇧⌘7", conflict: false },
+      { action: "record_draw", shortcut: "Primary+Shift+8", label: "⇧⌘8", conflict: false },
+      { action: "record_pause", shortcut: "Primary+Shift+9", label: "⇧⌘9", conflict: false },
       { action: "open_gallery", shortcut: "Primary+Alt+G", label: "⌥⌘G", conflict: false },
     ] as HotkeyInfo[],
     async query(q: GalleryQuery): Promise<GalleryResult> {
@@ -311,10 +316,40 @@ const mock = (() => {
     async loadDocument(id: string): Promise<Doc> {
       const c = await this.getCapture(id);
       const r = { x: 0, y: 0, width: c.width, height: c.height };
-      const video =
-        c.mode === "video"
-          ? { duration_ms: c.durationMs ?? 10_000, fps: 30, cuts: [{ start_ms: 20_000, end_ms: 25_000 }], zooms: [{ start_ms: 5000, end_ms: 9000, x: 0.3, y: 0.3, scale: 2 }] }
-          : null;
+      const isVideo = c.mode === "video";
+      // Beispiel-Zeichnungen im Video: zwei Pfeile überlappen, eine Nummer, ein Textmarker.
+      const red = { r: 229, g: 57, b: 53, a: 255 };
+      const stroke = { color: red, width: 6, style: "solid" };
+      const drawings = isVideo
+        ? [
+            { type: "arrow", from: { x: 200, y: 200 }, to: { x: 500, y: 400 }, stroke, head: "filled", head_size: 1.6, control: null },
+            { type: "arrow", from: { x: 900, y: 200 }, to: { x: 700, y: 500 }, stroke, head: "filled", head_size: 1.6, control: null },
+            { type: "step", center: { x: 300, y: 600 }, radius: 28, number: 1, fill: red, text_color: { r: 255, g: 255, b: 255, a: 255 } },
+            { type: "highlight", bounds: { x: 600, y: 650, width: 400, height: 60 }, color: { r: 255, g: 235, b: 59, a: 255 } },
+          ]
+        : [];
+      const video = isVideo
+        ? {
+            duration_ms: c.durationMs ?? 10_000,
+            fps: 30,
+            cuts: [{ start_ms: 20_000, end_ms: 25_000 }],
+            zooms: [{ start_ms: 5000, end_ms: 9000, x: 0.3, y: 0.3, scale: 2 }],
+            layer_times: [
+              { layer: 2, start_ms: 2000, end_ms: 8000 },
+              { layer: 3, start_ms: 6000, end_ms: 12_000 },
+              { layer: 4, start_ms: 30_000, end_ms: 34_000 },
+              { layer: 5, start_ms: 40_000, end_ms: 50_000 },
+            ],
+          }
+        : null;
+      const extra = drawings.map((kind, i) => ({
+        id: i + 2,
+        visible: true,
+        locked: false,
+        opacity: kind.type === "highlight" ? 0.45 : 1,
+        rotation: 0,
+        kind,
+      }));
       return {
         video,
         schema_version: 1,
@@ -337,8 +372,9 @@ const mock = (() => {
               shadow: null,
             },
           },
+          ...extra,
         ],
-      };
+      } as Doc;
     },
     async addAsset(bytes: Uint8Array) {
       const hash = `mock${images.size}`;

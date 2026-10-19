@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Einstellungen: Allgemein, Tastenkürzel, Speichern, Info.
+  // Einstellungen: Allgemein, Tastenkürzel, Speichern, Video, Info.
 
   import { onMount } from "svelte";
   import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
+  import type { VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
   import { t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
 
@@ -16,7 +17,7 @@
   let systemShortcuts = $state<boolean | null>(null);
   let launchAtLogin = $state(false);
   let version = $state("");
-  let tab = $state<"general" | "hotkeys" | "saving" | "about">("general");
+  let tab = $state<"general" | "hotkeys" | "saving" | "video" | "about">("general");
   let recording = $state<string | null>(null);
   let initialLanguage: string | null | undefined;
 
@@ -132,8 +133,36 @@
     { id: "general", label: "settings.general" },
     { id: "hotkeys", label: "settings.hotkeys" },
     { id: "saving", label: "settings.saving" },
+    { id: "video", label: "settings.video" },
     { id: "about", label: "settings.about" },
   ];
+
+  const RESOLUTIONS: { id: VideoResolution; label: MessageKey }[] = [
+    { id: "original", label: "settings.resolution_original" },
+    { id: "p2160", label: "settings.resolution_2160" },
+    { id: "p1440", label: "settings.resolution_1440" },
+    { id: "p1080", label: "settings.resolution_1080" },
+    { id: "p720", label: "settings.resolution_720" },
+  ];
+  const CODECS: { id: VideoCodec; label: MessageKey }[] = [
+    { id: "h264", label: "settings.codec_h264" },
+    { id: "hevc", label: "settings.codec_hevc" },
+  ];
+  const QUALITIES: { id: VideoQuality; label: MessageKey }[] = [
+    { id: "small", label: "settings.quality_small" },
+    { id: "standard", label: "settings.quality_standard" },
+    { id: "high", label: "settings.quality_high" },
+  ];
+
+  const encoding = $derived<VideoEncoding>(
+    settings?.video?.encoding ?? { resolution: "original", codec: "h264", quality: "standard" },
+  );
+
+  async function setEncoding(patch: Partial<VideoEncoding>) {
+    if (!settings) return;
+    settings.video = { ...settings.video, encoding: { ...encoding, ...patch } };
+    await save();
+  }
 </script>
 
 <svelte:window onfocus={refreshSystemShortcuts} />
@@ -333,6 +362,54 @@
               {/if}
             {/if}
           </p>
+        {:else if tab === "video"}
+          <label class="row">
+            <span>{t("settings.video_resolution")}</span>
+            <select
+              value={encoding.resolution}
+              onchange={(e) => setEncoding({ resolution: e.currentTarget.value as VideoResolution })}
+            >
+              {#each RESOLUTIONS as r (r.id)}
+                <option value={r.id}>{t(r.label)}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span>{t("settings.video_codec")}</span>
+            <select value={encoding.codec} onchange={(e) => setEncoding({ codec: e.currentTarget.value as VideoCodec })}>
+              {#each CODECS as c (c.id)}
+                <option value={c.id}>{t(c.label)}</option>
+              {/each}
+            </select>
+          </label>
+          {#if encoding.codec === "hevc"}
+            <p class="hint">{t("settings.codec_hint")}</p>
+          {/if}
+          <label class="row">
+            <span>{t("settings.video_quality")}</span>
+            <select
+              value={encoding.quality}
+              onchange={(e) => setEncoding({ quality: e.currentTarget.value as VideoQuality })}
+            >
+              {#each QUALITIES as q (q.id)}
+                <option value={q.id}>{t(q.label)}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span>{t("video.fps")}</span>
+            <select
+              value={String(settings.video?.fps ?? 30)}
+              onchange={(e) => {
+                settings!.video = { ...settings!.video, fps: Number(e.currentTarget.value) };
+                save();
+              }}
+            >
+              <option value="30">30</option>
+              <option value="60">60</option>
+            </select>
+          </label>
+          <p class="hint">{t("settings.video_hint")}</p>
         {:else}
           <p><b>FMShot {version}</b> · © forellmedia.ch</p>
           <div class="buttons">

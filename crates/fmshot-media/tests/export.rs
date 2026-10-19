@@ -9,13 +9,17 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use fmshot_core::{VideoDoc, WebcamLayout, WebcamMode, WebcamSection, WebcamTrack};
-use fmshot_video::VideoError;
+use fmshot_core::{
+    VideoDoc, WebcamBackground, WebcamLayout, WebcamMode, WebcamSection, WebcamTrack,
+};
+use fmshot_video::{ExportExtras, VideoError};
 
 /// Schreibt ein Testvideo: `frames` Bilder ab `start`, Farbe wechselt pro Bild.
 fn write_video(path: &Path, size: (u32, u32), fps: u32, frames: u32, start: Duration) {
     let duration = start + Duration::from_secs_f64(frames as f64 / fps as f64);
-    let mut sink = fmshot_media::create_mp4(path, size, fps, &[], &[], duration).expect("Writer");
+    let mut sink =
+        fmshot_media::create_mp4(path, size, fps, &Default::default(), &[], &[], duration)
+            .expect("Writer");
     let stride = size.0 as usize * 4;
     let mut data = vec![0u8; stride * size.1 as usize];
     for i in 0..frames {
@@ -52,6 +56,53 @@ fn geschriebenes_video_wird_gelesen() {
     assert!((times[14].as_secs_f64() - 14.0 / 30.0).abs() < 0.002);
 }
 
+/// Einstellungen *Codec* und *Auflösung*: HEVC in kleinerer Grösse wird
+/// geschrieben und lässt sich wieder lesen.
+#[test]
+fn hevc_kleiner_wird_gelesen() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = dir.path().join("screen.mp4");
+    write_video(&screen, (1280, 720), 30, 10, Duration::ZERO);
+    let encoding = fmshot_core::VideoEncoding {
+        resolution: fmshot_core::VideoResolution::P720,
+        codec: fmshot_core::VideoCodec::Hevc,
+        quality: fmshot_core::VideoQuality::Small,
+    };
+    let size = fmshot_video::export_size((1280, 720), fmshot_core::VideoResolution::P720);
+    assert_eq!(size, (1280, 720));
+    let half = fmshot_video::export_size((2560, 1440), encoding.resolution);
+    assert_eq!(half, (1280, 720));
+    let out = dir.path().join("out.mp4");
+    let doc = VideoDoc {
+        duration_ms: 333,
+        fps: 30,
+        ..VideoDoc::default()
+    };
+    let mut sink = fmshot_media::create_mp4(
+        &out,
+        (640, 360),
+        30,
+        &encoding,
+        &[],
+        &[],
+        Duration::from_millis(333),
+    )
+    .unwrap();
+    let extras = ExportExtras {
+        size: Some((640, 360)),
+        ..ExportExtras::default()
+    };
+    let source = fmshot_media::open_video(&screen).unwrap();
+    match fmshot_video::export_with(&doc, source, None, extras, sink.as_mut(), &mut |_| true) {
+        Ok(_) | Err(VideoError::NoGpu(_)) => {}
+        Err(e) => panic!("{e}"),
+    }
+    if out.exists() {
+        assert_eq!(fmshot_media::open_video(&out).unwrap().size(), (640, 360));
+        assert!(!read_all(&out).is_empty());
+    }
+}
+
 /// Webcam, die erst während der Aufnahme eingeschaltet wurde: Die Spur
 /// beginnt später, die Zeit zählt trotzdem ab dem gemeinsamen Nullpunkt.
 #[test]
@@ -73,12 +124,15 @@ fn spaeter_beginnende_spur_behaelt_ihre_zeit() {
     );
 }
 
-fn doc(duration_ms: u32, fps: u32) -> VideoDoc {
+fn doc(duration_ms: u32, fps: u32, background: WebcamBackground) -> VideoDoc {
     VideoDoc {
         duration_ms,
         fps,
         webcam: Some(WebcamTrack {
-            layout: WebcamLayout::default(),
+            layout: WebcamLayout {
+                background,
+                ..WebcamLayout::default()
+            },
             sections: vec![
                 WebcamSection {
                     start_ms: 0,
@@ -94,8 +148,14 @@ fn doc(duration_ms: u32, fps: u32) -> VideoDoc {
     }
 }
 
-/// Setzt zusammen; `None`, wenn es keine Grafikkarte gibt.
-fn export(dir: &Path, screen: (u32, u32), seconds: u32) -> Option<(Duration, u64)> {
+/// Setzt zusammen; `None`, wenn es keine Grafikkarte gibt. Mit einem
+/// anderen Hintergrund als Original rechnet Vision die Maske je Bild.
+fn export(
+    dir: &Path,
+    screen: (u32, u32),
+    seconds: u32,
+    background: WebcamBackground,
+) -> Option<(Duration, u64)> {
     let fps = 30;
     let screen_path = dir.join("screen.mp4");
     let cam_path = dir.join("webcam.mp4");
@@ -106,12 +166,20 @@ fn export(dir: &Path, screen: (u32, u32), seconds: u32) -> Option<(Duration, u64
     let screen_src = fmshot_media::open_video(&screen_path).unwrap();
     let size = fmshot_video::output_size(screen_src.size());
     let duration = Duration::from_secs(seconds as u64);
-    let mut sink = fmshot_media::create_mp4(&out, size, fps, &[], &[], duration).unwrap();
+    let mut sink =
+        fmshot_media::create_mp4(&out, size, fps, &Default::default(), &[], &[], duration).unwrap();
     let started = Instant::now();
-    let stats = match fmshot_video::export(
-        &doc(seconds * 1000, fps),
+    let extras = ExportExtras {
+        segmenter: (background != WebcamBackground::Original)
+            .then(fmshot_media::segmenter)
+            .flatten(),
+        ..ExportExtras::default()
+    };
+    let stats = match fmshot_video::export_with(
+        &doc(seconds * 1000, fps, background),
         screen_src,
         Some(fmshot_media::open_video(&cam_path).unwrap()),
+        extras,
         sink.as_mut(),
         &mut |_| true,
     ) {
@@ -140,7 +208,7 @@ fn export(dir: &Path, screen: (u32, u32), seconds: u32) -> Option<(Duration, u64
 #[test]
 fn export_mit_webcam_ergibt_lesbares_video() {
     let dir = tempfile::tempdir().unwrap();
-    if let Some((_, frames)) = export(dir.path(), (640, 360), 1) {
+    if let Some((_, frames)) = export(dir.path(), (640, 360), 1, WebcamBackground::Original) {
         assert_eq!(frames, 30);
     }
 }
@@ -150,7 +218,34 @@ fn export_mit_webcam_ergibt_lesbares_video() {
 fn budget_export_1080p30_mindestens_doppelte_echtzeit() {
     let dir = tempfile::tempdir().unwrap();
     let seconds = 10;
-    if let Some((elapsed, _)) = export(dir.path(), (1920, 1080), seconds) {
+    if let Some((elapsed, _)) = export(
+        dir.path(),
+        (1920, 1080),
+        seconds,
+        WebcamBackground::Original,
+    ) {
+        let budget = Duration::from_secs(seconds as u64) / 2;
+        assert!(
+            elapsed <= budget,
+            "Export dauerte {elapsed:?}, Budget {budget:?}"
+        );
+    }
+}
+
+#[test]
+fn export_mit_unscharfem_hintergrund_ergibt_lesbares_video() {
+    let dir = tempfile::tempdir().unwrap();
+    if let Some((_, frames)) = export(dir.path(), (640, 360), 1, WebcamBackground::Blur) {
+        assert_eq!(frames, 30);
+    }
+}
+
+#[test]
+#[ignore = "Budget-Messung, braucht Hardware-Encoder, GPU und Neural Engine"]
+fn budget_export_1080p30_mit_maske_mindestens_doppelte_echtzeit() {
+    let dir = tempfile::tempdir().unwrap();
+    let seconds = 10;
+    if let Some((elapsed, _)) = export(dir.path(), (1920, 1080), seconds, WebcamBackground::Blur) {
         let budget = Duration::from_secs(seconds as u64) / 2;
         assert!(
             elapsed <= budget,

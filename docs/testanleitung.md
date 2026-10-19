@@ -80,7 +80,7 @@ Einstellungen), Rechtsklick das klassische Menü.
       → FMShot läuft; „Alle Einstellungen öffnen …“ zeigt die Einstellungen
 
 ### 4b. Video (⇧⌘6, ADR 0011 Etappe 1)
-- [ ] Tab **Video**: Bereich wählen, Mikrofon an → beim ersten Mal fragt
+- [ ] Tab **Bildschirm**: Bereich wählen, Mikrofon an → beim ersten Mal fragt
       macOS nach dem Mikrofon
 - [ ] Countdown 3–2–1 in der Leiste, roter Rahmen um den Bereich
 - [ ] Leiste zeigt Zeit und Mikrofon-Pegel (sprechen → Balken)
@@ -97,7 +97,7 @@ Einstellungen), Rechtsklick das klassische Menü.
       Systemeinstellungen → Mikrofon
 
 ### 4c. Webcam (ADR 0011 Etappe 2)
-- [ ] Tab **Video**: Schalter **Webcam** an, Kamera wählen (z. B.
+- [ ] Tab **Bildschirm**: Schalter **Webcam** an, Kamera wählen (z. B.
       FaceTime-Kamera oder iPhone); ohne Kamera am Mac ist der Schalter grau
 - [ ] Beim ersten Start fragt macOS nach der **Kamera** – erlauben
 - [ ] Während des Countdowns erscheint die **Blase** (rund, weisser Rahmen,
@@ -128,6 +128,75 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] Kamera in den Systemeinstellungen verbieten → Start mit Webcam öffnet
       direkt Systemeinstellungen → Kamera (kein eigenes Hinweisfenster)
 
+### 4c+. Kopf und Hintergrund (ADR 0011 Etappe 3)
+- [ ] Tab **Bildschirm** → Webcam: **Ausschnitt** = **Kopf** → während des
+      Countdowns zeigt die Blase nach einem Moment nur Kopf und Schultern
+- [ ] Mit **Kopf folgen** zur Seite gehen → der Ausschnitt zieht nach ca.
+      1 s weich nach, kleines Wackeln bewegt ihn nicht; ohne **Kopf folgen**
+      bleibt er nach ca. 2 s stehen
+- [ ] Im fertigen Video folgt der Ausschnitt dem Kopf genauso; im
+      Monatsordner liegt `<id>_faces.json`
+- [ ] Kurz aus dem Bild gehen → Ausschnitt bleibt stehen, kein Springen
+- [ ] **Hintergrund** = **Unscharf** → Blase und Video: Person scharf,
+      Hintergrund weich
+- [ ] **Hintergrund** = **Entfernen** → in der Blase und im Video schwebt
+      nur die Person über dem Bildschirm (ohne Rahmen und Schatten; die
+      Schalter dafür verschwinden im Tab)
+- [ ] **Entfernen** + Leiste **Gross** → hinter der Person eine dunkle
+      Fläche, der Bildschirm klein in der Ecke
+- [ ] Kopf und Hintergrund zusammen, **Spiegeln** an/aus → Blase und Video
+      gleich gespiegelt
+- [ ] Mit **Ganzes Bild** + **Original** zeigt die Blase wie bisher das
+      Kamerabild ohne Verzögerung
+- [ ] Prozessorlast während der Aufnahme (Aktivitätsanzeige) mit Kopf und
+      Hintergrund deutlich unter 1 Kern
+
+### 4c++. Nur Webcam
+- [ ] Tray-Fenster: Tabs **Bild · Bildschirm · Webcam · Einstellungen**
+- [ ] Tab **Webcam** → **Hoch 9:16** → **Webcam-Aufnahme starten** (oder
+      ⌘⇧7): Blase im Hochformat mitten auf dem Bildschirm, Countdown in
+      der Leiste, keine Webcam-Knöpfe in der Leiste
+- [ ] Keine Abfrage für die Bildschirmaufnahme
+- [ ] Nochmals ⌘⇧7 = Stopp → fertiges Video 1080×1920, nur die Webcam,
+      mit Ton vom Mikrofon
+- [ ] **Quer 16:9** und **Quadrat 1:1** ebenso (1920×1080 bzw. 1080×1080)
+- [ ] **Kopf** mit **Kopf folgen** → Blase und Video folgen dem Kopf
+- [ ] **Hintergrund unscharf** → Video mit weichem Hintergrund
+- [ ] Im Editor: Video spielt ab, Ausschnitt wie im Video; keine Knöpfe
+      für Webcam klein/gross und Zoom; Schneiden und Pfeile gehen
+- [ ] Ohne Kamera am Mac: Tab zeigt „Keine Kamera gefunden.“
+
+### 4c+++. Einstellungen für das Video
+- [ ] Einstellungen → Tab **Video**: Auflösung, Codec, Qualität, Bilder
+      pro Sekunde
+- [ ] **720p** + **HEVC** + **Klein** → neues Video aufnehmen → im Finder
+      (Informationen) 720 Pixel hoch, HEVC, deutlich kleinere Datei
+- [ ] **Wie aufgenommen** + **H.264** + **Hoch** → volle Grösse, grössere
+      Datei
+- [ ] Bei 720p Pfeil im Editor zeichnen → im fertigen Video an derselben
+      Stelle, scharf
+- [ ] Altes Video öffnen, kleine Änderung → wird mit der neuen Einstellung
+      neu zusammengesetzt
+
+### 4c++++. Live zeichnen
+- [ ] Bildschirm-Aufnahme starten → Leiste hat **Zeichnen**; ⌘⇧8 oder
+      Klick → links Werkzeugleiste, Fadenkreuz
+- [ ] Pfeil ziehen → erscheint sofort; nach 3 s ohne neue Zeichnung
+      verschwindet er
+- [ ] Mehrere Zeichnungen hintereinander → verschwinden gemeinsam 3 s nach
+      der letzten
+- [ ] Nummer (N) dreimal klicken → 1, 2, 3; warten bis weg → wieder 1
+- [ ] Esc → alles weg; nochmals Esc → Zeichnen beendet, Klicks gehen wieder
+      an die Apps darunter, Tippen geht an die App
+- [ ] Tasten A/L/R/O/P/N/H wählen das Werkzeug; Farbe wechseln; Shift
+- [ ] Textmarker: gelb, halbdurchsichtig
+- [ ] Leiste und Webcam-Blase bleiben während des Zeichnens bedienbar
+- [ ] Fertiges Video: Zeichnungen genau dort und so lange wie live; im
+      Bildschirmvideo selbst (Editor: Ebenen ausblenden) nichts eingebrannt
+- [ ] Editor: Zeichnungen sind Ebenen, lassen sich löschen und verschieben
+- [ ] ⌘⇧9 pausiert und setzt fort
+- [ ] Nur Webcam: kein Knopf **Zeichnen**
+
 ### 4d. Video-Editor, Zeiger, Ebenen (ADR 0011 Etappe 4–6)
 - [ ] Video in der Galerie öffnen: Leinwand zeigt das Video, darunter die
       Zeitleiste; Leertaste spielt ab und hält an (mit Ton)
@@ -147,6 +216,21 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] **Einzelbild** landet als Bild in der Galerie; **GIF** sichern und in
       einem Browser öffnen
 - [ ] ⌘Z nimmt Schnitte, Webcam-Wechsel, Zooms und Ebenen zurück
+
+### 4e. Zeitleiste mit Zeilen je Werkzeug
+- [ ] Video mit live gezeichneten Pfeilen, Nummern, Textmarker öffnen →
+      je Werkzeug eine Zeile mit Namen links, Blöcke in der Farbe der
+      Zeichnung, Nummern zeigen ihre Zahl
+- [ ] Zwei Pfeile gleichzeitig → zweite Pfeil-Zeile
+- [ ] Block anklicken → Ebene auf der Leinwand gewählt, Abspielkopf springt
+      hin, falls nötig
+- [ ] Block ziehen → verschoben; Rand ziehen → länger/kürzer; ⌘Z macht es
+      in einem Schritt rückgängig
+- [ ] **Löschen** unter der Zeitleiste (oder ⌫) → Block und Zeichnung weg;
+      danach neu gezeichneter Pfeil erscheint ab der aktuellen Stelle 4 s
+- [ ] Zeile **Vergrössern**: Maus darüber erklärt, was es tut
+- [ ] Textmarker im Video-Editor halbdurchsichtig
+- [ ] Fertiges Video folgt den geänderten Zeiten
 
 ### 5. Editor
 - [ ] Werkzeuge: Pfeil (A), Linie (L), Rechteck (R), Ellipse (O),

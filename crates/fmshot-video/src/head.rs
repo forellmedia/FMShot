@@ -123,6 +123,67 @@ impl HeadFollower {
     }
 }
 
+/// Kopfausschnitt der Live-Blase: wie [`HeadPath`], aber Bild für Bild
+/// während der Aufnahme. Ohne Folgen richtet er sich an den ersten
+/// Erkennungen aus (Median) und bleibt danach stehen.
+#[derive(Debug, Clone)]
+pub struct LiveHead {
+    follow: bool,
+    follower: Option<HeadFollower>,
+    /// Erste Erkennungen (nur ohne Folgen).
+    fixed: Vec<HeadPose>,
+}
+
+impl LiveHead {
+    pub fn new(follow: bool) -> Self {
+        Self {
+            follow,
+            follower: None,
+            fixed: Vec::new(),
+        }
+    }
+
+    /// Ein Bild weiter: `face` = neue Erkennung in diesem Bild (sonst
+    /// `None`), `dt` Sekunden seit dem letzten Aufruf. `None`, solange noch
+    /// nie ein Gesicht erkannt wurde.
+    pub fn update(&mut self, face: Option<Rect>, dt: f32) -> Option<HeadPose> {
+        let mut pose = face.map(HeadPose::from_face);
+        if !self.follow {
+            if let Some(p) = pose
+                && self.fixed.len() < FIXED_SAMPLES
+            {
+                self.fixed.push(p);
+            }
+            pose = median_pose(&self.fixed);
+        }
+        match (&mut self.follower, pose) {
+            (Some(f), _) => {
+                f.update(pose, dt);
+            }
+            (None, Some(p)) => self.follower = Some(HeadFollower::new(p)),
+            (None, None) => {}
+        }
+        self.follower.as_ref().map(HeadFollower::pose)
+    }
+}
+
+/// Median je Grösse (gegen Ausreisser der Erkennung); `None` ohne Proben.
+fn median_pose(poses: &[HeadPose]) -> Option<HeadPose> {
+    if poses.is_empty() {
+        return None;
+    }
+    let median = |f: fn(&HeadPose) -> f32| {
+        let mut v: Vec<f32> = poses.iter().map(f).collect();
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    Some(HeadPose {
+        cx: median(|p| p.cx),
+        cy: median(|p| p.cy),
+        size: median(|p| p.size),
+    })
+}
+
 /// Weg des Kopfausschnitts über das ganze Video (für den Export).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeadPath {
@@ -143,18 +204,8 @@ impl HeadPath {
                 .filter_map(|s| s.face.map(HeadPose::from_face))
                 .take(FIXED_SAMPLES)
                 .collect();
-            let median = |f: fn(&HeadPose) -> f32| {
-                let mut v: Vec<f32> = poses.iter().map(f).collect();
-                v.sort_by(f32::total_cmp);
-                v[v.len() / 2]
-            };
-            let pose = HeadPose {
-                cx: median(|p| p.cx),
-                cy: median(|p| p.cy),
-                size: median(|p| p.size),
-            };
             return Some(Self {
-                keys: vec![(0.0, pose)],
+                keys: vec![(0.0, median_pose(&poses)?)],
             });
         }
         let mut follower = HeadFollower::new(HeadPose::from_face(first));
@@ -281,6 +332,38 @@ mod tests {
         }
         assert!(close(f.pose().cx, 0.7));
         assert!(max <= 0.7 + 1e-3, "überschwingt: {max}");
+    }
+
+    #[test]
+    fn live_wartet_aufs_erste_gesicht() {
+        let mut live = LiveHead::new(true);
+        assert_eq!(live.update(None, 0.1), None);
+        let p = live.update(face(0.4, 0.5, 0.2), 0.1).unwrap();
+        assert!(close(p.cx, 0.4));
+        // Gesicht weg: Ausschnitt bleibt.
+        assert!(close(live.update(None, 0.1).unwrap().cx, 0.4));
+    }
+
+    #[test]
+    fn live_folgt_dem_kopf() {
+        let mut live = LiveHead::new(true);
+        live.update(face(0.3, 0.5, 0.2), 0.1);
+        for _ in 0..40 {
+            live.update(face(0.7, 0.5, 0.2), 0.1);
+        }
+        assert!(close(live.update(None, 0.1).unwrap().cx, 0.7));
+    }
+
+    #[test]
+    fn live_ohne_folgen_bleibt_stehen() {
+        let mut live = LiveHead::new(false);
+        for _ in 0..FIXED_SAMPLES {
+            live.update(face(0.4, 0.5, 0.2), 0.1);
+        }
+        for _ in 0..40 {
+            live.update(face(0.9, 0.5, 0.2), 0.1);
+        }
+        assert!(close(live.update(None, 0.1).unwrap().cx, 0.4));
     }
 
     #[test]

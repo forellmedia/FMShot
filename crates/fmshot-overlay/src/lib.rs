@@ -176,6 +176,8 @@ pub fn open_scroll_ui(
 pub enum RecordAction {
     /// Pause bzw. Weiter.
     Pause,
+    /// Live zeichnen ein/aus.
+    Draw,
     /// Webcam ein/aus.
     Webcam,
     /// Webcam gross / Bildschirm klein und zurück.
@@ -189,6 +191,8 @@ pub enum RecordAction {
 pub struct RecordLabels<'a> {
     pub status: &'a str,
     pub pause: &'a str,
+    /// Knopf „Zeichnen“; `None` = kein Knopf (nur Webcam).
+    pub draw: Option<&'a str>,
     /// Knopf „Webcam aus/an“; `None` = kein Knopf (keine Kamera).
     pub webcam: Option<&'a str>,
     /// Knopf „Gross/Klein“; nur mit Webcam-Knopf.
@@ -253,6 +257,9 @@ pub struct BubbleStyle {
     /// Rahmenbreite als Anteil der kürzeren Seite und Farbe (RGBA, 0 bis 1).
     pub border: Option<(f64, [f64; 4])>,
     pub shadow: bool,
+    /// Ohne Fläche hinter dem Bild (Hintergrund entfernt: Nur die Person
+    /// schwebt über dem Bildschirm).
+    pub transparent: bool,
 }
 
 /// Live-Bild der Webcam während der Aufnahme (ADR 0011): schwebt über
@@ -464,5 +471,110 @@ mod tests {
         assert_eq!(window_at(&windows, (20.0, 20.0)).map(|w| w.id), Some(1));
         assert_eq!(window_at(&windows, (100.0, 100.0)).map(|w| w.id), Some(2));
         assert_eq!(window_at(&windows, (300.0, 0.0)), None);
+    }
+}
+
+// --- Live zeichnen während der Video-Aufnahme --------------------------------
+
+/// Werkzeug der Zeichenleiste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrawTool<'a> {
+    /// Name eines SF Symbols (macOS), z. B. `arrow.up.right`.
+    pub symbol: &'a str,
+    /// Taste, die das Werkzeug wählt (klein geschrieben).
+    pub key: char,
+}
+
+/// Was auf der Zeichenfläche passiert. Lagen in Pixeln relativ zum
+/// aufgenommenen Bereich.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DrawEvent {
+    Tool(usize),
+    Color(usize),
+    Press {
+        x: f32,
+        y: f32,
+    },
+    Drag {
+        x: f32,
+        y: f32,
+        shift: bool,
+    },
+    Release {
+        x: f32,
+        y: f32,
+        shift: bool,
+    },
+    /// Esc gedrückt.
+    Escape,
+    /// Knopf „Fertig“ in der Leiste.
+    Exit,
+}
+
+/// Durchsichtige Fläche über dem Monitor, auf der während der Aufnahme
+/// gezeichnet wird; links eine Werkzeugleiste. Sie ist (wie alles von
+/// FMShot) nicht im Bildschirmvideo. Inaktiv gehen Mausklicks an die Apps
+/// darunter, und nur die Zeichnung ist zu sehen.
+pub struct DrawSurface {
+    #[cfg(target_os = "macos")]
+    inner: macos::draw::Surface,
+}
+
+impl DrawSurface {
+    /// Zeichnen ein/aus: Werkzeugleiste, Fadenkreuz, Tastatur.
+    pub fn set_active(&self, active: bool) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_active(active);
+        #[cfg(not(target_os = "macos"))]
+        let _ = active;
+    }
+
+    pub fn is_active(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.inner.is_active();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
+    /// Bild der Zeichnungen (RGBA, gerade Deckkraft) über dem ganzen
+    /// Bereich, beliebig skaliert; `None` = nichts zu sehen.
+    pub fn set_image(&self, image: Option<Arc<RgbaImage>>) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_image(image);
+        #[cfg(not(target_os = "macos"))]
+        let _ = image;
+    }
+
+    /// Hervorgehobenes Werkzeug und Farbe.
+    pub fn set_selected(&self, tool: usize, color: usize) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_selected(tool, color);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (tool, color);
+    }
+
+    pub fn close(&self) {
+        #[cfg(target_os = "macos")]
+        self.inner.close();
+    }
+}
+
+/// Öffnet die Zeichenfläche (inaktiv) auf `display_id`. `area` ist der
+/// aufgenommene Bereich in physischen Pixeln des Monitors; `colors` als
+/// RGBA 0 bis 1. Muss im Haupt-Thread laufen.
+pub fn open_draw_surface(
+    display_id: u32,
+    area: (u32, u32, u32, u32),
+    tools: &[DrawTool<'_>],
+    colors: &[[f64; 4]],
+    on_event: Box<dyn Fn(DrawEvent)>,
+) -> Result<DrawSurface, OverlayError> {
+    #[cfg(target_os = "macos")]
+    return macos::draw::open(display_id, area, tools, colors, on_event)
+        .map(|inner| DrawSurface { inner });
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (display_id, area, tools, colors, on_event);
+        Err(OverlayError::NotImplemented)
     }
 }

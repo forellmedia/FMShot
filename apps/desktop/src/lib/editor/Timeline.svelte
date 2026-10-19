@@ -1,14 +1,17 @@
 <script lang="ts">
   // Zeitleiste des Video-Editors (ADR 0011, Etappe 4–6): Abspielen, Bereich
-  // wählen, Schneiden, Webcam je Abschnitt, Zoom, Klicks, Zeit von Ebenen,
-  // Ton und Mauszeiger. Gerechnet wird in `fmshot-video` (WASM).
+  // wählen, Schneiden, Webcam je Abschnitt, Vergrössern (Zoom), Klicks, Ton
+  // und Mauszeiger. Pfeile, Rahmen usw. stehen je Werkzeug in einer eigenen
+  // Zeile; jede Zeichnung ist ein Block, der sich wählen, verschieben und in
+  // der Länge ziehen lässt. Gerechnet wird in `fmshot-video` (WASM).
 
   import type { WebcamMode } from "$lib/bindings";
   import { t } from "$lib/i18n";
   import Icon from "./Icon.svelte";
   import { editor } from "./state.svelte";
   import { formatTime, player } from "./video.svelte";
-  import { isBaseLayer, layerTime } from "./videoLayers";
+  import type { MessageKey } from "$lib/i18n";
+  import { dragRange, isBaseLayer, layerLanes, layerTime, type LaneGroup, type TimeBlock } from "./videoLayers";
 
   let lanes = $state<HTMLDivElement | null>(null);
   let width = $state(600);
@@ -18,12 +21,18 @@
   let drag: { start: number; moved: boolean } | null = null;
 
   const video = $derived(editor.doc?.video ?? null);
+  /** Nur Webcam: kein Bildschirm, also weder Webcam-Lage noch Zoom. */
+  const cameraOnly = $derived(!!video?.camera_only);
+  /** Spalte links für die Namen der Zeilen (Punkte, wie `--gutter`). */
+  const GUTTER = 92;
   const duration = $derived(Math.max(1, player.durationMs));
-  const x = (ms: number) => (ms / duration) * width;
+  /** Breite der Spuren ohne Namensspalte. */
+  const track = $derived(Math.max(1, width - GUTTER));
+  const x = (ms: number) => (ms / duration) * track;
 
   function timeAt(e: PointerEvent): number {
     const r = lanes!.getBoundingClientRect();
-    return Math.max(0, Math.min(duration, ((e.clientX - r.left) / r.width) * duration));
+    return Math.max(0, Math.min(duration, ((e.clientX - r.left - GUTTER) / track) * duration));
   }
 
   function onDown(e: PointerEvent) {
@@ -73,6 +82,72 @@
     void player.durationMs;
     return (video?.cuts ?? []).map((c) => player.outputTime(c.start_ms));
   });
+
+  /** Pfeile, Rahmen … als Blöcke, je Werkzeug eine oder mehrere Zeilen. */
+  const layerRows = $derived.by(() => {
+    const doc = editor.doc;
+    if (!doc) return [];
+    void player.durationMs;
+    return layerLanes(doc, player.durationMs, (ms) => player.outputTime(ms));
+  });
+
+  const LANE_LABEL: Record<LaneGroup, MessageKey> = {
+    arrow: "video.lane_arrow",
+    line: "video.lane_line",
+    rectangle: "video.lane_rectangle",
+    ellipse: "video.lane_ellipse",
+    pen: "video.lane_pen",
+    step: "video.lane_step",
+    highlight: "video.lane_highlight",
+    text: "video.lane_text",
+    callout: "video.lane_callout",
+    image: "video.lane_image",
+    other: "video.lane_other",
+  };
+
+  // Block ziehen: verschieben oder am Rand die Länge ändern. Übernommen wird
+  // erst beim Loslassen (ein Schritt fürs Rückgängigmachen).
+  let blockDrag: { block: TimeBlock; mode: "move" | "start" | "end"; x0: number; moved: boolean } | null = null;
+  let dragPreview = $state<{ layer: number; start: number; end: number } | null>(null);
+
+  function blockRange(b: TimeBlock): { start: number; end: number } {
+    return dragPreview?.layer === b.layer ? dragPreview : b;
+  }
+
+  function blockDown(e: PointerEvent, b: TimeBlock, mode: "move" | "start" | "end") {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    player.pause();
+    editor.select(b.layer, { single: true });
+    blockDrag = { block: b, mode, x0: e.clientX, moved: false };
+  }
+
+  function blockMove(e: PointerEvent) {
+    if (!blockDrag) return;
+    const dx = e.clientX - blockDrag.x0;
+    if (Math.abs(dx) > 2) blockDrag.moved = true;
+    if (!blockDrag.moved) return;
+    const range = dragRange(blockDrag.block, blockDrag.mode, (dx / track) * duration, duration);
+    dragPreview = { layer: blockDrag.block.layer, ...range };
+    // Beim Ziehen eines Rands zeigt die Vorschau die Stelle des Rands.
+    player.seek(blockDrag.mode === "end" ? range.end - 1 : range.start);
+  }
+
+  function blockUp(e: PointerEvent) {
+    e.stopPropagation();
+    const d = blockDrag;
+    blockDrag = null;
+    if (!d) return;
+    if (d.moved && dragPreview) {
+      player.edit({ op: "layerTime", layer: d.block.layer, range: [dragPreview.start, dragPreview.end] });
+    } else if (player.outputMs < d.block.start || player.outputMs >= d.block.end) {
+      // Nur geklickt: zur Stelle springen, an der die Zeichnung zu sehen ist.
+      player.seek(d.block.start);
+    }
+    dragPreview = null;
+  }
 
   const layer = $derived(editor.selected && !isBaseLayer(editor.selected) ? editor.selected : null);
   const layerBlock = $derived.by((): Block | null => {
@@ -163,7 +238,7 @@
       <button class="link" onclick={() => player.edit({ op: "uncut" })}>{t("video.uncut")}</button>
     {/if}
 
-    {#if video?.webcam}
+    {#if video?.webcam && !cameraOnly}
       <span class="sep"></span>
       <span class="label">{t("video.webcam")}</span>
       <button onclick={() => setWebcam("overlay")}>{t("video.webcam_small")}</button>
@@ -171,10 +246,12 @@
       <button onclick={() => setWebcam("hidden")}>{t("video.webcam_off")}</button>
     {/if}
 
-    <span class="sep"></span>
-    <button onclick={addZoom}>{t("video.zoom_add")}</button>
-    {#if player.hasInput}
-      <button title={t("video.zoom_auto_hint")} onclick={() => player.edit({ op: "autoZoom" })}>{t("video.zoom_auto")}</button>
+    {#if !cameraOnly}
+      <span class="sep"></span>
+      <button title={t("video.zoom_hint")} onclick={addZoom}>{t("video.zoom_add")}</button>
+      {#if player.hasInput}
+        <button title={t("video.zoom_auto_hint")} onclick={() => player.edit({ op: "autoZoom" })}>{t("video.zoom_auto")}</button>
+      {/if}
     {/if}
 
     <span class="grow"></span>
@@ -275,7 +352,7 @@
         <span class="click" style:left="{x(c)}px"></span>
       {/each}
     </div>
-    {#if video?.webcam}
+    {#if video?.webcam && !cameraOnly}
       <div class="lane">
         <span class="name">{t("video.webcam")}</span>
         {#each webcamBlocks as b, i (i)}
@@ -287,33 +364,57 @@
         {/each}
       </div>
     {/if}
-    <div class="lane">
-      <span class="name">{t("video.track_zoom")}</span>
-      {#each zoomBlocks as b, i (i)}
-        <button
-          class="block zoom"
-          class:selected={zoomIndex === i}
-          style:left="{x(b.start)}px"
-          style:width="{Math.max(4, x(b.end) - x(b.start))}px"
-          onpointerdown={(e) => {
-            e.stopPropagation();
-            zoomIndex = zoomIndex === i ? null : i;
-          }}
-        >
-          {(video?.zooms?.[i]?.scale ?? 2).toFixed(1)}×
-        </button>
-      {/each}
-    </div>
-    {#if layerBlock}
-      <div class="lane">
-        <span class="name">{t("video.track_layer")}</span>
-        <span class="block layer" style:left="{x(layerBlock.start)}px" style:width="{Math.max(4, x(layerBlock.end) - x(layerBlock.start))}px"></span>
+    {#if !cameraOnly}
+      <div class="lane" title={t("video.zoom_hint")}>
+        <span class="name">{t("video.track_zoom")}</span>
+        {#each zoomBlocks as b, i (i)}
+          <button
+            class="block zoom"
+            class:selected={zoomIndex === i}
+            style:left="{x(b.start)}px"
+            style:width="{Math.max(4, x(b.end) - x(b.start))}px"
+            onpointerdown={(e) => {
+              e.stopPropagation();
+              zoomIndex = zoomIndex === i ? null : i;
+            }}
+          >
+            {(video?.zooms?.[i]?.scale ?? 2).toFixed(1)}×
+          </button>
+        {/each}
       </div>
     {/if}
+    {#each layerRows as row, i (i)}
+      <div class="lane layers" class:first={row.first}>
+        {#if row.first}
+          <span class="name">{t(LANE_LABEL[row.group])}</span>
+        {/if}
+        {#each row.blocks as b (b.layer)}
+          {@const r = blockRange(b)}
+          <button
+            class="block layer"
+            class:selected={editor.selectedIds.includes(b.layer)}
+            class:always={b.always}
+            class:hidden={b.hidden}
+            style:left="{x(r.start)}px"
+            style:width="{Math.max(6, x(r.end) - x(r.start))}px"
+            style:--layer-color={b.color ?? "#fb8c00"}
+            title={t(b.always ? "video.layer_block_always" : "video.layer_block_hint")}
+            onpointerdown={(e) => blockDown(e, b, "move")}
+            onpointermove={blockMove}
+            onpointerup={blockUp}
+            onpointercancel={blockUp}
+          >
+            <span class="grip start" aria-hidden="true" onpointerdown={(e) => blockDown(e, b, "start")}></span>
+            {#if b.label}<span class="text">{b.label}</span>{/if}
+            <span class="grip end" aria-hidden="true" onpointerdown={(e) => blockDown(e, b, "end")}></span>
+          </button>
+        {/each}
+      </div>
+    {/each}
     {#if sel}
-      <span class="selection" style:left="{x(sel.start)}px" style:width="{x(sel.end) - x(sel.start)}px"></span>
+      <span class="selection" style:left="{GUTTER + x(sel.start)}px" style:width="{x(sel.end) - x(sel.start)}px"></span>
     {/if}
-    <span class="playhead" style:left="{x(player.outputMs)}px"></span>
+    <span class="playhead" style:left="{GUTTER + x(player.outputMs)}px"></span>
   </div>
 
   {#if zoom}
@@ -349,6 +450,8 @@
         <button onclick={() => setLayerRange(sel.start, sel.end)}>{t("video.layer_selection")}</button>
       {/if}
       <button class="link" onclick={() => player.edit({ op: "layerTime", layer: layer.id, range: null })}>{t("video.layer_always")}</button>
+      <span class="grow"></span>
+      <button onclick={() => editor.deleteSelected()}>{t("video.layer_delete")}</button>
     </div>
   {/if}
 </section>
@@ -439,23 +542,29 @@
     cursor: text;
     touch-action: none;
   }
+  .lanes {
+    --gutter: 92px;
+    padding-left: var(--gutter);
+  }
   .lane {
     position: relative;
     height: 20px;
     border-radius: 4px;
     background: var(--bg);
-    overflow: hidden;
   }
   .lane.clip {
     background: color-mix(in srgb, var(--selection) 18%, var(--bg));
   }
   .name {
     position: absolute;
-    left: 6px;
+    left: calc(4px - var(--gutter));
+    width: calc(var(--gutter) - 10px);
     top: 3px;
     color: var(--text-muted);
     pointer-events: none;
-    z-index: 2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .block {
     position: absolute;
@@ -483,8 +592,51 @@
   .block.zoom.selected {
     outline: 2px solid var(--text);
   }
+  .lane.layers:not(.first) {
+    margin-top: -1px;
+  }
   .block.layer {
-    background: #fb8c00;
+    background: color-mix(in srgb, var(--layer-color) 75%, var(--bg));
+    cursor: grab;
+    z-index: 3;
+    padding: 0 7px;
+    display: flex;
+    align-items: center;
+  }
+  .block.layer:active {
+    cursor: grabbing;
+  }
+  .block.layer.always {
+    background: color-mix(in srgb, var(--layer-color) 35%, var(--bg));
+  }
+  .block.layer.hidden {
+    opacity: 0.4;
+  }
+  .block.layer.selected {
+    outline: 2px solid var(--text);
+    outline-offset: -1px;
+  }
+  .block.layer .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: ew-resize;
+  }
+  .grip.start {
+    left: 0;
+  }
+  .grip.end {
+    right: 0;
+  }
+  .block.layer.selected .grip {
+    background: rgb(255 255 255 / 0.35);
   }
   .cutmark {
     position: absolute;

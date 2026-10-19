@@ -160,6 +160,7 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
         ["capture", "scroll", ..] => Some(capture::Mode::Scroll),
         ["capture", "text", ..] => Some(capture::Mode::Text),
         ["capture", "video", ..] => Some(capture::Mode::Video),
+        ["capture", "webcam", ..] => Some(capture::Mode::Webcam),
         ["gallery", ..] => {
             tray::show_main_window(app);
             None

@@ -267,3 +267,39 @@ fn webcam_spaeter_eingeschaltet() {
         &[500, 1100, 1500],
     );
 }
+
+#[test]
+fn nur_webcam_hochformat() {
+    let doc = VideoDoc {
+        duration_ms: 2000,
+        fps: 10,
+        webcam: Some(WebcamTrack {
+            layout: WebcamLayout::default(),
+            sections: vec![WebcamSection {
+                start_ms: 0,
+                mode: WebcamMode::Large,
+            }],
+        }),
+        camera_only: Some(fmshot_core::CameraFormat::Portrait),
+        ..VideoDoc::default()
+    };
+    let size = (180, 320);
+    let (_, webcam) = sources();
+    let mut sink = Collect {
+        wanted: vec![Duration::from_millis(500)],
+        size,
+        frames: BTreeMap::new(),
+        finished: false,
+    };
+    let screen = Box::new(fmshot_video::BlankSource::new(size));
+    match export(&doc, screen, Some(webcam), &mut sink, &mut |_| true) {
+        Ok(stats) => assert_eq!(stats.frames, 20),
+        Err(VideoError::NoGpu(e)) => {
+            eprintln!("Übersprungen, keine Grafikkarte: {e}");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    }
+    let frame = sink.frames.get(&500).expect("Bild zum Zeitpunkt");
+    assert_snapshot("nur_webcam_0500ms", size, frame);
+}

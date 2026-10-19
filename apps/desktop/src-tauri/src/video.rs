@@ -1,27 +1,29 @@
-//! Video-Aufnahme (ADR 0011): Ziel wählen (Bereich, Fenster, Bildschirm),
-//! Countdown, Aufnahmeleiste mit Pause/Stopp und Webcam, danach die Spuren
+//! Video-Aufnahme (ADR 0011): Ziel wählen (Bereich, Fenster, Bildschirm
+//! oder nur Webcam), Countdown, Aufnahmeleiste mit Pause/Stopp und Webcam, danach die Spuren
 //! zusammensetzen und in die Bibliothek legen. Die Aufnahme macht
 //! `fmshot-media`, Layout und Export `fmshot-video`; hier wird nur verdrahtet.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fmshot_capture::{PrivacyPane, display_at};
 use fmshot_core::{
-    InputSample, InputTrack, Rect, Size, VideoDoc, WebcamLayout, WebcamMode, WebcamShape,
-    WebcamTrack,
+    CameraFormat, Document, InputSample, InputTrack, LayerTime, Point, Rect, Size, VideoDoc,
+    WebcamBackground, WebcamLayout, WebcamMode, WebcamSection, WebcamShape, WebcamTrack,
 };
 use fmshot_library::VideoSlot;
 use fmshot_media::{MediaError, Permission, RecordFiles, RecordOptions, RecordTarget, Recording};
 use fmshot_overlay::{
-    BubbleStyle, OverlayHandle, OverlayMode, OverlayResult, RecordAction, RecordLabels, RecordUi,
-    WebcamBubble, WindowTarget,
+    BubbleStyle, DrawEvent, DrawSurface, DrawTool, OverlayHandle, OverlayMode, OverlayResult,
+    RecordAction, RecordLabels, RecordUi, WebcamBubble, WindowTarget,
 };
 use fmshot_settings::{VideoSettings, VideoTarget};
 use fmshot_video::SectionLog;
+use fmshot_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
 use tauri::{AppHandle, Manager};
 
 use crate::capture::{self, CaptureState, Mode};
@@ -45,6 +47,7 @@ struct Flags {
     stop: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     toggle_pause: Arc<AtomicBool>,
+    toggle_draw: Arc<AtomicBool>,
     toggle_webcam: Arc<AtomicBool>,
     toggle_large: Arc<AtomicBool>,
 }
@@ -53,12 +56,14 @@ thread_local! {
     static UI: RefCell<Option<RecordUi>> = const { RefCell::new(None) };
     static OVERLAY: RefCell<Option<OverlayHandle>> = const { RefCell::new(None) };
     static BUBBLE: RefCell<Option<WebcamBubble>> = const { RefCell::new(None) };
+    static SURFACE: RefCell<Option<DrawSurface>> = const { RefCell::new(None) };
 }
 
 /// Was nach der Auswahl aufgenommen wird.
 #[derive(Debug, Clone, Copy)]
 struct Choice {
-    target: RecordTarget,
+    /// `None` = nur Webcam.
+    target: Option<RecordTarget>,
     display_id: u32,
     /// Rahmen um den Bereich (physische Pixel des Monitors).
     rect: Option<(u32, u32, u32, u32)>,
@@ -78,6 +83,27 @@ pub fn stop_running(app: &AppHandle) -> bool {
             true
         }
         None => false,
+    }
+}
+
+/// Was eine Tastenkombination während der Aufnahme umschaltet.
+#[derive(Debug, Clone, Copy)]
+pub enum Toggle {
+    Draw,
+    Pause,
+}
+
+/// Tastenkombination „Zeichnen“ bzw. „Pause“: wirkt nur während einer
+/// Aufnahme.
+pub fn toggle(app: &AppHandle, what: Toggle) {
+    let state = app.state::<VideoState>();
+    let guard = state.session.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(flags) = guard.as_ref() {
+        let flag = match what {
+            Toggle::Draw => &flags.toggle_draw,
+            Toggle::Pause => &flags.toggle_pause,
+        };
+        flag.store(true, Ordering::Release);
     }
 }
 
@@ -119,6 +145,84 @@ pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
             std::thread::spawn(move || run(&app, choice, microphone, webcam, settings));
         });
     });
+}
+
+/// Startet eine Aufnahme nur mit der Webcam (Tab *Webcam*). Die Blase
+/// erscheint mitten auf dem Bildschirm unter der Maus.
+pub fn start_webcam(app: &AppHandle) {
+    let state = app.state::<VideoState>();
+    if state.starting.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let settings = crate::settings::get(app).video;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if fmshot_media::cameras().is_empty() {
+            done_starting(&app);
+            capture::show_error(&app, &t("video.no_camera", &[]));
+            return;
+        }
+        let camera = match fmshot_media::camera_permission() {
+            Permission::Granted => true,
+            Permission::NotDetermined => fmshot_media::request_camera_permission(),
+            Permission::Denied => {
+                done_starting(&app);
+                capture::open_privacy_settings(&app, PrivacyPane::Camera);
+                return;
+            }
+        };
+        if !camera {
+            done_starting(&app);
+            return;
+        }
+        let microphone = settings.microphone
+            && match fmshot_media::microphone_permission() {
+                Permission::Granted => true,
+                Permission::NotDetermined => fmshot_media::request_microphone_permission(),
+                Permission::Denied => {
+                    done_starting(&app);
+                    capture::open_privacy_settings(&app, PrivacyPane::Microphone);
+                    return;
+                }
+            };
+        let Some(choice) = camera_choice(&app, settings.camera.format) else {
+            done_starting(&app);
+            return;
+        };
+        run(&app, choice, microphone, true, settings);
+    });
+}
+
+/// Startlage der Blase bei „nur Webcam“, in Punkten (Breite, Höhe).
+fn camera_bubble_points(format: CameraFormat) -> (f32, f32) {
+    match format {
+        CameraFormat::Landscape => (560.0, 315.0),
+        CameraFormat::Portrait => (270.0, 480.0),
+        CameraFormat::Square => (400.0, 400.0),
+    }
+}
+
+/// „Nur Webcam“: Monitor unter der Maus, Blase in seiner Mitte.
+fn camera_choice(app: &AppHandle, format: CameraFormat) -> Option<Choice> {
+    let state = app.state::<CaptureState>();
+    let displays = state.capturer.displays().ok()?;
+    let display = state
+        .capturer
+        .cursor_position()
+        .and_then(|c| display_at(&displays, c))
+        .or_else(|| displays.iter().find(|d| d.is_primary))?;
+    let s = display.scale_factor.max(1.0);
+    let (w, h) = camera_bubble_points(format);
+    let (w, h) = (w * s, h * s);
+    let x = (display.bounds.width * s - w) / 2.0;
+    let y = (display.bounds.height * s - h) / 2.0;
+    Some(Choice {
+        target: None,
+        display_id: display.id,
+        rect: None,
+        area: (x.max(0.0) as u32, y.max(0.0) as u32, w as u32, h as u32),
+        scale: display.scale_factor,
+    })
 }
 
 fn done_starting(app: &AppHandle) {
@@ -164,9 +268,9 @@ fn select(
             };
             let s = display.scale_factor.max(1.0);
             let choice = Choice {
-                target: RecordTarget::Display {
+                target: Some(RecordTarget::Display {
                     display_id: display.id,
-                },
+                }),
                 display_id: display.id,
                 rect: None,
                 area: (
@@ -196,13 +300,13 @@ fn select(
                         then(
                             &app_done,
                             Choice {
-                                target: RecordTarget::Region {
+                                target: Some(RecordTarget::Region {
                                     display_id: sel.display_id,
                                     x: sel.x,
                                     y: sel.y,
                                     width: sel.width,
                                     height: sel.height,
-                                },
+                                }),
                                 display_id: sel.display_id,
                                 rect: Some((sel.x, sel.y, sel.width, sel.height)),
                                 area: (sel.x, sel.y, sel.width, sel.height),
@@ -275,7 +379,7 @@ fn select(
                         then(
                             &app_done,
                             Choice {
-                                target: RecordTarget::Window { window_id: id },
+                                target: Some(RecordTarget::Window { window_id: id }),
                                 display_id,
                                 rect,
                                 area: rect.unwrap_or((0, 0, 1920, 1080)),
@@ -310,13 +414,15 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             return;
         }
     };
+    let camera_only = choice.target.is_none();
     // Mit Kamera am System lässt sich die Webcam jederzeit zuschalten.
     let has_camera = !fmshot_media::cameras().is_empty();
     let files = RecordFiles {
-        screen: slot.screen_path(),
-        system_audio: settings.system_audio.then(|| slot.system_audio_path()),
+        screen: (!camera_only).then(|| slot.screen_path()),
+        system_audio: (settings.system_audio && !camera_only).then(|| slot.system_audio_path()),
         microphone: microphone.then(|| slot.microphone_path()),
         webcam: has_camera.then(|| slot.webcam_path()),
+        faces: has_camera.then(|| slot.faces_path()),
     };
     // Kurz warten, bis das Auswahl-Overlay verschwunden ist.
     std::thread::sleep(Duration::from_millis(80));
@@ -348,7 +454,11 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         .session
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(flags.clone());
-    let layout = settings.webcam_layout;
+    let layout = if camera_only {
+        settings.camera.layout()
+    } else {
+        settings.webcam_layout
+    };
     let mut cam = WebcamControl {
         on: false,
         starting: None,
@@ -362,7 +472,8 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         &choice,
         &flags,
         settings.countdown,
-        has_camera.then_some(webcam),
+        // Bei „nur Webcam“ ohne Knöpfe für die Webcam.
+        (has_camera && !camera_only).then_some(webcam),
     );
     // Die Kamera braucht bis etwa 1 s – sie läuft parallel zum Countdown an.
     if webcam {
@@ -381,11 +492,23 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             }
         }
     }
+    // Nur Webcam: Ohne laufende Kamera gäbe es kein erstes Bild.
+    if camera_only {
+        while cam.starting.is_some() && !flags.cancel.load(Ordering::Acquire) {
+            cam.handle(app, &flags, &recording, &choice, None);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if !cam.on {
+            flags.cancel.store(true, Ordering::Release);
+        }
+    }
     if !flags.cancel.load(Ordering::Acquire) {
         recording.begin();
         cam.log.set(0, cam.mode());
     }
-    let mouse = MouseLog::start(app, &recording, &choice);
+    let mouse = (!camera_only).then(|| MouseLog::start(app, &recording, &choice));
+    // Live zeichnen gibt es nur mit Bildschirm.
+    let sketch = (!camera_only).then(|| Sketch::open(app, &choice, &recording));
 
     let mut failure = None;
     while !flags.stop.load(Ordering::Acquire) && !flags.cancel.load(Ordering::Acquire) {
@@ -398,6 +521,14 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
                 t("video.resume", &[])
             };
             set_label(app, RecordAction::Pause, label);
+        }
+        if let Some(sketch) = &sketch {
+            if flags.toggle_draw.swap(false, Ordering::AcqRel) {
+                let _ = app.run_on_main_thread(|| {
+                    with_surface(|s| set_drawing(s, !s.is_active()));
+                });
+            }
+            sketch.tick(app);
         }
         let at = recording.elapsed().as_millis().min(u32::MAX as u128) as u32;
         cam.handle(app, &flags, &recording, &choice, Some(at));
@@ -418,6 +549,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         .unwrap_or_else(|e| e.into_inner()) = None;
     // Lage der Blase = Startlayout der Webcam.
     let bubble = close_bubble(app);
+    let drawings = sketch.map(|s| s.close(app)).unwrap_or_default();
 
     if flags.cancel.load(Ordering::Acquire) {
         close_ui(app);
@@ -425,29 +557,44 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         library.discard_video(&slot);
         return;
     }
-    let samples = mouse.finish();
+    let samples = mouse.map(MouseLog::finish);
     let stopped = recording.stop();
     match stopped {
         Ok(summary) => {
-            write_json(&slot.input_path(), &InputTrack { samples });
+            if let Some(samples) = samples {
+                write_json(&slot.input_path(), &InputTrack { samples });
+            }
             if let Some(e) = failure {
                 log::warn!("Video endete vorzeitig: {e}");
             }
-            let webcam = files
-                .webcam
-                .as_deref()
-                .filter(|p| p.exists() && cam.log.shows_webcam())
-                .map(|_| WebcamTrack {
-                    layout: webcam_layout(cam.layout, &choice, bubble),
-                    sections: cam.log.into_sections(),
-                });
+            let webcam_file = files.webcam.as_deref().filter(|p| p.exists());
+            let webcam = if camera_only {
+                webcam_file.map(|_| WebcamTrack {
+                    layout: cam.layout,
+                    sections: vec![WebcamSection {
+                        start_ms: 0,
+                        mode: WebcamMode::Large,
+                    }],
+                })
+            } else {
+                webcam_file
+                    .filter(|_| cam.log.shows_webcam())
+                    .map(|_| WebcamTrack {
+                        layout: webcam_layout(cam.layout, &choice, bubble),
+                        sections: cam.log.into_sections(),
+                    })
+            };
             let doc = VideoDoc {
                 duration_ms: summary.duration.as_millis().min(u32::MAX as u128) as u32,
-                fps: settings.fps,
+                // Die Kamera liefert 30 Bilder je Sekunde.
+                fps: if camera_only { 30 } else { settings.fps },
                 webcam,
+                camera_only: camera_only.then_some(settings.camera.format),
                 ..VideoDoc::default()
             };
-            finish(app, &slot, &files, summary, choice.scale, doc);
+            // Das Kamerabild hat keine Bildschirm-Skalierung.
+            let scale = if camera_only { 1.0 } else { choice.scale };
+            finish(app, &slot, &files, summary, scale, doc, drawings);
         }
         Err(MediaError::Empty) => {
             library.discard_video(&slot);
@@ -461,6 +608,174 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         }
     }
     close_ui(app);
+}
+
+/// Live zeichnen (ADR 0011): Die Maus kommt im Haupt-Thread an, das
+/// Verschwinden prüft der Aufnahme-Thread – beide teilen sich den Zustand.
+struct Sketch {
+    state: Mutex<LiveSketch>,
+    recording: Arc<dyn Recording>,
+    started: Instant,
+    /// Ausgabepixel je Pixel der Aufnahme fürs Bild auf dem Bildschirm
+    /// (Punkte reichen, das fertige Video zeichnet in voller Grösse).
+    render_scale: f32,
+}
+
+/// SF Symbol je Werkzeug.
+fn tool_symbol(tool: SketchTool) -> &'static str {
+    match tool {
+        SketchTool::Arrow => "arrow.up.right",
+        SketchTool::Line => "line.diagonal",
+        SketchTool::Rectangle => "rectangle",
+        SketchTool::Ellipse => "circle",
+        SketchTool::Pen => "scribble",
+        SketchTool::Step => "1.circle",
+        SketchTool::Highlight => "highlighter",
+    }
+}
+
+impl Sketch {
+    fn open(app: &AppHandle, choice: &Choice, recording: &Arc<dyn Recording>) -> Arc<Self> {
+        let (_, _, w, h) = choice.area;
+        let sketch = Arc::new(Self {
+            state: Mutex::new(LiveSketch::new((w, h), choice.scale)),
+            recording: recording.clone(),
+            started: Instant::now(),
+            render_scale: 1.0 / choice.scale.max(1.0),
+        });
+        let (s, display_id, area) = (sketch.clone(), choice.display_id, choice.area);
+        let _ = app.run_on_main_thread(move || {
+            let tools: Vec<DrawTool<'_>> = SketchTool::ALL
+                .iter()
+                .map(|t| DrawTool {
+                    symbol: tool_symbol(*t),
+                    key: t.key(),
+                })
+                .collect();
+            let colors: Vec<[f64; 4]> = SKETCH_COLORS
+                .iter()
+                .map(|c| {
+                    [
+                        c.r as f64 / 255.0,
+                        c.g as f64 / 255.0,
+                        c.b as f64 / 255.0,
+                        1.0,
+                    ]
+                })
+                .collect();
+            let handler = s.clone();
+            match fmshot_overlay::open_draw_surface(
+                display_id,
+                area,
+                &tools,
+                &colors,
+                Box::new(move |e| handler.on_event(e)),
+            ) {
+                Ok(surface) => {
+                    surface.set_selected(0, 0);
+                    SURFACE.with(|x| *x.borrow_mut() = Some(surface));
+                }
+                Err(e) => log::error!("Zeichenfläche: {e}"),
+            }
+        });
+        sketch
+    }
+
+    fn clock(&self) -> Clock {
+        Clock {
+            rec_ms: self.recording.elapsed().as_millis().min(u32::MAX as u128) as u32,
+            wall_ms: self.started.elapsed().as_millis() as u64,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, LiveSketch> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Maus und Tasten der Zeichenfläche (Haupt-Thread).
+    fn on_event(&self, event: DrawEvent) {
+        let clock = self.clock();
+        let mut s = self.lock();
+        match event {
+            DrawEvent::Tool(i) => {
+                if let Some(tool) = SketchTool::ALL.get(i) {
+                    s.tool = *tool;
+                }
+            }
+            DrawEvent::Color(i) => {
+                if let Some(color) = SKETCH_COLORS.get(i) {
+                    s.color = *color;
+                }
+            }
+            DrawEvent::Press { x, y } => s.press(Point::new(x, y), clock),
+            DrawEvent::Drag { x, y, shift } => s.drag(Point::new(x, y), shift),
+            DrawEvent::Release { x, y, shift } => s.release(Point::new(x, y), shift, clock),
+            // Esc entfernt die Zeichnungen, ein zweites Esc beendet das Zeichnen.
+            DrawEvent::Escape => {
+                if !s.clear(clock) {
+                    with_surface(|surface| set_drawing(surface, false));
+                }
+            }
+            DrawEvent::Exit => with_surface(|surface| set_drawing(surface, false)),
+        }
+        let tool = SketchTool::ALL
+            .iter()
+            .position(|t| *t == s.tool)
+            .unwrap_or(0);
+        let color = SKETCH_COLORS
+            .iter()
+            .position(|c| *c == s.color)
+            .unwrap_or(0);
+        let image = s.render(self.render_scale).map(Arc::new);
+        drop(s);
+        with_surface(|surface| {
+            surface.set_selected(tool, color);
+            surface.set_image(image);
+        });
+    }
+
+    /// Abgelaufene Zeichnungen entfernen (Aufnahme-Thread).
+    fn tick(&self, app: &AppHandle) {
+        let changed = self.lock().tick(self.clock());
+        if changed {
+            let _ = app.run_on_main_thread(|| with_surface(|s| s.set_image(None)));
+        }
+    }
+
+    /// Fläche schliessen und die Zeichnungen als Ebenen zurückgeben.
+    fn close(&self, app: &AppHandle) -> Vec<SketchItem> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let _ = app.run_on_main_thread(move || {
+            SURFACE.with(|s| {
+                if let Some(surface) = s.borrow_mut().take() {
+                    surface.close();
+                }
+            });
+            let _ = tx.send(());
+        });
+        let _ = rx.recv_timeout(Duration::from_secs(2));
+        let end = self.clock().rec_ms;
+        self.lock().finish(end)
+    }
+}
+
+fn with_surface(f: impl FnOnce(&DrawSurface)) {
+    SURFACE.with(|s| {
+        if let Some(surface) = s.borrow().as_ref() {
+            f(surface);
+        }
+    });
+}
+
+/// Zeichnen ein/aus und den Knopf in der Leiste nachführen (Haupt-Thread).
+fn set_drawing(surface: &DrawSurface, on: bool) {
+    surface.set_active(on);
+    let label = t(if on { "video.draw_done" } else { "video.draw" }, &[]);
+    UI.with(|u| {
+        if let Some(ui) = u.borrow().as_ref() {
+            ui.set_label(RecordAction::Draw, &label);
+        }
+    });
 }
 
 /// Abstand der Proben der Mausspur (~60 je Sekunde).
@@ -649,6 +964,15 @@ fn area_rect(choice: &Choice) -> Rect {
 /// Einstellungen läge, auf den aufgenommenen Bereich bezogen.
 fn bubble_rect(layout: &WebcamLayout, choice: &Choice) -> (f64, f64, f64, f64) {
     let area = area_rect(choice);
+    // Nur Webcam: Die Blase ist die ganze Fläche.
+    if choice.target.is_none() {
+        return (
+            area.x as f64,
+            area.y as f64,
+            area.width as f64,
+            area.height as f64,
+        );
+    }
     let frame = Size::new(area.width, area.height);
     let camera = Size::new(16.0, 9.0);
     let p = fmshot_video::layout::webcam_overlay(layout, frame, camera);
@@ -675,25 +999,39 @@ fn webcam_layout(
     layout
 }
 
-fn bubble_style(layout: &WebcamLayout) -> BubbleStyle {
+fn bubble_style(layout: &WebcamLayout, camera_only: bool) -> BubbleStyle {
+    // Wie im Export: Ohne Hintergrund schwebt nur die Person.
+    let removed = layout.background == WebcamBackground::Remove;
+    if camera_only {
+        return BubbleStyle {
+            corner_radius: 0.04,
+            border: None,
+            shadow: !removed,
+            transparent: removed,
+        };
+    }
     BubbleStyle {
         corner_radius: match layout.shape {
             WebcamShape::Circle => 0.5,
             _ => layout.corner_radius.clamp(0.0, 0.5) as f64,
         },
-        border: layout.border.filter(|b| b.width > 0.0).map(|b| {
-            let c = b.color;
-            (
-                b.width as f64,
-                [
-                    c.r as f64 / 255.0,
-                    c.g as f64 / 255.0,
-                    c.b as f64 / 255.0,
-                    c.a as f64 / 255.0,
-                ],
-            )
-        }),
-        shadow: layout.shadow,
+        border: layout
+            .border
+            .filter(|b| b.width > 0.0 && !removed)
+            .map(|b| {
+                let c = b.color;
+                (
+                    b.width as f64,
+                    [
+                        c.r as f64 / 255.0,
+                        c.g as f64 / 255.0,
+                        c.b as f64 / 255.0,
+                        c.a as f64 / 255.0,
+                    ],
+                )
+            }),
+        shadow: layout.shadow && !removed,
+        transparent: removed,
     }
 }
 
@@ -705,7 +1043,8 @@ fn show_bubble(
     cam: &WebcamControl,
 ) {
     let (recording, display_id, rect) = (recording.clone(), choice.display_id, cam.bubble_rect);
-    let (style, mirror) = (bubble_style(&cam.layout), cam.layout.mirror);
+    let style = bubble_style(&cam.layout, choice.target.is_none());
+    let layout = cam.layout;
     let _ = app.run_on_main_thread(move || {
         BUBBLE.with(|b| {
             let mut b = b.borrow_mut();
@@ -713,7 +1052,7 @@ fn show_bubble(
                 bubble.set_visible(true);
                 return;
             }
-            let Some(preview) = recording.webcam_preview(mirror) else {
+            let Some(preview) = recording.webcam_preview(&layout) else {
                 return;
             };
             // SAFETY: `preview` ist eine gültige Ebene von fmshot-media; die
@@ -798,6 +1137,8 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
         )
     });
     let large = webcam.map(|_| t("video.webcam_large", &[]));
+    // Zeichnen nur mit Bildschirm.
+    let draw = choice.target.map(|_| t("video.draw", &[]));
     let (display_id, rect, flags) = (choice.display_id, choice.rect, flags.clone());
     let _ = app.run_on_main_thread(move || {
         let ui = fmshot_overlay::open_record_ui(
@@ -806,6 +1147,7 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
             &RecordLabels {
                 status: &status,
                 pause: &pause,
+                draw: draw.as_deref(),
                 webcam: webcam_label.as_deref(),
                 webcam_large: large.as_deref(),
                 stop: &stop,
@@ -814,6 +1156,7 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
             Box::new(move |action| {
                 let flag = match action {
                     RecordAction::Pause => &flags.toggle_pause,
+                    RecordAction::Draw => &flags.toggle_draw,
                     RecordAction::Webcam => &flags.toggle_webcam,
                     RecordAction::WebcamLarge => &flags.toggle_large,
                     RecordAction::Stop => &flags.stop,
@@ -890,8 +1233,28 @@ fn finish(
     files: &RecordFiles,
     summary: fmshot_media::RecordSummary,
     scale: f32,
-    doc: VideoDoc,
+    video_doc: VideoDoc,
+    drawings: Vec<SketchItem>,
 ) {
+    // Das Dokument bezieht sich auf die volle Grösse, auch wenn das fertige
+    // Video kleiner ist (Einstellung *Auflösung*). Live Gezeichnetes wird zu
+    // Ebenen mit Zeitbereich.
+    let frame = crate::video_edit::frame_size(files, &video_doc)
+        .unwrap_or((summary.width.max(2), summary.height.max(2)));
+    let mut doc = Document::from_capture_scaled(frame.0, frame.1, scale);
+    let mut video_doc = video_doc;
+    for item in drawings {
+        let id = doc.push_layer(item.kind);
+        if let Some(layer) = doc.layers.iter_mut().find(|l| l.id == id) {
+            layer.opacity = item.opacity;
+        }
+        video_doc.layer_times.push(LayerTime {
+            layer: id.0,
+            start_ms: item.start_ms,
+            end_ms: item.end_ms,
+        });
+    }
+    doc.video = Some(video_doc);
     let video = slot.video_path();
     let started = std::time::Instant::now();
     let how = match compose(app, files, &doc, scale, &video) {
@@ -904,7 +1267,8 @@ fn finish(
             // Ohne Webcam ist besser als gar nichts.
             if let Err(e) = fmshot_media::export_mp4(files, &video) {
                 log::error!("Video zusammenführen: {e}");
-                if let Err(e) = std::fs::copy(&files.screen, &video) {
+                let main = files.screen.as_ref().or(files.webcam.as_ref());
+                if let Some(Err(e)) = main.map(|p| std::fs::copy(p, &video)) {
                     log::error!("Video kopieren: {e}");
                 }
             }
@@ -921,9 +1285,11 @@ fn finish(
             started.elapsed().as_secs_f64() * 1000.0
         ),
     );
-    let poster = match fmshot_media::frame_at(&video, Duration::ZERO)
-        .or_else(|_| fmshot_media::frame_at(&files.screen, Duration::ZERO))
-    {
+    let main = files.screen.as_ref().or(files.webcam.as_ref());
+    let poster = match fmshot_media::frame_at(&video, Duration::ZERO).or_else(|e| match main {
+        Some(p) => fmshot_media::frame_at(p, Duration::ZERO),
+        None => Err(e),
+    }) {
         Ok(p) => p,
         Err(e) => {
             capture::show_error(app, &e.to_string());
@@ -946,18 +1312,20 @@ fn finish(
     crate::services::after_capture(app, &rec, &poster, Mode::Video);
 }
 
-/// Setzt zusammen; der Fortschritt steht in der Leiste. Direkt nach der
-/// Aufnahme gibt es noch keine Ebenen.
+/// Setzt zusammen; der Fortschritt steht in der Leiste. Ebenen gibt es
+/// direkt nach der Aufnahme nur, wenn live gezeichnet wurde.
 fn compose(
     app: &AppHandle,
     files: &RecordFiles,
-    doc: &VideoDoc,
+    doc: &Document,
     scale: f32,
     out: &Path,
 ) -> Result<fmshot_video::ExportStats, String> {
     let mut shown = 0;
-    let extras = crate::video_edit::extras(files, doc, scale, None);
-    crate::video_edit::compose(files, doc, extras, out, &mut |p| {
+    let video = doc.video.clone().unwrap_or_default();
+    let extras = crate::video_edit::extras(files, &video, scale, Some((doc, HashMap::new())));
+    let encoding = crate::settings::get(app).video.encoding;
+    crate::video_edit::compose(files, &video, extras, &encoding, out, &mut |p| {
         let percent = (p * 100.0) as u32;
         if percent >= shown + 5 {
             shown = percent;

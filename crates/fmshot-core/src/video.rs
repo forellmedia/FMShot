@@ -34,6 +34,100 @@ pub struct VideoDoc {
     /// Eintrag sind immer zu sehen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_times: Vec<LayerTime>,
+    /// Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
+    /// füllt dann das ganze Bild.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_only: Option<CameraFormat>,
+}
+
+/// Seitenverhältnis einer Aufnahme nur mit Webcam.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum CameraFormat {
+    /// Querformat 16:9.
+    #[default]
+    Landscape,
+    /// Hochformat 9:16 (Reels, Shorts, Stories).
+    Portrait,
+    /// Quadrat 1:1.
+    Square,
+}
+
+impl CameraFormat {
+    /// Breite durch Höhe.
+    pub fn aspect(self) -> f32 {
+        match self {
+            CameraFormat::Landscape => 16.0 / 9.0,
+            CameraFormat::Portrait => 9.0 / 16.0,
+            CameraFormat::Square => 1.0,
+        }
+    }
+}
+
+/// Wie das fertige Video kodiert wird. Die Aufnahme selbst bleibt in
+/// voller Qualität; dies gilt beim Zusammensetzen (auch nach jeder Änderung
+/// im Editor).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(default)]
+pub struct VideoEncoding {
+    pub resolution: VideoResolution,
+    pub codec: VideoCodec,
+    pub quality: VideoQuality,
+}
+
+/// Grösse des fertigen Videos: höchstens so viele Pixel auf der kürzeren
+/// Seite (nie grösser als die Aufnahme).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum VideoResolution {
+    /// Wie aufgenommen.
+    #[default]
+    Original,
+    P2160,
+    P1440,
+    P1080,
+    P720,
+}
+
+impl VideoResolution {
+    /// Längste erlaubte kürzere Seite; `None` = wie aufgenommen.
+    pub fn short_side(self) -> Option<u32> {
+        match self {
+            VideoResolution::Original => None,
+            VideoResolution::P2160 => Some(2160),
+            VideoResolution::P1440 => Some(1440),
+            VideoResolution::P1080 => Some(1080),
+            VideoResolution::P720 => Some(720),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum VideoCodec {
+    /// Läuft überall (Standard).
+    #[default]
+    H264,
+    /// Halb so gross bei gleicher Qualität; ältere Geräte und manche
+    /// Webseiten können es nicht abspielen.
+    Hevc,
+}
+
+/// Datenrate des fertigen Videos.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum VideoQuality {
+    /// Halbe Datenrate – zum Verschicken.
+    Small,
+    #[default]
+    Standard,
+    /// Doppelte Datenrate – für feine Details und viel Bewegung.
+    High,
 }
 
 /// Zeitspanne in ms (Zeit der Aufnahme), `start_ms < end_ms`.
@@ -141,6 +235,7 @@ impl Default for VideoDoc {
             cursor: CursorStyle::default(),
             zooms: Vec::new(),
             layer_times: Vec::new(),
+            camera_only: None,
         }
     }
 }

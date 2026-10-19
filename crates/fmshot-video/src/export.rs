@@ -14,7 +14,8 @@ use crate::head::HeadPath;
 use crate::layout::{Placement, SceneExtras, Source, scene_full};
 use crate::timeline::{output_duration, source_time};
 use crate::{
-    FrameRef, FrameSink, FrameSource, OverlaySource, Segmenter, VideoError, VideoFrame, output_size,
+    FrameRef, FrameSink, FrameSource, Mask, OverlaySource, Segmenter, VideoError, VideoFrame,
+    output_size,
 };
 
 /// Grösse der Texturen für Zeiger und Klick-Kreis (werden skaliert).
@@ -33,7 +34,15 @@ pub struct ExportExtras {
     pub cursor_px: f32,
     /// Ebenen über dem Video (Etappe 6).
     pub overlay: Option<Box<dyn OverlaySource>>,
+    /// Grösse des fertigen Videos; `None` = wie der Bildschirm
+    /// ([`output_size`]). Der Sink muss mit dieser Grösse angelegt sein.
+    pub size: Option<(u32, u32)>,
 }
+
+/// Neue Maske der Person höchstens so oft (Vision braucht ~15 ms je Maske;
+/// die Person bewegt sich zwischen zwei Bildern kaum, dazwischen gilt die
+/// letzte).
+const MASK_INTERVAL: Duration = Duration::from_millis(66);
 
 /// So viele dekodierte Bilder liegen je Spur bereit.
 const QUEUE: usize = 3;
@@ -46,21 +55,39 @@ pub struct ExportStats {
     pub adapter: String,
 }
 
+/// Ein gelesenes Bild, bei der Webcam mit Maske der Person.
+type Decoded = (VideoFrame, Option<Mask>);
+
 /// Liest eine Spur im Hintergrund und hält das Bild, das gerade gilt.
+/// Mit `segmenter` rechnet derselbe Thread die Maske gleich mit – so läuft
+/// sie neben dem Zusammensetzen statt davor.
 struct Track {
-    rx: Receiver<Result<VideoFrame, String>>,
+    rx: Receiver<Result<Decoded, String>>,
     current: Option<VideoFrame>,
-    pending: Option<VideoFrame>,
+    /// Maske zu `current`, noch nicht hochgeladen.
+    mask: Option<Mask>,
+    pending: Option<Decoded>,
     done: bool,
 }
 
 impl Track {
-    fn spawn(mut source: Box<dyn FrameSource>) -> Self {
+    fn spawn(mut source: Box<dyn FrameSource>, mut segmenter: Option<Box<dyn Segmenter>>) -> Self {
         let (tx, rx) = sync_channel(QUEUE);
         std::thread::spawn(move || {
+            let mut last_mask: Option<Duration> = None;
             loop {
                 let item = match source.next_frame() {
-                    Ok(Some(f)) => Ok(f),
+                    Ok(Some(f)) => {
+                        let due = last_mask.is_none_or(|t| f.pts < t || f.pts - t >= MASK_INTERVAL);
+                        let mask = segmenter
+                            .as_mut()
+                            .filter(|_| due)
+                            .and_then(|s| s.mask(f.as_ref()));
+                        if mask.is_some() {
+                            last_mask = Some(f.pts);
+                        }
+                        Ok((f, mask))
+                    }
                     Ok(None) => break,
                     Err(e) => Err(e),
                 };
@@ -74,6 +101,7 @@ impl Track {
         Self {
             rx,
             current: None,
+            mask: None,
             pending: None,
             done: false,
         }
@@ -94,11 +122,14 @@ impl Track {
             let take = self
                 .pending
                 .as_ref()
-                .is_some_and(|f| f.pts <= t || (early && self.current.is_none()));
+                .is_some_and(|(f, _)| f.pts <= t || (early && self.current.is_none()));
             if !take {
                 break;
             }
-            self.current = self.pending.take();
+            if let Some((frame, mask)) = self.pending.take() {
+                self.current = Some(frame);
+                self.mask = mask;
+            }
             changed = true;
         }
         Ok(changed)
@@ -130,7 +161,7 @@ pub fn export_with(
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<ExportStats, VideoError> {
     let started = Instant::now();
-    let (w, h) = output_size(screen.size());
+    let (w, h) = extras.size.unwrap_or_else(|| output_size(screen.size()));
     let mut compositor = Compositor::new(w, h)?;
     let result = run(doc, screen, webcam, extras, sink, progress, &mut compositor);
     match result {
@@ -158,7 +189,7 @@ fn run(
     progress: &mut dyn FnMut(f32) -> bool,
     compositor: &mut Compositor,
 ) -> Result<u64, VideoError> {
-    let (w, h) = output_size(screen.size());
+    let (w, h) = extras.size.unwrap_or_else(|| output_size(screen.size()));
     let frame = Size::new(w as f32, h as f32);
     let shows_webcam = doc.webcam.as_ref().is_some_and(|t| {
         t.sections
@@ -166,8 +197,15 @@ fn run(
             .any(|s| s.mode != fmshot_core::WebcamMode::Hidden)
     });
     let screen_size = Size::new(screen.size().0 as f32, screen.size().1 as f32);
-    let mut screen = Track::spawn(screen);
-    let mut webcam = webcam.filter(|_| shows_webcam).map(Track::spawn);
+    let needs_mask = doc
+        .webcam
+        .as_ref()
+        .is_some_and(|t| t.layout.background != fmshot_core::WebcamBackground::Original);
+    let segmenter = extras.segmenter.take().filter(|_| needs_mask);
+    let mut screen = Track::spawn(screen, None);
+    let mut webcam = webcam
+        .filter(|_| shows_webcam)
+        .map(|w| Track::spawn(w, segmenter));
 
     // Zeiger und Klick-Kreis sind feste Bilder; die Szene skaliert sie.
     if extras.cursor.is_some() {
@@ -189,10 +227,6 @@ fn run(
         }
     }
     let mut overlay_on = false;
-    let needs_mask = doc
-        .webcam
-        .as_ref()
-        .is_some_and(|t| t.layout.background != fmshot_core::WebcamBackground::Original);
     let fps = doc.fps.clamp(1, 120) as u64;
     let count = (output_duration(doc) as u64 * fps).div_ceil(1000).max(1);
     for i in 0..count {
@@ -211,10 +245,7 @@ fn run(
                 && let Some(f) = &cam.current
             {
                 compositor.upload(Source::Webcam, f.as_ref());
-                if needs_mask
-                    && let Some(seg) = extras.segmenter.as_mut()
-                    && let Some(mask) = seg.mask(f.as_ref())
-                {
+                if let Some(mask) = cam.mask.take() {
                     compositor.upload_mask(&mask);
                 }
             }

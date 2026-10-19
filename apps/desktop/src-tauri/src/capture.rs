@@ -56,6 +56,8 @@ pub enum Mode {
     ScrollAuto,
     /// Video (ADR 0011) – Ziel aus den Einstellungen.
     Video,
+    /// Video nur mit der Webcam (ohne Bildschirm).
+    Webcam,
 }
 
 impl Mode {
@@ -75,6 +77,7 @@ impl Mode {
             Mode::Text => "text",
             Mode::Scroll | Mode::ScrollAuto => "scroll",
             Mode::Video => "video",
+            Mode::Webcam => "webcam",
         }
     }
 }
@@ -101,7 +104,12 @@ pub fn start(app: &AppHandle, mode: Mode) {
         return;
     }
     // Zweites Drücken während eines Videos = „Stopp“.
-    if mode == Mode::Video && crate::video::stop_running(app) {
+    if matches!(mode, Mode::Video | Mode::Webcam) && crate::video::stop_running(app) {
+        return;
+    }
+    // Nur Webcam braucht keine Bildschirm-Freigabe.
+    if mode == Mode::Webcam {
+        crate::video::start_webcam(app);
         return;
     }
     let state = app.state::<CaptureState>();
@@ -141,6 +149,7 @@ pub fn start(app: &AppHandle, mode: Mode) {
             release(app);
             crate::video::start(app, None);
         }
+        Mode::Webcam => release(app),
     }
 }
 

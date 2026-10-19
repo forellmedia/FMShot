@@ -3,10 +3,10 @@
 //! (`fmshot-video`). Ein- und Ausgabe als JSON; `doc_json` ist der
 //! Video-Teil des Dokuments.
 
-use fmshot_core::{InputTrack, Size, VideoDoc, WebcamMode, ZoomSection};
+use fmshot_core::{FaceTrack, InputTrack, Size, VideoDoc, WebcamFraming, WebcamMode, ZoomSection};
 use fmshot_video::cursor::{ARROW_INNER, ARROW_OUTER, CursorTrack, auto_zooms};
 use fmshot_video::layout::{Placement, SceneExtras, Source};
-use fmshot_video::{edit, timeline};
+use fmshot_video::{HeadPath, edit, timeline};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
@@ -65,6 +65,10 @@ enum Op {
 pub struct VideoPreview {
     doc: VideoDoc,
     cursor: CursorTrack,
+    faces: Option<FaceTrack>,
+    /// Kopfausschnitt, wie ihn der Export rechnet; mit dem Wert von
+    /// „Kopf folgen“, für den er gilt.
+    head: Option<(bool, HeadPath)>,
 }
 
 #[wasm_bindgen]
@@ -75,13 +79,47 @@ impl VideoPreview {
         Self {
             doc: VideoDoc::default(),
             cursor: CursorTrack::default(),
+            faces: None,
+            head: None,
         }
     }
 
     #[wasm_bindgen(js_name = setDoc)]
     pub fn set_doc(&mut self, doc_json: &str) -> Result<(), JsError> {
         self.doc = serde_json::from_str(doc_json)?;
+        self.update_head();
         Ok(())
+    }
+
+    /// Kopfpositionen der Webcam (`<id>_faces.json`); leer = keine.
+    #[wasm_bindgen(js_name = setFaces)]
+    pub fn set_faces(&mut self, faces_json: &str) -> Result<(), JsError> {
+        self.faces = if faces_json.is_empty() {
+            None
+        } else {
+            Some(serde_json::from_str(faces_json)?)
+        };
+        self.head = None;
+        self.update_head();
+        Ok(())
+    }
+
+    /// Kopfausschnitt nur neu rechnen, wenn er gebraucht wird und sich
+    /// „Kopf folgen“ geändert hat.
+    fn update_head(&mut self) {
+        let layout = self
+            .doc
+            .webcam
+            .as_ref()
+            .map(|w| &w.layout)
+            .filter(|l| l.framing == WebcamFraming::Head);
+        let (Some(layout), Some(faces)) = (layout, &self.faces) else {
+            return;
+        };
+        if self.head.as_ref().is_some_and(|(f, _)| *f == layout.follow) {
+            return;
+        }
+        self.head = HeadPath::new(faces, layout.follow).map(|p| (layout.follow, p));
     }
 
     /// Mausspur (`<id>_input.json`); leer = keine.
@@ -124,7 +162,7 @@ impl VideoPreview {
             Size::new(screen_w, screen_h),
             camera,
             &SceneExtras {
-                head: None,
+                head: self.head.as_ref().map(|(_, p)| p),
                 cursor: Some(&self.cursor),
                 cursor_px,
             },

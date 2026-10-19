@@ -2,8 +2,8 @@
 //! hiermit (ADR 0011), damit sie nicht auseinanderlaufen.
 
 use fmshot_core::{
-    Color, Rect, Size, VideoDoc, WebcamBackground, WebcamFraming, WebcamLayout, WebcamMode,
-    WebcamPosition, WebcamSection, WebcamShape,
+    CameraFormat, Color, Rect, Size, VideoDoc, WebcamBackground, WebcamFraming, WebcamLayout,
+    WebcamMode, WebcamPosition, WebcamSection, WebcamShape,
 };
 
 use crate::cursor::{CursorTrack, zoom_at, zoom_crop};
@@ -442,6 +442,9 @@ fn base_scene(
     camera: Option<Size>,
     head: Option<&HeadPath>,
 ) -> Scene {
+    if doc.camera_only.is_some() {
+        return camera_scene(doc, t_ms, frame, camera, head);
+    }
     let full = fullscreen(frame, screen, false);
     let (Some(track), Some(camera)) = (&doc.webcam, camera) else {
         return Scene {
@@ -487,6 +490,46 @@ fn base_scene(
         }
     }
     Scene { layers }
+}
+
+/// Nur Webcam: Sie füllt das ganze Bild (ohne Form, Rahmen und Schatten).
+fn camera_scene(
+    doc: &VideoDoc,
+    t_ms: f64,
+    frame: Size,
+    camera: Option<Size>,
+    head: Option<&HeadPath>,
+) -> Scene {
+    let (Some(track), Some(camera)) = (&doc.webcam, camera) else {
+        return Scene { layers: Vec::new() };
+    };
+    let layout = &track.layout;
+    let mut place = Placement {
+        background: layout.background,
+        ..fullscreen(frame, camera, layout.mirror)
+    };
+    if let Some(head) = head.filter(|_| layout.framing == WebcamFraming::Head) {
+        place.crop = head.crop(t_ms, camera, frame.width / frame.height.max(1.0));
+    }
+    Scene {
+        layers: vec![(Source::Webcam, place)],
+    }
+}
+
+/// Grösse des fertigen Videos bei „nur Webcam“: die kürzere Seite wie die
+/// Kamera, höchstens 1080 Pixel (Hochformat 1080×1920 wie bei Reels).
+pub fn camera_frame_size(format: CameraFormat, camera: (u32, u32)) -> (u32, u32) {
+    let short = camera.0.min(camera.1).clamp(2, 1080) as f32;
+    let aspect = format.aspect();
+    let (w, h) = if aspect >= 1.0 {
+        (short * aspect, short)
+    } else {
+        (short, short / aspect)
+    };
+    (
+        (w.round() as u32 & !1).max(2),
+        (h.round() as u32 & !1).max(2),
+    )
 }
 
 /// Lage der Live-Blase → Startlayout: `area` ist der aufgenommene Bereich,
@@ -548,6 +591,40 @@ mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn nur_webcam_fuellt_das_bild() {
+        let mut d = doc(&[(0, WebcamMode::Large)], WebcamLayout::default());
+        d.camera_only = Some(CameraFormat::Portrait);
+        let frame = Size::new(1080.0, 1920.0);
+        let scene = scene_at(&d, 1000.0, frame, Size::new(2.0, 2.0), Some(CAM));
+        assert_eq!(scene.layers.len(), 1);
+        let (source, p) = scene.layers[0];
+        assert_eq!(source, Source::Webcam);
+        assert_eq!(p.rect, Rect::new(0.0, 0.0, 1080.0, 1920.0));
+        // 16:9-Kamera ins Hochformat: nur die Mitte
+        assert!(close(p.crop.width, 0.3164) && close(p.crop.x, 0.3418));
+        assert!(p.mirror && p.border.is_none() && p.shadow == 0.0 && p.radius == 0.0);
+        // Ohne Kamerabild bleibt das Bild leer
+        assert!(scene_at(&d, 0.0, frame, frame, None).layers.is_empty());
+    }
+
+    #[test]
+    fn groesse_nur_webcam() {
+        let hd = (1920, 1080);
+        assert_eq!(camera_frame_size(CameraFormat::Landscape, hd), (1920, 1080));
+        assert_eq!(camera_frame_size(CameraFormat::Portrait, hd), (1080, 1920));
+        assert_eq!(camera_frame_size(CameraFormat::Square, hd), (1080, 1080));
+        assert_eq!(
+            camera_frame_size(CameraFormat::Landscape, (1280, 720)),
+            (1280, 720)
+        );
+        // 4K-Kamera: höchstens 1080 auf der kürzeren Seite
+        assert_eq!(
+            camera_frame_size(CameraFormat::Landscape, (3840, 2160)),
+            (1920, 1080)
+        );
     }
 
     #[test]

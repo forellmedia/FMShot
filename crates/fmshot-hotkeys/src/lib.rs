@@ -19,17 +19,26 @@ pub enum Action {
     CaptureText,
     /// Bildschirm als Video aufnehmen (ADR 0011); nochmals drücken = Stopp.
     CaptureVideo,
+    /// Nur die Webcam als Video aufnehmen; nochmals drücken = Stopp.
+    CaptureWebcam,
+    /// Während einer Video-Aufnahme: live zeichnen ein/aus.
+    RecordDraw,
+    /// Während einer Video-Aufnahme: Pause bzw. weiter.
+    RecordPause,
     OpenGallery,
 }
 
 impl Action {
-    pub const ALL: [Action; 7] = [
+    pub const ALL: [Action; 10] = [
         Action::CaptureScreen,
         Action::CaptureRegion,
         Action::CaptureWindow,
         Action::CaptureScroll,
         Action::CaptureText,
         Action::CaptureVideo,
+        Action::CaptureWebcam,
+        Action::RecordDraw,
+        Action::RecordPause,
         Action::OpenGallery,
     ];
 }
@@ -119,6 +128,9 @@ pub fn default_bindings(platform: Platform, replace_mac_system: bool) -> Vec<(Ac
         (Action::CaptureScroll, digit(taken, 4)),
         (Action::CaptureText, digit(taken, 5)),
         (Action::CaptureVideo, digit(PRIMARY_SHIFT, 6)),
+        (Action::CaptureWebcam, digit(PRIMARY_SHIFT, 7)),
+        (Action::RecordDraw, digit(PRIMARY_SHIFT, 8)),
+        (Action::RecordPause, digit(PRIMARY_SHIFT, 9)),
         // ⌥⌘G statt ⇧⌘G: ⇧⌘G gehört in vielen Apps zu „Gehe zu Ordner“
         // bzw. „Vorheriges suchen“.
         (

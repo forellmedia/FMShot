@@ -11,6 +11,7 @@ import { t } from "$lib/i18n";
 import { VideoPreview } from "$lib/wasm/fmshot_render";
 import { wasmModule } from "./renderer";
 import { editor } from "./state.svelte";
+import { staleLayerTimes } from "./videoLayers";
 
 /** Nach der letzten Änderung so lange warten, dann neu zusammensetzen. */
 const EXPORT_DELAY_MS = 1500;
@@ -44,7 +45,7 @@ export type EditOp =
   | { op: "autoZoom" }
   | { op: "layerTime"; layer: number; range: [number, number] | null };
 
-type Urls = { screen: string; webcam: string | null; system: string | null; mic: string | null };
+type Urls = { screen: string | null; webcam: string | null; system: string | null; mic: string | null };
 
 export class VideoPlayer {
   /** Aufnahme, die gerade geladen ist. */
@@ -116,24 +117,30 @@ export class VideoPlayer {
     if (this.id !== capture.id) return;
     const url = (p: string | null) => (p ? fileUrl(p) : Promise.resolve(null));
     const [screen, webcam, system, mic] = await Promise.all([
-      fileUrl(tracks.screen),
+      url(tracks.screen),
       url(tracks.webcam),
       url(tracks.systemAudio),
       url(tracks.microphone),
     ]);
-    let input = "";
-    if (tracks.input) {
+    const text = async (p: string | null) => {
+      if (!p) return "";
       try {
-        input = await (await fetch(await fileUrl(tracks.input))).text();
+        return await (await fetch(await fileUrl(p))).text();
       } catch {
-        input = "";
+        return "";
       }
-    }
+    };
+    const [input, faces] = await Promise.all([text(tracks.input), text(tracks.faces)]);
     if (this.id !== capture.id) return;
     try {
       this.preview.setInput(input);
     } catch {
       this.preview.setInput("");
+    }
+    try {
+      this.preview.setFaces(faces);
+    } catch {
+      this.preview.setFaces("");
     }
     this.hasInput = this.preview.hasInput();
     this.urls = { screen, webcam, system, mic };
@@ -167,10 +174,19 @@ export class VideoPlayer {
     const video = doc?.video;
     if (!doc || !video || !this.preview) return;
     const ids = doc.layers.map((l) => l.id);
+    // Zeitbereiche gelöschter Ebenen weg – sonst erbte eine neue Ebene mit
+    // derselben Nummer ihren Bereich.
+    const stale = staleLayerTimes(doc);
     const fresh = this.knownLayers.size
       ? ids.filter((id) => !this.knownLayers.has(id) && !(video.layer_times ?? []).some((t) => t.layer === id))
       : [];
     this.knownLayers = new Set(ids);
+    if (stale.length) {
+      editor.preview((d) => {
+        const v = d.video!;
+        v.layer_times = (v.layer_times ?? []).filter((t) => !stale.includes(t.layer));
+      });
+    }
     if (!fresh.length) return;
     // Abrunden: Die Ebene soll an der aktuellen Stelle schon zu sehen sein.
     const start = Math.floor(this.preview.sourceTime(this.outputMs));
@@ -217,20 +233,22 @@ export class VideoPlayer {
   updateScene() {
     const doc = editor.doc;
     if (!this.preview || !doc) return;
-    if (!this.screenSize) {
+    if (!(this.video?.camera_only ? this.cameraSize : this.screenSize)) {
       // Videos noch nicht geladen: wenigstens die Zeit stimmt (Ebenen).
       this.scene = { sourceMs: this.preview.sourceTime(this.outputMs), layers: [] };
       return;
     }
     const frame = doc.artboard.rect;
     const cam = this.cameraSize ?? [0, 0];
+    // Nur Webcam: Es gibt keinen Bildschirm, die Kamera gibt den Takt.
+    const screen = this.screenSize ?? [0, 0];
     this.scene = JSON.parse(
       this.preview.scene(
         this.outputMs,
         frame.width,
         frame.height,
-        this.screenSize[0],
-        this.screenSize[1],
+        screen[0],
+        screen[1],
         cam[0],
         cam[1],
         CURSOR_POINTS * (doc.pixel_ratio || 1),
@@ -240,9 +258,13 @@ export class VideoPlayer {
 
   // --- Wiedergabe -------------------------------------------------------------
 
+  /** Spur, nach der sich die anderen richten: Bildschirm, sonst Webcam. */
+  private get master(): HTMLVideoElement | undefined {
+    return this.media.screen ?? this.media.webcam;
+  }
+
   play() {
-    const screen = this.media.screen;
-    if (!screen || !this.preview) return;
+    if (!this.master || !this.preview) return;
     if (this.outputMs >= this.durationMs - 30) this.seek(0);
     this.playing = true;
     for (const el of this.elements()) void el.play().catch(() => {});
@@ -283,21 +305,21 @@ export class VideoPlayer {
 
   /** Ein Bild der Wiedergabe: Schnitte überspringen, Spuren angleichen. */
   private tick() {
-    const screen = this.media.screen;
-    if (!screen || !this.preview) return;
-    let source = screen.currentTime * 1000;
+    const master = this.master;
+    if (!master || !this.preview) return;
+    let source = master.currentTime * 1000;
     const skip = this.preview.skipCut(source);
     if (skip >= 0) {
       source = skip;
-      screen.currentTime = skip / 1000;
+      master.currentTime = skip / 1000;
     }
     this.outputMs = this.preview.outputTime(source);
-    if (this.outputMs >= this.durationMs - 5 || screen.ended) {
+    if (this.outputMs >= this.durationMs - 5 || master.ended) {
       this.outputMs = this.durationMs;
       this.pause();
     }
     for (const el of [this.media.webcam, this.media.system, this.media.mic]) {
-      if (el && Math.abs(el.currentTime - source / 1000) > MAX_DRIFT_S) el.currentTime = source / 1000;
+      if (el && el !== master && Math.abs(el.currentTime - source / 1000) > MAX_DRIFT_S) el.currentTime = source / 1000;
     }
     const video = this.video;
     if (this.media.system) this.media.system.volume = Math.min(1, video?.audio?.system ?? 1);

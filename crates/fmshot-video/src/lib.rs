@@ -22,6 +22,8 @@ mod gif;
 mod gpu;
 #[cfg(feature = "layers")]
 pub mod overlay;
+#[cfg(feature = "layers")]
+pub mod sketch;
 
 pub use cursor::CursorTrack;
 #[cfg(feature = "gpu")]
@@ -30,10 +32,10 @@ pub use export::{ExportExtras, ExportStats, export, export_with};
 pub use gif::{GIF_FPS, GifSink, gif_size};
 #[cfg(feature = "gpu")]
 pub use gpu::Compositor;
-pub use head::{HeadFollower, HeadPath, HeadPose, head_crop};
+pub use head::{HeadFollower, HeadPath, HeadPose, LiveHead, head_crop};
 pub use layout::{
-    Placement, Scene, SceneExtras, Source, layout_from_bubble, scene_at, scene_full,
-    scene_with_head,
+    Placement, Scene, SceneExtras, Source, camera_frame_size, layout_from_bubble, scene_at,
+    scene_full, scene_with_head,
 };
 pub use sections::SectionLog;
 
@@ -129,15 +131,84 @@ pub trait FrameSink {
     fn cancel(&mut self);
 }
 
+/// Leere Spur einer festen Grösse: ein schwarzes Bild, dann Ende. Steht bei
+/// „nur Webcam“ an der Stelle des Bildschirms und gibt die Grösse des
+/// fertigen Videos vor.
+pub struct BlankSource {
+    size: (u32, u32),
+    done: bool,
+}
+
+impl BlankSource {
+    pub fn new(size: (u32, u32)) -> Self {
+        Self { size, done: false }
+    }
+}
+
+impl FrameSource for BlankSource {
+    fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    fn next_frame(&mut self) -> Result<Option<VideoFrame>, String> {
+        if std::mem::replace(&mut self.done, true) {
+            return Ok(None);
+        }
+        // Ein Bildpunkt reicht: Die Szene zeigt die Spur nicht.
+        Ok(Some(VideoFrame {
+            pts: Duration::ZERO,
+            width: 1,
+            height: 1,
+            stride: 4,
+            data: vec![0, 0, 0, 255],
+        }))
+    }
+}
+
 /// Grösse des fertigen Videos: wie der Bildschirm, mit geraden Kanten
 /// (H.264/HEVC mit 4:2:0).
 pub fn output_size(screen: (u32, u32)) -> (u32, u32) {
     ((screen.0 & !1).max(2), (screen.1 & !1).max(2))
 }
 
+/// Grösse nach der Einstellung *Auflösung*: kürzere Seite höchstens so
+/// lang, Seitenverhältnis bleibt, nie grösser als `frame`.
+pub fn export_size(frame: (u32, u32), resolution: fmshot_core::VideoResolution) -> (u32, u32) {
+    let frame = output_size(frame);
+    let Some(limit) = resolution.short_side() else {
+        return frame;
+    };
+    let short = frame.0.min(frame.1);
+    if short <= limit {
+        return frame;
+    }
+    let k = limit as f64 / short as f64;
+    let side = |v: u32| ((v as f64 * k).round() as u32 & !1).max(2);
+    (side(frame.0), side(frame.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmshot_core::VideoResolution;
+
+    #[test]
+    fn aufloesung_begrenzt_kuerzere_seite() {
+        let retina = (2880, 1800);
+        assert_eq!(export_size(retina, VideoResolution::Original), retina);
+        assert_eq!(export_size(retina, VideoResolution::P1080), (1728, 1080));
+        assert_eq!(export_size(retina, VideoResolution::P720), (1152, 720));
+        // Nie vergrössern
+        assert_eq!(
+            export_size((1280, 720), VideoResolution::P2160),
+            (1280, 720)
+        );
+        // Hochformat: Breite ist die kürzere Seite
+        assert_eq!(
+            export_size((1080, 1920), VideoResolution::P720),
+            (720, 1280)
+        );
+    }
 
     #[test]
     fn ausgabe_hat_gerade_kanten() {

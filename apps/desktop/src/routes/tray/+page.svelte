@@ -1,14 +1,30 @@
 <script lang="ts">
   // Tray-Fenster: öffnet sich beim Klick aufs Symbol in der Menüleiste
-  // (Windows: Taskleiste). Tabs Bild, Video, Einstellungen.
+  // (Windows: Taskleiste). Tabs Bild, Bildschirm (Video), Webcam (Video nur
+  // mit der Kamera), Einstellungen.
 
   import { onMount } from "svelte";
   import { api, on, type Camera, type HotkeyInfo, type Microphone, type Settings } from "$lib/api";
-  import type { CaptureMode, VideoTarget, WebcamLayout, WebcamShape } from "$lib/bindings";
+  import type {
+    CameraFormat,
+    CameraSettings,
+    CaptureMode,
+    VideoTarget,
+    WebcamBackground,
+    WebcamFraming,
+    WebcamLayout,
+    WebcamShape,
+  } from "$lib/bindings";
   import Icon from "$lib/editor/Icon.svelte";
   import { t, type MessageKey } from "$lib/i18n";
 
-  type Tab = "image" | "video" | "settings";
+  type Tab = "image" | "screen" | "webcam" | "settings";
+  const TABS: [Tab, MessageKey][] = [
+    ["image", "tray.tab_image"],
+    ["screen", "tray.tab_screen"],
+    ["webcam", "tray.tab_webcam"],
+    ["settings", "tray.tab_settings"],
+  ];
   const TAB_KEY = "fmshot.tray.tab";
 
   const ICONS = {
@@ -37,11 +53,29 @@
     { id: "screen", label: "video.target_screen", icon: ICONS.screen },
   ];
 
+  // Seitenverhältnis als kleines Rechteck (Breite × Höhe im 24er-Feld).
+  const FORMATS: { id: CameraFormat; label: MessageKey; icon: string }[] = [
+    { id: "landscape", label: "camera.format_landscape", icon: "M3 7h18v10H3z" },
+    { id: "portrait", label: "camera.format_portrait", icon: "M7 3h10v18H7z" },
+    { id: "square", label: "camera.format_square", icon: "M5 5h14v14H5z" },
+  ];
+
   const SHAPES: { id: WebcamShape; label: MessageKey }[] = [
     { id: "circle", label: "video.shape_circle" },
     { id: "square", label: "video.shape_square" },
     { id: "landscape", label: "video.shape_landscape" },
     { id: "portrait", label: "video.shape_portrait" },
+  ];
+
+  const FRAMINGS: { id: WebcamFraming; label: MessageKey }[] = [
+    { id: "full", label: "video.framing_full" },
+    { id: "head", label: "video.framing_head" },
+  ];
+
+  const BACKGROUNDS: { id: WebcamBackground; label: MessageKey }[] = [
+    { id: "original", label: "video.background_original" },
+    { id: "blur", label: "video.background_blur" },
+    { id: "remove", label: "video.background_remove" },
   ];
 
   // Breite der Webcam als Anteil der Bildbreite.
@@ -57,7 +91,9 @@
   function storedTab(): Tab {
     try {
       const v = localStorage.getItem(TAB_KEY);
-      if (v === "image" || v === "video" || v === "settings") return v;
+      // Früher hiess der Tab „Bildschirm“ „Video“.
+      if (v === "video") return "screen";
+      if (v === "image" || v === "screen" || v === "webcam" || v === "settings") return v;
     } catch {
       // Ohne Speicher: Standard.
     }
@@ -121,6 +157,14 @@
     await setVideo({ webcam_layout: { ...layout, ...patch } });
   }
 
+  const camera = $derived<CameraSettings>(
+    video?.camera ?? { format: "landscape", framing: "full", follow: true, background: "original", mirror: true },
+  );
+
+  async function setCamera(patch: Partial<CameraSettings>) {
+    await setVideo({ camera: { ...camera, ...patch } });
+  }
+
   async function toggleLaunchAtLogin(enabled: boolean) {
     try {
       await api.setLaunchAtLogin(enabled);
@@ -132,9 +176,9 @@
 
 <div class="tray">
   <div class="tabs" role="tablist">
-    {#each [["image", "tray.tab_image"], ["video", "tray.tab_video"], ["settings", "tray.tab_settings"]] as [id, label] (id)}
-      <button role="tab" aria-selected={tab === id} class:on={tab === id} onclick={() => (tab = id as Tab)}>
-        {t(label as MessageKey)}
+    {#each TABS as [id, label] (id)}
+      <button role="tab" aria-selected={tab === id} class:on={tab === id} onclick={() => (tab = id)}>
+        {t(label)}
       </button>
     {/each}
   </div>
@@ -152,7 +196,7 @@
           </li>
         {/each}
       </ul>
-    {:else if tab === "video" && video}
+    {:else if tab === "screen" && video}
       <div class="targets" role="radiogroup" aria-label={t("video.target")}>
         {#each TARGETS as target (target.id)}
           <button
@@ -241,6 +285,39 @@
                 {/each}
               </select>
             </label>
+            <label class="row">
+              <span>{t("video.webcam_framing")}</span>
+              <select
+                value={layout.framing ?? "full"}
+                onchange={(e) => setLayout({ framing: e.currentTarget.value as WebcamFraming })}
+              >
+                {#each FRAMINGS as f (f.id)}
+                  <option value={f.id}>{t(f.label)}</option>
+                {/each}
+              </select>
+            </label>
+            {#if (layout.framing ?? "full") === "head"}
+              <label class="row">
+                <span>{t("video.webcam_follow")}</span>
+                <input
+                  type="checkbox"
+                  class="switch"
+                  checked={layout.follow ?? true}
+                  onchange={(e) => setLayout({ follow: e.currentTarget.checked })}
+                />
+              </label>
+            {/if}
+            <label class="row">
+              <span>{t("video.webcam_background")}</span>
+              <select
+                value={layout.background ?? "original"}
+                onchange={(e) => setLayout({ background: e.currentTarget.value as WebcamBackground })}
+              >
+                {#each BACKGROUNDS as b (b.id)}
+                  <option value={b.id}>{t(b.label)}</option>
+                {/each}
+              </select>
+            </label>
             {#if (layout.shape ?? "circle") !== "circle"}
               <label class="row">
                 <span>{t("video.webcam_rounded")}</span>
@@ -252,24 +329,26 @@
                 />
               </label>
             {/if}
-            <label class="row">
-              <span>{t("video.webcam_border")}</span>
-              <input
-                type="checkbox"
-                class="switch"
-                checked={layout.border !== null}
-                onchange={(e) => setLayout({ border: e.currentTarget.checked ? DEFAULT_BORDER : null })}
-              />
-            </label>
-            <label class="row">
-              <span>{t("video.webcam_shadow")}</span>
-              <input
-                type="checkbox"
-                class="switch"
-                checked={layout.shadow ?? true}
-                onchange={(e) => setLayout({ shadow: e.currentTarget.checked })}
-              />
-            </label>
+            {#if layout.background !== "remove"}
+              <label class="row">
+                <span>{t("video.webcam_border")}</span>
+                <input
+                  type="checkbox"
+                  class="switch"
+                  checked={layout.border !== null}
+                  onchange={(e) => setLayout({ border: e.currentTarget.checked ? DEFAULT_BORDER : null })}
+                />
+              </label>
+              <label class="row">
+                <span>{t("video.webcam_shadow")}</span>
+                <input
+                  type="checkbox"
+                  class="switch"
+                  checked={layout.shadow ?? true}
+                  onchange={(e) => setLayout({ shadow: e.currentTarget.checked })}
+                />
+              </label>
+            {/if}
             <label class="row">
               <span>{t("video.webcam_mirror")}</span>
               <input
@@ -306,6 +385,119 @@
         <kbd>{shortcut("capture_video")}</kbd>
       </button>
       <p class="hint">{t("video.stop_hint", { shortcut: shortcut("capture_video") })}</p>
+    {:else if tab === "webcam" && video}
+      <div class="targets" role="radiogroup" aria-label={t("camera.format")}>
+        {#each FORMATS as f (f.id)}
+          <button
+            role="radio"
+            aria-checked={camera.format === f.id}
+            class:on={camera.format === f.id}
+            onclick={() => setCamera({ format: f.id })}
+          >
+            <Icon d={f.icon} size={22} />
+            <span>{t(f.label)}</span>
+          </button>
+        {/each}
+      </div>
+
+      {#if cameras.length === 0}
+        <p class="hint">{t("video.no_camera")}</p>
+      {:else}
+        <div class="rows">
+          <label class="row">
+            <span>{t("camera.camera")}</span>
+            <select
+              value={video.camera_id ?? ""}
+              onchange={(e) => setVideo({ camera_id: e.currentTarget.value || null })}
+            >
+              <option value="">{t("video.camera_default")}</option>
+              {#each cameras as c (c.id)}
+                <option value={c.id}>{c.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span>{t("video.webcam_framing")}</span>
+            <select
+              value={camera.framing}
+              onchange={(e) => setCamera({ framing: e.currentTarget.value as WebcamFraming })}
+            >
+              {#each FRAMINGS as f (f.id)}
+                <option value={f.id}>{t(f.label)}</option>
+              {/each}
+            </select>
+          </label>
+          {#if camera.framing === "head"}
+            <label class="row">
+              <span>{t("video.webcam_follow")}</span>
+              <input
+                type="checkbox"
+                class="switch"
+                checked={camera.follow}
+                onchange={(e) => setCamera({ follow: e.currentTarget.checked })}
+              />
+            </label>
+          {/if}
+          <label class="row">
+            <span>{t("video.webcam_background")}</span>
+            <select
+              value={camera.background}
+              onchange={(e) => setCamera({ background: e.currentTarget.value as WebcamBackground })}
+            >
+              {#each BACKGROUNDS as b (b.id)}
+                <option value={b.id}>{t(b.label)}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span>{t("video.webcam_mirror")}</span>
+            <input
+              type="checkbox"
+              class="switch"
+              checked={camera.mirror}
+              onchange={(e) => setCamera({ mirror: e.currentTarget.checked })}
+            />
+          </label>
+          <label class="row">
+            <span>{t("video.microphone")}</span>
+            <input
+              type="checkbox"
+              class="switch"
+              checked={video.microphone ?? true}
+              onchange={(e) => setVideo({ microphone: e.currentTarget.checked })}
+            />
+          </label>
+          {#if video.microphone ?? true}
+            <select
+              class="mic"
+              aria-label={t("video.microphone")}
+              value={video.microphone_id ?? ""}
+              onchange={(e) => setVideo({ microphone_id: e.currentTarget.value || null })}
+            >
+              <option value="">{t("video.microphone_default")}</option>
+              {#each microphones as m (m.id)}
+                <option value={m.id}>{m.name}</option>
+              {/each}
+            </select>
+          {/if}
+          <label class="row">
+            <span>{t("video.countdown_setting")}</span>
+            <input
+              type="checkbox"
+              class="switch"
+              checked={video.countdown ?? true}
+              onchange={(e) => setVideo({ countdown: e.currentTarget.checked })}
+            />
+          </label>
+        </div>
+
+        <button class="record" onclick={() => api.startCapture("webcam")}>
+          <span class="dot"></span>
+          {t("camera.start")}
+          <kbd>{shortcut("capture_webcam")}</kbd>
+        </button>
+        <p class="hint">{t("camera.hint")}</p>
+      {/if}
     {:else if tab === "settings"}
       <div class="rows">
         <label class="row">
@@ -367,7 +559,7 @@
 
   .tabs {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, auto);
     padding: 3px;
     border-radius: var(--radius);
     background: var(--hover);
@@ -379,9 +571,10 @@
     color: var(--text-muted);
     font: inherit;
     font-size: 13px;
-    padding: 6px 0;
+    padding: 6px 4px;
     border-radius: 6px;
     cursor: pointer;
+    white-space: nowrap;
   }
 
   .tabs button.on {

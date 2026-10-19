@@ -22,11 +22,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 
 pub(crate) mod codec;
+mod live;
+pub(crate) mod vision;
 use std::time::Duration;
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
-use fmshot_core::RgbaImage;
+use fmshot_core::{FaceTrack, RgbaImage, WebcamLayout};
+use live::LiveVision;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
@@ -177,12 +180,15 @@ struct State {
     /// Summe aller Pausen.
     offset: CMTime,
     last_frame: Option<SendCf<CMSampleBuffer>>,
-    screen: Track,
+    /// `None` bei „nur Webcam“.
+    screen: Option<Track>,
     system: Option<Track>,
     mic: Option<Track>,
     /// Entsteht beim ersten Einschalten der Webcam.
     webcam: Option<Track>,
     failure: Option<String>,
+    /// Grösse des Videos: Bildschirm bzw. Kamera bei „nur Webcam“.
+    size: (u32, u32),
 }
 
 struct Shared {
@@ -367,7 +373,7 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
     }
     let offset = st.offset;
     let track = match source {
-        Source::Screen => Some(&mut st.screen),
+        Source::Screen => st.screen.as_mut(),
         Source::System => st.system.as_mut(),
         Source::Mic => st.mic.as_mut(),
         Source::Webcam => st.webcam.as_mut(),
@@ -446,11 +452,30 @@ impl StreamOutput {
     }
 }
 
+struct WebcamIvars {
+    shared: Arc<Shared>,
+    vision: Arc<LiveVision>,
+}
+
+/// Zeit im Video (ohne Pausen) zu einem Bild – nur während aufgenommen wird.
+fn video_ms(shared: &Shared, sample: &CMSampleBuffer) -> Option<u32> {
+    let st = shared.lock();
+    if st.phase != Phase::Recording {
+        return None;
+    }
+    let pts = unsafe { sample.presentation_time_stamp() };
+    if is_before(pts, st.t0) {
+        return None;
+    }
+    let secs = unsafe { pts.subtract(st.t0).subtract(st.offset).seconds() };
+    Some((secs.max(0.0) * 1000.0).round().min(u32::MAX as f64) as u32)
+}
+
 // Gleicher Selektor wie beim Mikrofon – darum eine eigene Klasse.
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "FMShotWebcamOutput"]
-    #[ivars = OutputIvars]
+    #[ivars = WebcamIvars]
     struct WebcamOutput;
 
     unsafe impl NSObjectProtocol for WebcamOutput {}
@@ -463,14 +488,16 @@ define_class!(
             sample: &CMSampleBuffer,
             _connection: &AVCaptureConnection,
         ) {
-            on_sample(&self.ivars().shared, Source::Webcam, sample);
+            let iv = self.ivars();
+            on_sample(&iv.shared, Source::Webcam, sample);
+            iv.vision.submit(sample, video_ms(&iv.shared, sample));
         }
     }
 );
 
 impl WebcamOutput {
-    fn new(shared: Arc<Shared>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(OutputIvars { shared });
+    fn new(shared: Arc<Shared>, vision: Arc<LiveVision>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(WebcamIvars { shared, vision });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -483,21 +510,25 @@ struct Webcam {
     _output: SendRetained<AVCaptureVideoDataOutput>,
     _delegate: SendRetained<WebcamOutput>,
     preview: Option<SendRetained<AVCaptureVideoPreviewLayer>>,
+    /// Eigenes Bild der Blase (Kopfausschnitt, Hintergrund).
+    custom: Option<SendRetained<CALayer>>,
     running: bool,
 }
 
 pub(crate) struct MacRecording {
     shared: Arc<Shared>,
-    stream: SendRetained<SCStream>,
+    /// `None` bei „nur Webcam“.
+    stream: Option<SendRetained<SCStream>>,
     mic_session: Option<SendRetained<AVCaptureSession>>,
     webcam: Mutex<Option<Webcam>>,
     webcam_file: Option<PathBuf>,
+    faces_file: Option<PathBuf>,
+    vision: Arc<LiveVision>,
     camera_id: Option<String>,
     webcam_queue: SendQueue,
     // Am Leben halten, solange der Stream läuft.
     _output: SendRetained<StreamOutput>,
     _queues: Vec<SendQueue>,
-    size: (u32, u32),
 }
 
 struct SendQueue(#[allow(dead_code)] DispatchRetained<DispatchQueue>);
@@ -507,24 +538,41 @@ unsafe impl Send for SendQueue {}
 unsafe impl Sync for SendQueue {}
 
 pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
-    if !CGPreflightScreenCaptureAccess() {
-        return Err(MediaError::PermissionDenied);
-    }
-    let content = fetch_shareable_content()?;
-    let own = own_app(&content);
-    let (filter, width, height, source_rect) =
-        make_filter(&content, own.as_deref(), options.target)?;
-    let (width, height) = (even(width), even(height));
+    let screen_setup = match options.target {
+        Some(target) => {
+            if !CGPreflightScreenCaptureAccess() {
+                return Err(MediaError::PermissionDenied);
+            }
+            let content = fetch_shareable_content()?;
+            let own = own_app(&content);
+            let (filter, width, height, source_rect) =
+                make_filter(&content, own.as_deref(), target)?;
+            Some((filter, even(width), even(height), source_rect))
+        }
+        None => None,
+    };
     let fps = options.fps.clamp(1, 60);
+    // Systemton kommt über den Bildschirm-Stream.
+    let system_audio = options
+        .files
+        .system_audio
+        .as_ref()
+        .filter(|_| screen_setup.is_some());
 
-    let screen = video_track(
-        &options.files.screen,
-        width,
-        height,
-        fps,
-        screen_bitrate(width, height, fps),
-    )?;
-    let system = match &options.files.system_audio {
+    let screen = match (&screen_setup, &options.files.screen) {
+        (Some((_, width, height, _)), Some(path)) => Some(video_track(
+            path,
+            *width,
+            *height,
+            fps,
+            screen_bitrate(*width, *height, fps),
+        )?),
+        (Some(_), None) => {
+            return Err(MediaError::Backend("Keine Datei für den Bildschirm".into()));
+        }
+        (None, _) => None,
+    };
+    let system = match system_audio {
         Some(p) => Some(audio_track(p, 2)?),
         None => None,
     };
@@ -532,6 +580,7 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
         Some(p) => Some(audio_track(p, 1)?),
         None => None,
     };
+    let size = screen_setup.as_ref().map_or((0, 0), |s| (s.1, s.2));
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             phase: Phase::Warmup,
@@ -544,59 +593,65 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
             mic,
             webcam: None,
             failure: None,
+            size,
         }),
         system_peak: AtomicU32::new(0),
         mic_peak: AtomicU32::new(0),
     });
 
-    let config = unsafe { SCStreamConfiguration::new() };
-    unsafe {
-        config.setWidth(width as usize);
-        config.setHeight(height as usize);
-        config.setMinimumFrameInterval(CMTime::new(1, fps as i32));
-        config.setPixelFormat(PIXEL_FORMAT_420V);
-        config.setShowsCursor(options.show_cursor);
-        config.setQueueDepth(6);
-        if let Some(rect) = source_rect {
-            config.setSourceRect(rect);
-        }
-        if options.files.system_audio.is_some() {
-            config.setCapturesAudio(true);
-            config.setExcludesCurrentProcessAudio(true);
-            config.setSampleRate(SAMPLE_RATE as isize);
-            config.setChannelCount(2);
-        }
-    }
-
     let output = StreamOutput::new(shared.clone());
-    let stream = unsafe {
-        SCStream::initWithFilter_configuration_delegate(
-            SCStream::alloc(),
-            &filter,
-            &config,
-            Some(ProtocolObject::from_ref(&*output)),
-        )
-    };
     let screen_queue = DispatchQueue::new("ch.forellmedia.fmshot.video", None);
     let audio_queue = DispatchQueue::new("ch.forellmedia.fmshot.audio", None);
-    unsafe {
-        stream
-            .addStreamOutput_type_sampleHandlerQueue_error(
-                ProtocolObject::from_ref(&*output),
-                SCStreamOutputType::Screen,
-                Some(&screen_queue),
-            )
-            .map_err(|e| backend(&e))?;
-        if options.files.system_audio.is_some() {
-            stream
-                .addStreamOutput_type_sampleHandlerQueue_error(
-                    ProtocolObject::from_ref(&*output),
-                    SCStreamOutputType::Audio,
-                    Some(&audio_queue),
+    let stream = match screen_setup {
+        Some((filter, width, height, source_rect)) => {
+            let config = unsafe { SCStreamConfiguration::new() };
+            unsafe {
+                config.setWidth(width as usize);
+                config.setHeight(height as usize);
+                config.setMinimumFrameInterval(CMTime::new(1, fps as i32));
+                config.setPixelFormat(PIXEL_FORMAT_420V);
+                config.setShowsCursor(options.show_cursor);
+                config.setQueueDepth(6);
+                if let Some(rect) = source_rect {
+                    config.setSourceRect(rect);
+                }
+                if system_audio.is_some() {
+                    config.setCapturesAudio(true);
+                    config.setExcludesCurrentProcessAudio(true);
+                    config.setSampleRate(SAMPLE_RATE as isize);
+                    config.setChannelCount(2);
+                }
+            }
+            let stream = unsafe {
+                SCStream::initWithFilter_configuration_delegate(
+                    SCStream::alloc(),
+                    &filter,
+                    &config,
+                    Some(ProtocolObject::from_ref(&*output)),
                 )
-                .map_err(|e| backend(&e))?;
+            };
+            unsafe {
+                stream
+                    .addStreamOutput_type_sampleHandlerQueue_error(
+                        ProtocolObject::from_ref(&*output),
+                        SCStreamOutputType::Screen,
+                        Some(&screen_queue),
+                    )
+                    .map_err(|e| backend(&e))?;
+                if system_audio.is_some() {
+                    stream
+                        .addStreamOutput_type_sampleHandlerQueue_error(
+                            ProtocolObject::from_ref(&*output),
+                            SCStreamOutputType::Audio,
+                            Some(&audio_queue),
+                        )
+                        .map_err(|e| backend(&e))?;
+                }
+            }
+            Some(stream)
         }
-    }
+        None => None,
+    };
 
     let mic_queue = DispatchQueue::new("ch.forellmedia.fmshot.mic", None);
     let mic_session = if options.files.microphone.is_some() {
@@ -609,31 +664,35 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
         None
     };
 
-    let (tx, rx) = mpsc::sync_channel(1);
-    let block = RcBlock::new(move |error: *mut NSError| {
-        let _ = tx.send(error_text_opt(error));
-    });
-    unsafe { stream.startCaptureWithCompletionHandler(Some(&block)) };
-    match rx.recv_timeout(TIMEOUT) {
-        Ok(None) => {}
-        Ok(Some(e)) => {
-            cancel_tracks(&shared);
-            return Err(MediaError::Backend(e));
-        }
-        Err(_) => {
-            cancel_tracks(&shared);
-            return Err(MediaError::Backend(
-                "ScreenCaptureKit antwortet nicht".into(),
-            ));
+    if let Some(stream) = &stream {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let block = RcBlock::new(move |error: *mut NSError| {
+            let _ = tx.send(error_text_opt(error));
+        });
+        unsafe { stream.startCaptureWithCompletionHandler(Some(&block)) };
+        match rx.recv_timeout(TIMEOUT) {
+            Ok(None) => {}
+            Ok(Some(e)) => {
+                cancel_tracks(&shared);
+                return Err(MediaError::Backend(e));
+            }
+            Err(_) => {
+                cancel_tracks(&shared);
+                return Err(MediaError::Backend(
+                    "ScreenCaptureKit antwortet nicht".into(),
+                ));
+            }
         }
     }
 
     Ok(MacRecording {
         shared,
-        stream: SendRetained(stream),
+        stream: stream.map(SendRetained),
         mic_session: mic_session.map(SendRetained),
         webcam: Mutex::new(None),
         webcam_file: options.files.webcam.clone(),
+        faces_file: options.files.faces.clone(),
+        vision: LiveVision::new(),
         camera_id: options.camera_id.clone(),
         webcam_queue: SendQueue(DispatchQueue::new("ch.forellmedia.fmshot.webcam", None)),
         _output: SendRetained(output),
@@ -642,16 +701,19 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
             SendQueue(audio_queue),
             SendQueue(mic_queue),
         ],
-        size: (width, height),
     })
 }
 
 fn cancel_tracks(shared: &Shared) {
     let st = shared.lock();
-    st.screen.cancel();
-    for t in [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()]
-        .into_iter()
-        .flatten()
+    for t in [
+        st.screen.as_ref(),
+        st.system.as_ref(),
+        st.mic.as_ref(),
+        st.webcam.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         t.cancel();
     }
@@ -660,12 +722,14 @@ fn cancel_tracks(shared: &Shared) {
 impl MacRecording {
     /// Stoppt Stream und Mikrofon; danach kommen keine Proben mehr.
     fn stop_sources(&self) {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let block = RcBlock::new(move |_error: *mut NSError| {
-            let _ = tx.send(());
-        });
-        unsafe { self.stream.0.stopCaptureWithCompletionHandler(Some(&block)) };
-        let _ = rx.recv_timeout(TIMEOUT);
+        if let Some(stream) = &self.stream {
+            let (tx, rx) = mpsc::sync_channel(1);
+            let block = RcBlock::new(move |_error: *mut NSError| {
+                let _ = tx.send(());
+            });
+            unsafe { stream.0.stopCaptureWithCompletionHandler(Some(&block)) };
+            let _ = rx.recv_timeout(TIMEOUT);
+        }
         if let Some(session) = &self.mic_session {
             unsafe { session.0.stopRunning() };
         }
@@ -674,6 +738,21 @@ impl MacRecording {
         {
             unsafe { cam.session.0.stopRunning() };
             cam.running = false;
+        }
+    }
+
+    /// Erkannte Gesichter nach `<id>_faces.json` (nur wenn die Webcam lief).
+    fn write_faces(&self) {
+        let samples = self.vision.finish();
+        let Some(path) = &self.faces_file else { return };
+        if samples.is_empty() {
+            return;
+        }
+        let result = serde_json::to_vec(&FaceTrack { samples })
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| std::fs::write(path, bytes).map_err(|e| e.to_string()));
+        if let Err(e) = result {
+            log::warn!("{}: {e}", path.display());
         }
     }
 
@@ -687,11 +766,14 @@ impl MacRecording {
             .webcam_file
             .as_ref()
             .ok_or_else(|| MediaError::Backend("Keine Datei für die Webcam".into()))?;
-        let delegate = WebcamOutput::new(self.shared.clone());
+        let delegate = WebcamOutput::new(self.shared.clone(), self.vision.clone());
         let (session, output, (width, height)) =
             start_camera(self.camera_id.as_deref(), &delegate, &self.webcam_queue.0)?;
         let track = video_track(path, width, height, 30, camera_bitrate(width, height, 30))?;
         let mut st = self.shared.lock();
+        if st.screen.is_none() {
+            st.size = (even(width), even(height));
+        }
         // Läuft die Aufnahme schon, beginnt auch diese Spur am Nullpunkt.
         if matches!(st.phase, Phase::Recording | Phase::Paused) {
             unsafe { track.writer.0.startSessionAtSourceTime(st.t0) };
@@ -702,6 +784,7 @@ impl MacRecording {
             _output: SendRetained(output),
             _delegate: SendRetained(delegate),
             preview: None,
+            custom: None,
             running: false,
         })
     }
@@ -717,7 +800,7 @@ impl Recording for MacRecording {
         st.t0 = t0;
         st.phase = Phase::Recording;
         let tracks = [
-            Some(&st.screen),
+            st.screen.as_ref(),
             st.system.as_ref(),
             st.mic.as_ref(),
             st.webcam.as_ref(),
@@ -728,10 +811,11 @@ impl Recording for MacRecording {
         // Das zuletzt gesehene Bild wird das erste Bild des Videos.
         if let Some(frame) = st.last_frame.take() {
             let delta = unsafe { frame.0.presentation_time_stamp().subtract(t0) };
-            if let Some(first) = shifted(&frame.0, delta)
-                && st.screen.append(&first)
+            let first = shifted(&frame.0, delta);
+            if let (Some(first), Some(screen)) = (first, st.screen.as_mut())
+                && screen.append(&first)
             {
-                st.screen.samples += 1;
+                screen.samples += 1;
             }
             st.last_frame = Some(frame);
         }
@@ -799,29 +883,42 @@ impl Recording for MacRecording {
             end
         };
         self.stop_sources();
+        self.write_faces();
         let st = self.shared.lock();
         let end = unsafe { end.subtract(st.offset) };
-        if !st.screen.finish(end).map_err(MediaError::Backend)? {
+        // Die Hauptspur entscheidet, ob etwas aufgenommen wurde.
+        let (main, others) = match &st.screen {
+            Some(screen) => (
+                screen,
+                [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()],
+            ),
+            None => (
+                st.webcam.as_ref().ok_or(MediaError::Empty)?,
+                [st.system.as_ref(), st.mic.as_ref(), None],
+            ),
+        };
+        if !main.finish(end).map_err(MediaError::Backend)? {
+            for track in others.into_iter().flatten() {
+                track.cancel();
+            }
             return Err(MediaError::Empty);
         }
-        for track in [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()]
-            .into_iter()
-            .flatten()
-        {
+        for track in others.into_iter().flatten() {
             if let Err(e) = track.finish(end) {
                 log::warn!("Spur {}: {e}", track.path.display());
             }
         }
         Ok(RecordSummary {
             duration,
-            width: self.size.0,
-            height: self.size.1,
+            width: st.size.0,
+            height: st.size.1,
         })
     }
 
     fn cancel(&self) {
         self.shared.lock().phase = Phase::Stopped;
         self.stop_sources();
+        self.vision.finish();
         cancel_tracks(&self.shared);
     }
 
@@ -857,9 +954,18 @@ impl Recording for MacRecording {
         self.lock_webcam().as_ref().is_some_and(|c| c.running)
     }
 
-    fn webcam_preview(&self, mirror: bool) -> Option<PreviewLayer> {
+    fn webcam_preview(&self, layout: &WebcamLayout) -> Option<PreviewLayer> {
         let mut guard = self.lock_webcam();
         let cam = guard.as_mut()?;
+        if live::needs_processing(layout) {
+            let layer = cam
+                .custom
+                .get_or_insert_with(|| SendRetained(self.vision.open_preview(layout)));
+            return Some(PreviewLayer {
+                layer: SendLayer(layer.0.clone()),
+            });
+        }
+        let mirror = layout.mirror;
         let layer = cam.preview.get_or_insert_with(|| {
             let layer = unsafe { AVCaptureVideoPreviewLayer::layerWithSession(&cam.session.0) };
             unsafe {
@@ -1336,7 +1442,13 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
     let audio = audio_media_type()?;
     let composition = unsafe { AVMutableComposition::composition() };
 
-    let screen = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(&files.screen), None) };
+    // Ohne Bildschirm (nur Webcam) wird die Webcam das Bild.
+    let main = files
+        .screen
+        .as_ref()
+        .or(files.webcam.as_ref())
+        .ok_or(MediaError::Empty)?;
+    let screen = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(main), None) };
     let source = unsafe { screen.tracksWithMediaType(video) }
         .firstObject()
         .ok_or(MediaError::Empty)?;

@@ -12,16 +12,17 @@ use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
-use fmshot_core::TimeRange;
+use fmshot_core::{TimeRange, VideoCodec, VideoEncoding};
 use fmshot_video::{FrameSink, FrameSource, VideoFrame};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2_av_foundation::{
     AVAssetReader, AVAssetReaderAudioMixOutput, AVAssetReaderStatus, AVAssetReaderTrackOutput,
     AVAssetTrack, AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
     AVAssetWriterStatus, AVAudioMixInputParameters, AVFileTypeMPEG4, AVMutableAudioMix,
     AVMutableAudioMixInputParameters, AVMutableComposition, AVURLAsset, AVVideoAverageBitRateKey,
-    AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoCompressionPropertiesKey,
+    AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoCodecTypeHEVC, AVVideoCompressionPropertiesKey,
     AVVideoExpectedSourceFrameRateKey, AVVideoHeightKey, AVVideoMaxKeyFrameIntervalKey,
     AVVideoProfileLevelH264HighAutoLevel, AVVideoProfileLevelKey, AVVideoWidthKey,
 };
@@ -225,6 +226,7 @@ pub(crate) fn create_mp4(
     path: &Path,
     size: (u32, u32),
     fps: u32,
+    encoding: &VideoEncoding,
     audio: &[AudioInput],
     kept: &[TimeRange],
     duration: Duration,
@@ -237,21 +239,30 @@ pub(crate) fn create_mp4(
 
     let key = |k: Option<&'static NSString>| k.ok_or(MediaError::NotImplemented);
     let (bitrate, fps_n, key_interval) = (
-        number(export_bitrate(width, height, fps)),
+        number(export_bitrate(width, height, fps, encoding)),
         number(fps),
         number(fps * 2),
     );
-    let profile =
-        unsafe { AVVideoProfileLevelH264HighAutoLevel }.ok_or(MediaError::NotImplemented)?;
-    let compression = unsafe {
-        dict(&[
-            (key(AVVideoAverageBitRateKey)?, &bitrate),
-            (key(AVVideoExpectedSourceFrameRateKey)?, &fps_n),
-            (key(AVVideoMaxKeyFrameIntervalKey)?, &key_interval),
-            (key(AVVideoProfileLevelKey)?, profile),
-        ])
-    };
-    let codec = unsafe { AVVideoCodecTypeH264 }.ok_or(MediaError::NotImplemented)?;
+    let mut properties: Vec<(&NSString, &AnyObject)> = vec![
+        (key(unsafe { AVVideoAverageBitRateKey })?, &bitrate),
+        (key(unsafe { AVVideoExpectedSourceFrameRateKey })?, &fps_n),
+        (
+            key(unsafe { AVVideoMaxKeyFrameIntervalKey })?,
+            &key_interval,
+        ),
+    ];
+    // HEVC wählt sein Profil selbst.
+    let codec = match encoding.codec {
+        VideoCodec::H264 => {
+            let profile = unsafe { AVVideoProfileLevelH264HighAutoLevel }
+                .ok_or(MediaError::NotImplemented)?;
+            properties.push((key(unsafe { AVVideoProfileLevelKey })?, profile));
+            unsafe { AVVideoCodecTypeH264 }
+        }
+        VideoCodec::Hevc => unsafe { AVVideoCodecTypeHEVC },
+    }
+    .ok_or(MediaError::NotImplemented)?;
+    let compression = dict(&properties);
     let (w, h) = (number(width), number(height));
     let settings = unsafe {
         dict(&[

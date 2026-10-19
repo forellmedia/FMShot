@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use fmshot_core::{Document, RgbaImage, VideoDoc};
+use fmshot_core::{Document, RgbaImage};
 use rusqlite::Connection;
 
 use crate::encode::{encode_png, encode_webp, thumbnail};
@@ -158,22 +158,25 @@ impl Library {
     }
 
     /// Nimmt ein fertiges Video in die Galerie auf. `poster` ist ein
-    /// Standbild daraus (Vorschau, Texterkennung, Bildinhalt), `video` der
-    /// Video-Teil des Dokuments (Webcam-Layout, Abschnitte).
+    /// Standbild daraus (Vorschau, Texterkennung, Bildinhalt), `doc` das
+    /// Dokument in voller Grösse (das fertige Video kann kleiner sein) mit
+    /// Video-Teil und Ebenen.
     pub fn save_video(
         &self,
         slot: &VideoSlot,
         poster: &RgbaImage,
         scale_factor: f32,
-        video: VideoDoc,
+        doc: Document,
     ) -> Result<CaptureRecord> {
         let id = slot.id.clone();
-        let duration_ms = video.duration_ms as i64;
+        let duration_ms = doc.video.as_ref().map_or(0, |v| v.duration_ms) as i64;
+        let frame = (
+            doc.artboard.rect.width.round() as u32,
+            doc.artboard.rect.height.round() as u32,
+        );
         let png =
             encode_png(poster, scale_factor).map_err(|e| LibraryError::Encode(e.to_string()))?;
         write_atomic(&slot.dir.join(original_file(&id)), &png)?;
-        let mut doc = Document::from_capture_scaled(poster.width(), poster.height(), scale_factor);
-        doc.video = Some(video);
         write_atomic(
             &slot.dir.join(document_file(&id)),
             &serde_json::to_vec_pretty(&doc)?,
@@ -185,8 +188,8 @@ impl Library {
             id,
             created_at_ms: slot.created_at_ms,
             mode: "video".into(),
-            width: poster.width(),
-            height: poster.height(),
+            width: frame.0,
+            height: frame.1,
             scale_factor,
             dir: slot.dir.clone(),
             starred: false,
@@ -485,6 +488,7 @@ fn fnv1a_hex(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmshot_core::VideoDoc;
 
     fn capture(ms: i64) -> NewCapture {
         NewCapture {
@@ -541,7 +545,9 @@ mod tests {
             webcam: None,
             ..VideoDoc::default()
         };
-        let rec = lib.save_video(&slot, &poster, 2.0, video.clone()).unwrap();
+        let mut doc = Document::from_capture_scaled(640, 400, 2.0);
+        doc.video = Some(video.clone());
+        let rec = lib.save_video(&slot, &poster, 2.0, doc).unwrap();
 
         assert!(rec.is_video());
         assert_eq!(rec.video_path(), slot.video_path());
