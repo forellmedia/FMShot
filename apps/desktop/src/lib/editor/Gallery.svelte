@@ -8,9 +8,11 @@
   import { locale, t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
   import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
+  import Icon from "./Icon.svelte";
 
   /** Höchstens so viele auf einmal – sonst Filter eingrenzen. */
   const LIMIT = 1000;
+  const TAG_ICON = "M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01";
   const MODES = ["region", "window", "screen", "scroll", "video"] as const;
 
   let text = $state(editor.query);
@@ -29,6 +31,8 @@
   let results = $state<GalleryItem[]>([]);
   let loading = $state(true);
   let urls = $state<Record<string, string>>({});
+  /** Aufnahme, deren Stichwörter per Klick aufgeklappt sind. */
+  let tagsOpen = $state<string | null>(null);
   let searchInput: HTMLInputElement;
 
   const groups = $derived(
@@ -145,7 +149,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onclick={() => (tagsOpen = null)} />
 
 <div class="gallery" role="dialog" aria-label={t("gallery.title")}>
   <header>
@@ -222,21 +226,6 @@
                 {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}
                 {#if c.durationMs != null}<span class="duration">▶ {formatDuration(c.durationMs)}</span>{/if}
                 {#if why}<span class="why">{why}</span>{/if}
-                {#if item.tags.length}
-                  <span class="tags">
-                    {#each item.tags as tag (tag)}
-                      <button
-                        class="tag"
-                        title={t("gallery.search_tag")}
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          text = tagLabel(tag);
-                        }}
-                        onkeydown={(e) => e.stopPropagation()}>{tagLabel(tag)}</button
-                      >
-                    {/each}
-                  </span>
-                {/if}
               </div>
               <div class="meta">
                 <span>{time(c.createdAt)}</span>
@@ -251,6 +240,37 @@
               >
                 {c.starred ? "★" : "☆"}
               </button>
+              {#if item.tags.length}
+                <div class="tagbox" class:open={tagsOpen === c.id}>
+                  <button
+                    class="tagbtn"
+                    title={t("gallery.tags")}
+                    aria-label={t("gallery.tags")}
+                    aria-expanded={tagsOpen === c.id}
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      tagsOpen = tagsOpen === c.id ? null : c.id;
+                    }}
+                    onkeydown={(e) => e.stopPropagation()}
+                  >
+                    <Icon d={TAG_ICON} size={15} />
+                  </button>
+                  <div class="tags">
+                    {#each item.tags as tag (tag)}
+                      <button
+                        class="tag"
+                        title={t("gallery.search_tag")}
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          tagsOpen = null;
+                          text = tagLabel(tag);
+                        }}
+                        onkeydown={(e) => e.stopPropagation()}>{tagLabel(tag)}</button
+                      >
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -361,12 +381,12 @@
     border-color: var(--accent);
     color: #fff;
   }
-  /* Grund des Treffers (immer) und Stichwörter (beim Darüberfahren). */
-  .why,
-  .tags {
+  /* Grund des Treffers (immer). */
+  .why {
     position: absolute;
+    top: 6px;
     left: 6px;
-    max-width: calc(100% - 12px);
+    max-width: calc(100% - 82px);
     padding: 2px 8px;
     border-radius: 999px;
     background: rgb(0 0 0 / 0.6);
@@ -388,33 +408,70 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .why {
+  /* Stichwörter: Symbol neben dem Stern, Liste beim Darüberfahren oder Klick. */
+  .tagbox {
+    position: absolute;
     top: 6px;
-    max-width: calc(100% - 48px);
-  }
-  .tags {
-    bottom: 6px;
+    left: 6px;
+    right: 40px;
     display: flex;
-    gap: 2px;
-    padding: 2px;
+    flex-direction: column;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+  .tagbox > * {
+    pointer-events: auto;
+  }
+  .tagbtn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.45);
+    color: #fff;
+    cursor: pointer;
     opacity: 0;
-    transition: opacity 0.12s;
+  }
+  .tile:hover .tagbtn,
+  .tile:focus-visible .tagbtn,
+  .tagbox.open .tagbtn {
+    opacity: 1;
+  }
+  .tagbox.open .tagbtn {
+    background: var(--accent);
+  }
+  /* Abstand als Innenrand – so bleibt die Liste offen auf dem Weg dorthin. */
+  .tags {
+    display: none;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: 100%;
+    padding-top: 4px;
+  }
+  .tagbox:hover .tags,
+  .tagbox.open .tags {
+    display: flex;
   }
   .tag {
-    padding: 1px 6px;
+    max-width: 100%;
+    padding: 2px 8px;
     border: none;
     border-radius: 999px;
-    background: transparent;
-    color: inherit;
+    background: rgb(0 0 0 / 0.7);
+    color: #fff;
     font: inherit;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: pointer;
   }
   .tag:hover {
-    background: rgb(255 255 255 / 0.25);
-  }
-  .tile:hover .tags,
-  .tile:focus-visible .tags {
-    opacity: 1;
+    background: var(--accent);
   }
   .close {
     margin-left: auto;

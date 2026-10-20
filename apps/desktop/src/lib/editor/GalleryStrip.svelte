@@ -35,6 +35,17 @@
     menu = { x: e.clientX, y: e.clientY, capture };
   }
 
+  // Menü ganz im Fenster halten – am rechten Rand sonst abgeschnitten.
+  let menuEl = $state<HTMLElement>();
+  $effect(() => {
+    if (!menu || !menuEl) return;
+    const r = menuEl.getBoundingClientRect();
+    const maxX = window.innerWidth - r.width - 8;
+    if (menu.x > maxX) menu.x = Math.max(8, maxX);
+    // Öffnet nach oben (translateY(-100%)): oben nicht hinausragen.
+    if (menu.y - r.height < 8) menu.y = r.height + 8;
+  });
+
   async function act(fn: (c: CaptureInfo) => Promise<unknown>) {
     const c = menu?.capture;
     menu = null;
@@ -80,7 +91,7 @@
 </section>
 
 {#if menu}
-  <ul class="menu" style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
+  <ul class="menu" bind:this={menuEl} style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
     <li><button onclick={() => act((c) => editor.open(c.id))}>{t("gallery.open")}</button></li>
     <li>
       <button onclick={() => act((c) => editor.toggleStar(c))}>
@@ -159,6 +170,7 @@
   .menu {
     position: fixed;
     z-index: 20;
+    width: max-content;
     list-style: none;
     margin: 0;
     padding: 4px;

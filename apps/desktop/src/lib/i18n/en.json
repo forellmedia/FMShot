@@ -384,6 +384,7 @@
   "settings.replace_system_open": "Open System Settings",
   "settings.replace_system_done": "The macOS shortcuts are off – ⇧⌘3/4/5 belong to FMShot.",
   "gallery.search_tag": "Search for this tag",
+  "gallery.tags": "Tags",
   "tray.capture_video": "Record video",
   "tray.capture_webcam": "Record webcam",
   "tray.tab_image": "Image",

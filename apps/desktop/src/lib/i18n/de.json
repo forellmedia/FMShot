@@ -384,6 +384,7 @@
   "settings.replace_system_open": "Systemeinstellungen öffnen",
   "settings.replace_system_done": "Die macOS-Kürzel sind aus – ⇧⌘3/4/5 gehören FMShot.",
   "gallery.search_tag": "Nach diesem Stichwort suchen",
+  "gallery.tags": "Stichwörter",
   "tray.capture_video": "Video aufnehmen",
   "tray.capture_webcam": "Webcam aufnehmen",
   "tray.tab_image": "Bild",
