@@ -3,7 +3,7 @@
 //! Schatten und Hintergrund der Webcam im Shader. Das Ergebnis kommt als
 //! BGRA zurück und geht direkt zum Encoder.
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use grabmark_core::WebcamBackground;
 
@@ -18,6 +18,9 @@ const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const UNIFORM_STRIDE: u64 = 256;
 /// Höchstens so viele Ebenen pro Bild (Klicks kommen selten gehäuft).
 const MAX_DRAWS: usize = 64;
+/// So viele Bilder dürfen gleichzeitig unterwegs sein: Während die
+/// Grafikkarte eines zeichnet, wird das vorige gelesen und kodiert.
+pub const IN_FLIGHT: usize = 3;
 
 /// Wirkung auf den Hintergrund hinter der Person (siehe `compose.wgsl`).
 const EFFECT_NONE: f32 = 0.0;
@@ -49,6 +52,55 @@ struct Slot {
     mask: (wgpu::Texture, (u32, u32)),
 }
 
+/// Ein abgeschicktes Bild: Puffer, Auftrag und Meldung „gelesen“.
+pub struct Ticket {
+    /// Puffer im Ring; nach [`Readback::receive`] wieder frei.
+    pub slot: usize,
+    submission: wgpu::SubmissionIndex,
+    mapped: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
+/// Ring der Puffer zum Zurücklesen ([`IN_FLIGHT`] Stück). Lässt sich an
+/// einen anderen Thread geben: Dort werden fertige Bilder gelesen und
+/// kodiert, während hier schon das nächste entsteht.
+#[derive(Clone)]
+pub struct Readback {
+    device: wgpu::Device,
+    buffers: Arc<Vec<wgpu::Buffer>>,
+    stride: usize,
+}
+
+impl Readback {
+    /// Wartet auf das Bild und übergibt es (BGRA, Zeilenlänge `stride`) an
+    /// `out`. Danach ist `ticket.slot` wieder frei.
+    pub fn receive<R>(
+        &self,
+        ticket: Ticket,
+        out: impl FnOnce(&[u8], usize) -> R,
+    ) -> Result<R, VideoError> {
+        let gpu = |e: &dyn std::fmt::Display| VideoError::Gpu(e.to_string());
+        // Nur auf dieses Bild warten – das nächste darf weiterlaufen.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(ticket.submission),
+                timeout: None,
+            })
+            .map_err(|e| gpu(&e))?;
+        ticket
+            .mapped
+            .recv()
+            .map_err(|e| gpu(&e))?
+            .map_err(|e| gpu(&e))?;
+        let buffer = &self.buffers[ticket.slot];
+        let result = {
+            let data = buffer.get_mapped_range(..).map_err(|e| gpu(&e))?;
+            out(&data, self.stride)
+        };
+        buffer.unmap();
+        Ok(result)
+    }
+}
+
 /// Setzt Bilder zusammen. Eine Instanz pro Export (Ausgabegrösse fest).
 pub struct Compositor {
     device: wgpu::Device,
@@ -58,9 +110,8 @@ pub struct Compositor {
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     target: wgpu::Texture,
-    readback: wgpu::Buffer,
+    readback: Readback,
     size: (u32, u32),
-    stride: usize,
     slots: Vec<Slot>,
     adapter: String,
     software: bool,
@@ -184,12 +235,21 @@ impl Compositor {
             view_formats: &[],
         });
         let stride = (width as usize * 4).div_ceil(ROW_ALIGN) * ROW_ALIGN;
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (stride * height as usize) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let readback = (0..IN_FLIGHT)
+            .map(|_| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("readback"),
+                    size: (stride * height as usize) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        let readback = Readback {
+            device: device.clone(),
+            buffers: Arc::new(readback),
+            stride,
+        };
         let slots = Source::ALL
             .iter()
             .map(|_| {
@@ -211,7 +271,6 @@ impl Compositor {
             target,
             readback,
             size: (width, height),
-            stride,
             slots,
             adapter: format!("{} ({:?})", info.name, info.backend),
             software: info.device_type == wgpu::DeviceType::Cpu,
@@ -315,6 +374,20 @@ impl Compositor {
         scene: &Scene,
         out: impl FnOnce(&[u8], usize) -> R,
     ) -> Result<R, VideoError> {
+        let ticket = self.submit(scene, 0)?;
+        self.readback.receive(ticket, out)
+    }
+
+    /// Puffer zum Zurücklesen, für einen eigenen Thread.
+    pub fn readback(&self) -> Readback {
+        self.readback.clone()
+    }
+
+    /// Schickt die Szene zum Zeichnen ab, ohne auf das Ergebnis zu warten;
+    /// [`Readback::receive`] holt es. `slot` (< [`IN_FLIGHT`]) muss frei
+    /// sein. Später hochgeladene Bilder ändern dieses nicht mehr (die
+    /// Warteschlange der Grafikkarte hält die Reihenfolge ein).
+    pub fn submit(&mut self, scene: &Scene, slot: usize) -> Result<Ticket, VideoError> {
         let (w, h) = self.size;
         let view = self
             .target
@@ -364,10 +437,10 @@ impl Compositor {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
+                buffer: &self.readback.buffers[slot],
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.stride as u32),
+                    bytes_per_row: Some(self.readback.stride as u32),
                     rows_per_image: Some(h),
                 },
             },
@@ -377,27 +450,16 @@ impl Compositor {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit([encoder.finish()]);
-
-        let (tx, rx) = mpsc::sync_channel(1);
-        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+        let submission = self.queue.submit([encoder.finish()]);
+        let (tx, mapped) = mpsc::sync_channel(1);
+        self.readback.buffers[slot].map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| VideoError::Gpu(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| VideoError::Gpu(e.to_string()))?
-            .map_err(|e| VideoError::Gpu(e.to_string()))?;
-        let result = {
-            let data = self
-                .readback
-                .get_mapped_range(..)
-                .map_err(|e| VideoError::Gpu(e.to_string()))?;
-            out(&data, self.stride)
-        };
-        self.readback.unmap();
-        Ok(result)
+        Ok(Ticket {
+            slot,
+            submission,
+            mapped,
+        })
     }
 }
 

@@ -283,6 +283,22 @@ pub fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
     }
 }
 
+/// Wie stark die Aufnahme gegenüber den Pixeln des Bildschirmpuffers
+/// verkleinert wird (0 < k ≤ 1). Bei skalierten Auflösungen („sieht aus wie
+/// 3008 × 1692“) rechnet macOS in einem Puffer mit doppelt so vielen Punkten
+/// und verkleinert ihn erst für das Panel – aufgenommen wird höchstens, was
+/// das Panel zeigt. Bereiche gehen weiter in Pufferpixeln an
+/// [`start_recording`]; das Video ist um diesen Faktor kleiner.
+pub fn record_ratio(display_id: u32) -> f32 {
+    #[cfg(target_os = "macos")]
+    return macos::record_ratio(display_id) as f32;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = display_id;
+        1.0
+    }
+}
+
 /// Trennt die Person vom Hintergrund der Webcam (Export mit Hintergrund
 /// unscharf/entfernt). `None` = auf dieser Plattform noch nicht möglich.
 pub fn segmenter() -> Option<Box<dyn grabmark_video::Segmenter>> {

@@ -87,7 +87,17 @@ struct Choice {
     /// Aufgenommene Fläche (physische Pixel des Monitors) – Bezug für die
     /// Lage der Webcam-Blase.
     area: (u32, u32, u32, u32),
+    /// Pixel des Bildschirmpuffers je Punkt (für Rahmen, Blase, Zeichenfläche).
     scale: f32,
+    /// Pixel des Videos je Pixel des Puffers (≤ 1, `grabmark_media::record_ratio`).
+    ratio: f32,
+}
+
+impl Choice {
+    /// Pixel des Videos je Punkt.
+    fn video_scale(&self) -> f32 {
+        self.scale * self.ratio
+    }
 }
 
 /// Läuft schon ein Video? Dann beendet das Kürzel es.
@@ -239,6 +249,7 @@ fn camera_choice(app: &AppHandle, format: CameraFormat) -> Option<Choice> {
         rect: None,
         area: (x.max(0.0) as u32, y.max(0.0) as u32, w as u32, h as u32),
         scale: display.scale_factor,
+        ratio: 1.0,
     })
 }
 
@@ -299,6 +310,7 @@ fn select(
                 rect: Some(area),
                 area,
                 scale: display.scale_factor,
+                ratio: grabmark_media::record_ratio(display.id),
             };
             let a = app.clone();
             let _ = app.run_on_main_thread(move || then(&a, choice));
@@ -330,6 +342,7 @@ fn select(
                                 rect: Some((sel.x, sel.y, sel.width, sel.height)),
                                 area: (sel.x, sel.y, sel.width, sel.height),
                                 scale: scale_of(sel.display_id),
+                                ratio: grabmark_media::record_ratio(sel.display_id),
                             },
                         );
                     }),
@@ -390,6 +403,7 @@ fn select(
                                 rect,
                                 area: rect.unwrap_or((0, 0, 1920, 1080)),
                                 scale,
+                                ratio: grabmark_media::record_ratio(display_id),
                             },
                         );
                     }),
@@ -503,7 +517,11 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         slot.checkpoint_path(),
         RecordingCheckpoint {
             fps: if camera_only { 30 } else { settings.fps },
-            scale: if camera_only { 1.0 } else { choice.scale },
+            scale: if camera_only {
+                1.0
+            } else {
+                choice.video_scale()
+            },
             camera_only: camera_only.then_some(settings.camera.format),
             webcam_layout: cam.layout,
             ..RecordingCheckpoint::default()
@@ -680,7 +698,11 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
                 ..VideoDoc::default()
             };
             // Das Kamerabild hat keine Bildschirm-Skalierung.
-            let scale = if camera_only { 1.0 } else { choice.scale };
+            let scale = if camera_only {
+                1.0
+            } else {
+                choice.video_scale()
+            };
             let saved = format_duration(summary.duration);
             let ok = finish(
                 app,
@@ -720,6 +742,8 @@ struct Sketch {
     /// Ausgabepixel je Pixel der Aufnahme fürs Bild auf dem Bildschirm
     /// (Punkte reichen, das fertige Video zeichnet in voller Grösse).
     render_scale: f32,
+    /// Pixel des Videos je Pixel der Zeichenfläche ([`Choice::ratio`]).
+    ratio: f32,
     /// Nach jeder Markierung zurück (Einstellung [`DrawMode::Once`]).
     once: bool,
 }
@@ -744,12 +768,18 @@ impl Sketch {
         recording: &Arc<dyn Recording>,
         once: bool,
     ) -> Arc<Self> {
+        // Gezeichnet wird in Pixeln des Videos; auf dem Bildschirm in Punkten.
         let (_, _, w, h) = choice.area;
+        let size = (
+            (w as f32 * choice.ratio).round() as u32,
+            (h as f32 * choice.ratio).round() as u32,
+        );
         let sketch = Arc::new(Self {
-            state: Mutex::new(LiveSketch::new((w, h), choice.scale)),
+            state: Mutex::new(LiveSketch::new(size, choice.video_scale())),
             recording: recording.clone(),
             started: Instant::now(),
-            render_scale: 1.0 / choice.scale.max(1.0),
+            render_scale: 1.0 / choice.video_scale().max(1.0),
+            ratio: choice.ratio,
             once,
         });
         let (s, display_id, area) = (sketch.clone(), choice.display_id, choice.area);
@@ -804,6 +834,7 @@ impl Sketch {
     /// Maus und Tasten der Zeichenfläche (Haupt-Thread).
     fn on_event(&self, event: DrawEvent) {
         let clock = self.clock();
+        let at = |x: f32, y: f32| Point::new(x * self.ratio, y * self.ratio);
         let mut s = self.lock();
         match event {
             DrawEvent::Tool(i) => {
@@ -816,10 +847,10 @@ impl Sketch {
                     s.color = *color;
                 }
             }
-            DrawEvent::Press { x, y } => s.press(Point::new(x, y), clock),
-            DrawEvent::Drag { x, y, shift } => s.drag(Point::new(x, y), shift),
+            DrawEvent::Press { x, y } => s.press(at(x, y), clock),
+            DrawEvent::Drag { x, y, shift } => s.drag(at(x, y), shift),
             DrawEvent::Release { x, y, shift } => {
-                if s.release(Point::new(x, y), shift, clock) && self.once {
+                if s.release(at(x, y), shift, clock) && self.once {
                     with_surface(|surface| set_drawing(surface, false));
                 }
             }
@@ -1786,7 +1817,7 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
         .displays()
         .ok()
         .and_then(|ds| ds.into_iter().find(|d| d.is_primary))
-        .map_or(2.0, |d| d.scale_factor);
+        .map_or(2.0, |d| d.scale_factor * grabmark_media::record_ratio(d.id));
     let fallback = RecordingCheckpoint {
         fps: settings.fps,
         scale,

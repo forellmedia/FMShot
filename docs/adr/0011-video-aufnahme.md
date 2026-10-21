@@ -342,6 +342,31 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   entfernt, sonst erbte eine neue Ebene mit derselben Nummer ihren Bereich.
 - Neue Textmarker im Video haben 45 % Deckkraft (wie live gezeichnete).
 
+### Nachtrag: Schnelleres Zusammensetzen
+Gemessen an einer echten Aufnahme (Monitor 4096 × 2160, skaliert auf
+„sieht aus wie 3008 × 1692“, Webcam unscharf, Apple M4): 30 s Video
+brauchten 216 s, 5 s brauchten 29 s. Ursachen:
+- **Aufnahme grösser als das Panel:** Bei skalierten Auflösungen rechnet
+  macOS in einem Puffer mit doppelten Punkten (6016 × 3384) und verkleinert
+  erst für das Panel. Aufgenommen wird jetzt höchstens, was das Panel
+  zeigt (`grabmark_media::record_ratio`, hier 3840 × 2160). Bereiche gehen
+  weiter in Pufferpixeln an die Aufnahme; das Dokument bekommt die
+  Pixel des Videos je Punkt (`Choice::video_scale`), Live-Zeichnungen
+  werden umgerechnet.
+- **H.264 über 4096 Pixel:** Der Hardware-Encoder schafft H.264 nur bis
+  4096 Pixel Seitenlänge, darüber kodiert der Prozessor (≈ 15× langsamer).
+  H.264 wird darum auf 4096 begrenzt (`grabmark_video::encode_size`), HEVC
+  nicht.
+- **Alles nacheinander:** Hochladen, Zeichnen, Zurücklesen und Kodieren
+  liefen hintereinander. Jetzt sind bis zu drei Bilder unterwegs
+  (`Compositor::submit`, `Readback`); ein eigener Thread liest und kodiert,
+  während das nächste Bild entsteht.
+
+Ergebnis (gleiche Aufnahme): 30 s in ≈ 15 s, 5 s in ≈ 3 s. Grenze ist jetzt
+der H.264-Encoder (4K ≈ 60 Bilder/s). Die Zeiten je Schritt stehen im Log
+(`ExportTimes`), gemessen wird mit
+`cargo run --release -p grabmark-media --example export_timing`.
+
 ### Budgets (Apple M1)
 | Messpunkt                                  | Ziel              |
 |--------------------------------------------|-------------------|

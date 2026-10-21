@@ -2181,6 +2181,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "grabmark-core",
+ "grabmark-library",
  "grabmark-video",
  "log",
  "objc2",

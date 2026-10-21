@@ -28,11 +28,11 @@ pub mod sketch;
 
 pub use cursor::CursorTrack;
 #[cfg(feature = "gpu")]
-pub use export::{ExportExtras, ExportStats, export, export_with};
+pub use export::{ExportExtras, ExportStats, ExportTimes, export, export_with};
 #[cfg(feature = "gif")]
 pub use gif::{GIF_FPS, GifSink, gif_size};
 #[cfg(feature = "gpu")]
-pub use gpu::Compositor;
+pub use gpu::{Compositor, Readback, Ticket};
 pub use head::{HeadFollower, HeadPath, HeadPose, LiveHead, head_crop};
 pub use layout::{
     Placement, Scene, SceneExtras, Source, camera_frame_size, layout_from_bubble, scene_at,
@@ -123,7 +123,8 @@ pub trait FrameSource: Send {
 }
 
 /// Nimmt die fertigen Bilder an (Encoder des Systems).
-pub trait FrameSink {
+/// `Send`: Der Export liest und kodiert in einem eigenen Thread.
+pub trait FrameSink: Send {
     /// Ein Bild, BGRA mit `stride` Bytes pro Zeile, Grösse wie beim Anlegen.
     fn push(&mut self, bgra: &[u8], stride: usize, pts: Duration) -> Result<(), String>;
     /// Schliesst die Datei ab (mit Ton, falls vorhanden).
@@ -188,10 +189,49 @@ pub fn export_size(frame: (u32, u32), resolution: grabmark_core::VideoResolution
     (side(frame.0), side(frame.1))
 }
 
+/// Längste Seite, die H.264 auf Apple Silicon in Hardware kodiert. Darüber
+/// rechnet der Prozessor, gemessen ≈ 15× langsamer (6016 × 3384: 170 ms
+/// statt 11 ms je Bild); die meisten Abspieler können es ohnehin nicht.
+pub const H264_MAX_SIDE: u32 = 4096;
+
+/// Grösse, in der kodiert wird: [`export_size`] nach der Einstellung, bei
+/// H.264 zusätzlich höchstens [`H264_MAX_SIDE`] (HEVC kann bis 8K).
+pub fn encode_size(frame: (u32, u32), encoding: &grabmark_core::VideoEncoding) -> (u32, u32) {
+    let size = export_size(frame, encoding.resolution);
+    let long = size.0.max(size.1);
+    if encoding.codec != grabmark_core::VideoCodec::H264 || long <= H264_MAX_SIDE {
+        return size;
+    }
+    let k = H264_MAX_SIDE as f64 / long as f64;
+    let side = |v: u32| ((v as f64 * k).floor() as u32 & !1).max(2);
+    (side(size.0), side(size.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use grabmark_core::VideoResolution;
+
+    #[test]
+    fn h264_hoechstens_4096() {
+        use grabmark_core::{VideoCodec, VideoEncoding};
+        let h264 = VideoEncoding::default();
+        assert_eq!(h264.codec, VideoCodec::H264);
+        assert_eq!(encode_size((6016, 3384), &h264), (4096, 2304));
+        assert_eq!(encode_size((3384, 6016), &h264), (2304, 4096));
+        assert_eq!(encode_size((3840, 2160), &h264), (3840, 2160));
+        let hevc = VideoEncoding {
+            codec: VideoCodec::Hevc,
+            ..h264
+        };
+        assert_eq!(encode_size((6016, 3384), &hevc), (6016, 3384));
+        // Die Einstellung *Auflösung* gilt weiter.
+        let small = VideoEncoding {
+            resolution: VideoResolution::P1080,
+            ..h264
+        };
+        assert_eq!(encode_size((6016, 3384), &small), (1920, 1080));
+    }
 
     #[test]
     fn aufloesung_begrenzt_kuerzere_seite() {

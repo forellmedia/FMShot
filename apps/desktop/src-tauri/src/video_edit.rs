@@ -184,7 +184,7 @@ pub fn compose(
     out: &Path,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<grabmark_video::ExportStats, String> {
-    let size = grabmark_video::export_size(frame_size(files, video)?, encoding.resolution);
+    let size = grabmark_video::encode_size(frame_size(files, video)?, encoding);
     extras.size = Some(size);
     let mut audio = Vec::new();
     if let Some(p) = &files.system_audio {
@@ -319,21 +319,28 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
             return Err(e);
         }
     };
-    crate::services::timing(
-        app,
-        format!(
-            "Video {:.1} s: zusammengesetzt ({} Bilder, {}) in {:.0} ms",
-            video.duration_ms as f64 / 1000.0,
-            stats.frames,
-            stats.adapter,
-            started.elapsed().as_secs_f64() * 1000.0
-        ),
-    );
+    let composed = started.elapsed();
     std::fs::rename(&temp, &target).map_err(err)?;
     let poster = grabmark_media::frame_at(&target, Duration::ZERO).map_err(err)?;
     lib.refresh_video(id, &poster, output_duration(&video) as i64)
         .map_err(err)?;
     lib.mark_video_current(id, &doc).map_err(err)?;
+    crate::services::timing(
+        app,
+        format!(
+            "Video {:.1} s, {}×{} {:?}: zusammengesetzt ({} Bilder, {}) in {:.0} ms, \
+             Vorschaubild {:.0} ms – {}",
+            video.duration_ms as f64 / 1000.0,
+            poster.width(),
+            poster.height(),
+            encoding.codec,
+            stats.frames,
+            stats.adapter,
+            composed.as_secs_f64() * 1000.0,
+            (started.elapsed() - composed).as_secs_f64() * 1000.0,
+            stats.times,
+        ),
+    );
     let _ = app.emit("library-changed", ());
     Ok(())
 }

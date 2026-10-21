@@ -11,12 +11,26 @@
   // Ring: Umfang eines Kreises mit Radius 44.
   const CIRCUMFERENCE = 2 * Math.PI * 44;
 
+  // Abbrechen erst nach Rückfrage: „Abbrechen“ bzw. Esc fragt, die Arbeit
+  // läuft derweil weiter. Esc in der Frage = weiter erstellen.
+  let asking = $state(false);
+  let keepButton = $state<HTMLButtonElement>();
+
+  $effect(() => {
+    if (asking) keepButton?.focus();
+  });
+
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      player.cancelExport();
+      asking = !asking;
     }
+  }
+
+  function cancel() {
+    asking = false;
+    player.cancelExport();
   }
 </script>
 
@@ -38,8 +52,20 @@
       </svg>
       <span class="percent">{percent}<small>%</small></span>
     </div>
-    <span class="label">{label}</span>
-    <button onclick={() => player.cancelExport()}>{t("video.cancel")} <kbd>Esc</kbd></button>
+    {#if asking}
+      <span class="label" role="alert">
+        {t(player.exportKind === "gif" ? "video.cancel_confirm_gif" : "video.cancel_confirm")}
+      </span>
+      <div class="buttons">
+        <button bind:this={keepButton} onclick={() => (asking = false)}>
+          {t("video.cancel_no")} <kbd>Esc</kbd>
+        </button>
+        <button class="danger" onclick={cancel}>{t("video.cancel_yes")}</button>
+      </div>
+    {:else}
+      <span class="label">{label}</span>
+      <button onclick={() => (asking = true)}>{t("video.cancel")} <kbd>Esc</kbd></button>
+    {/if}
   </div>
 </div>
 
@@ -132,6 +158,23 @@
   }
   button:hover {
     background: rgb(255 255 255 / 0.22);
+  }
+  button:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
+  .buttons {
+    display: flex;
+    gap: var(--space-2);
+  }
+  /* Abbrechen verwirft die bisherige Arbeit: rot hinterlegt. */
+  .danger {
+    border-color: rgb(255 95 87 / 0.7);
+    background: rgb(255 69 58 / 0.55);
+    text-shadow: none;
+  }
+  .danger:hover {
+    background: rgb(255 69 58 / 0.75);
   }
   kbd {
     margin-left: 4px;

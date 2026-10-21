@@ -48,9 +48,9 @@ use objc2_av_foundation::{
 };
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
-    kCGColorSpaceSRGB,
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyAllDisplayModes,
+    CGDisplayCopyDisplayMode, CGDisplayMode, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
+    CGPreflightScreenCaptureAccess, kCGColorSpaceSRGB,
 };
 use objc2_core_media::{
     CMAudioFormatDescriptionGetStreamBasicDescription, CMClock, CMSampleBuffer, CMSampleTimingInfo,
@@ -1374,7 +1374,8 @@ fn make_filter(
         RecordTarget::Display { display_id } => {
             let display = find_display(display_id)?;
             let (w, h) = pixel_size(&display);
-            Ok((display_filter(&display), w, h, None))
+            let k = record_ratio(display_id);
+            Ok((display_filter(&display), shrink(w, k), shrink(h, k), None))
         }
         RecordTarget::Region {
             display_id,
@@ -1389,7 +1390,13 @@ fn make_filter(
                 CGPoint::new(x as f64 / scale, y as f64 / scale),
                 CGSize::new(width as f64 / scale, height as f64 / scale),
             );
-            Ok((display_filter(&display), width, height, Some(rect)))
+            let k = record_ratio(display_id);
+            Ok((
+                display_filter(&display),
+                shrink(width, k),
+                shrink(height, k),
+                Some(rect),
+            ))
         }
         RecordTarget::Window { window_id } => {
             let window = unsafe { content.windows() }
@@ -1410,7 +1417,7 @@ fn make_filter(
                         && center.0 < f.origin.x + f.size.width
                         && center.1 < f.origin.y + f.size.height
                 })
-                .map(|d| scale_of(&d))
+                .map(|d| scale_of(&d) * record_ratio(unsafe { d.displayID() }))
                 .unwrap_or(2.0);
             let filter = unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
@@ -1435,6 +1442,51 @@ fn pixel_size(d: &SCDisplay) -> (u32, u32) {
     } else {
         (unsafe { d.width() } as u32, unsafe { d.height() } as u32)
     }
+}
+
+/// Pixel des Panels selbst (Modus mit „native“-Kennung, sonst der grösste).
+fn native_pixels(id: u32) -> Option<(usize, usize)> {
+    /// `kDisplayModeNativeFlag` aus IOGraphicsTypes.h.
+    const NATIVE: u32 = 0x0200_0000;
+    // SAFETY: ohne Optionen.
+    let modes = unsafe { CGDisplayCopyAllDisplayModes(id, None) }?;
+    // SAFETY: Die Liste enthält nur Anzeigemodi.
+    let modes = unsafe { modes.cast_unchecked::<CGDisplayMode>() };
+    let size = |m: &CGDisplayMode| {
+        (
+            CGDisplayMode::pixel_width(Some(m)),
+            CGDisplayMode::pixel_height(Some(m)),
+        )
+    };
+    let all: Vec<_> = modes.iter().collect();
+    all.iter()
+        .find(|m| CGDisplayMode::io_flags(Some(m)) & NATIVE != 0)
+        .map(|m| size(m))
+        .or_else(|| all.iter().map(|m| size(m)).max())
+        .filter(|&(w, h)| w > 0 && h > 0)
+}
+
+/// Siehe [`crate::record_ratio`]: Panel-Pixel je Pixel des Bildschirmpuffers.
+pub(crate) fn record_ratio(id: u32) -> f64 {
+    let mode = CGDisplayCopyDisplayMode(id);
+    let buffer = (
+        CGDisplayMode::pixel_width(mode.as_deref()),
+        CGDisplayMode::pixel_height(mode.as_deref()),
+    );
+    let Some(panel) = native_pixels(id) else {
+        return 1.0;
+    };
+    if buffer.0 == 0 || buffer.1 == 0 {
+        return 1.0;
+    }
+    (panel.0 as f64 / buffer.0 as f64)
+        .min(panel.1 as f64 / buffer.1 as f64)
+        .clamp(0.25, 1.0)
+}
+
+/// Grösse in Pufferpixeln → Grösse im Video (gerade, wie der Encoder will).
+fn shrink(v: u32, k: f64) -> u32 {
+    crate::even((v as f64 * k).round() as u32).max(2)
 }
 
 fn scale_of(d: &SCDisplay) -> f64 {
