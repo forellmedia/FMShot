@@ -16,6 +16,8 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Rect, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -143,12 +145,19 @@ pub fn open_settings(app: &AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings".into()))
+    let builder = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings".into()))
         .title(t("settings.title", &[]))
         .inner_size(SETTINGS_SIZE.0, SETTINGS_SIZE.1)
         .min_inner_size(520.0, 420.0)
-        .center()
-        .build();
+        .center();
+    // Glas: der Schreibtisch scheint durch, Titelleiste über dem Inhalt.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .transparent(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .effects(glass(Effect::Sidebar, None));
+    let built = builder.build();
     match built {
         Ok(window) => {
             let _ = window.set_focus();
@@ -205,10 +214,26 @@ fn toggle_popover(app: &AppHandle, icon: Rect) {
     }
 }
 
+/// Ecken des Tray-Fensters (wie Menüs unter macOS 26).
+#[cfg(target_os = "macos")]
+const POPOVER_RADIUS: f64 = 16.0;
+
+/// Glas-Hintergrund (macOS-Vibrancy) für ein durchsichtiges Fenster.
+#[cfg(target_os = "macos")]
+fn glass(effect: Effect, radius: Option<f64>) -> tauri::utils::config::WindowEffectsConfig {
+    let builder = EffectsBuilder::new()
+        .effect(effect)
+        .state(EffectState::FollowsWindowActiveState);
+    match radius {
+        Some(r) => builder.radius(r).build(),
+        None => builder.build(),
+    }
+}
+
 /// Wird beim ersten Klick angelegt und danach nur versteckt – das spart
 /// Speicher, solange niemand es öffnet, und ist danach sofort da.
 fn build_popover(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    let window = WebviewWindowBuilder::new(app, POPOVER, WebviewUrl::App("tray".into()))
+    let builder = WebviewWindowBuilder::new(app, POPOVER, WebviewUrl::App("tray".into()))
         .title("Grabmark")
         .inner_size(POPOVER_SIZE.0, POPOVER_SIZE.1)
         .resizable(false)
@@ -216,8 +241,12 @@ fn build_popover(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
-        .shadow(true)
-        .build()?;
+        .shadow(true);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .transparent(true)
+        .effects(glass(Effect::Popover, Some(POPOVER_RADIUS)));
+    let window = builder.build()?;
     let app = app.clone();
     window.on_window_event(move |event| {
         // Das Overlay einer Aufnahme per Tastenkürzel nimmt den Fokus – das

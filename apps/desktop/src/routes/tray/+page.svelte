@@ -536,8 +536,8 @@
   .tabs {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    padding: 3px;
-    border-radius: var(--radius);
+    padding: 4px;
+    border-radius: 999px;
     background: var(--hover);
   }
 
@@ -552,18 +552,16 @@
     font: inherit;
     font-size: 11px;
     padding: 6px 2px 5px;
-    border-radius: 6px;
+    border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
   }
 
   .tabs button.on {
-    background: var(--surface);
+    background: var(--glass-strong);
     color: var(--text);
     font-weight: 600;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
-    --icon-tone: var(--accent);
-    --icon-tone-opacity: 0.3;
+    box-shadow: 0 2px 8px rgb(30 40 90 / 0.12);
   }
 
   section {
@@ -584,12 +582,6 @@
     gap: 2px;
   }
 
-  /* Aufnahme-Symbole mit roter Fläche – Rot heisst hier „aufnehmen“. */
-  .action {
-    --icon-tone: var(--accent);
-    --icon-tone-opacity: 0.28;
-  }
-
   .action,
   .link {
     display: flex;
@@ -602,7 +594,7 @@
     font: inherit;
     text-align: left;
     padding: 8px var(--space-2);
-    border-radius: 6px;
+    border-radius: 10px;
     cursor: pointer;
   }
 
@@ -644,9 +636,9 @@
     align-items: center;
     gap: 4px;
     padding: 9px 2px 7px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
+    border: 1px solid var(--glass-edge);
+    border-radius: 14px;
+    background: var(--glass);
     color: var(--text-muted);
     font: inherit;
     font-size: 11px;
@@ -660,11 +652,9 @@
   /* Innen statt aussen verstärkt: Der Rand bleibt innerhalb des Knopfs und
      wird vom scrollenden Bereich nicht abgeschnitten. */
   .targets button.on {
-    border-color: var(--active);
-    color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--active);
-    --icon-tone: var(--accent);
-    --icon-tone-opacity: 0.3;
+    background: var(--glass-strong);
+    color: var(--active);
+    box-shadow: 0 4px 12px rgb(30 40 90 / 0.12);
   }
 
   /* Runder Auslöser wie an einer Kamera: roter Kern im Ring. */
@@ -683,13 +673,15 @@
   }
 
   .disc {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     box-sizing: border-box;
     border-radius: 50%;
     background: var(--accent);
-    border: 3px solid var(--surface);
-    box-shadow: 0 0 0 2px var(--accent);
+    border: 4px solid var(--glass-strong);
+    box-shadow:
+      0 0 0 1px var(--glass-edge),
+      0 6px 16px color-mix(in srgb, var(--accent) 40%, transparent);
     transition: transform 0.12s ease;
   }
 
@@ -742,15 +734,13 @@
   }
 
   .chip.on:hover {
-    filter: brightness(1.15);
+    background: color-mix(in srgb, var(--active) 22%, transparent);
   }
 
   .chip.on {
-    border-color: var(--active);
-    background: var(--active);
-    color: var(--on-active);
-    --icon-tone: var(--accent);
-    --icon-tone-opacity: 0.6;
+    border-color: color-mix(in srgb, var(--active) 35%, transparent);
+    background: color-mix(in srgb, var(--active) 14%, transparent);
+    color: color-mix(in srgb, var(--active) 75%, var(--text));
   }
 
   .chip:disabled {
@@ -777,10 +767,10 @@
     font: inherit;
     font-size: 13px;
     color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 3px 6px;
+    background: var(--glass-strong);
+    border: 1px solid var(--glass-edge);
+    border-radius: 10px;
+    padding: 5px 8px;
   }
 
   .rows > select {
@@ -789,8 +779,9 @@
 
   /* Webcam-Darstellung: zugeklappt nur eine Zeile mit dem Wichtigsten. */
   .webcam {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: 1px solid var(--glass-edge);
+    background: var(--glass);
+    border-radius: 12px;
     padding: 0 var(--space-2);
   }
 
@@ -866,7 +857,7 @@
   }
 
   .switch:checked {
-    background: var(--active);
+    background: var(--switch-on);
   }
 
   .switch:checked::after {
@@ -883,7 +874,7 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--hover);
     padding-top: var(--space-2);
   }
 

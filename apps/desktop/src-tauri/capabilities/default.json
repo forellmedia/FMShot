@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Rechte des Haupt-, Tray- und Einstellungsfensters",
   "windows": ["main", "tray", "settings"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
 }

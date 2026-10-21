@@ -524,8 +524,12 @@
     flex-direction: column;
     gap: 6px;
     padding: 8px 12px 10px;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
+    border-radius: var(--radius-panel);
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
     font-size: 12px;
     user-select: none;
   }

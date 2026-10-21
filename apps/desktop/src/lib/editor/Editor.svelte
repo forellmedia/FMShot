@@ -138,14 +138,16 @@
   let propsWidth = $state(0);
   const COMPACT_BELOW = 900;
   const compact = $derived(headerWidth > 0 && headerWidth < COMPACT_BELOW);
-  // Innenabstand (2 × 12) und Spaltenabstände (2 × 16) der Kopfleiste.
-  const twoRows = $derived(captureWidth + actionsWidth + propsWidth + 2 * 12 + 2 * 16 > headerWidth);
+  // Innenabstand und Spaltenabstände (2 × 12) der Kopfleiste; mit Glas liegen
+  // links die Fensterknöpfe von macOS darüber.
+  const headerPadding = document.documentElement.classList.contains("glass") ? 84 + 8 : 2 * 8;
+  const twoRows = $derived(captureWidth + actionsWidth + propsWidth + headerPadding + 2 * 12 > headerWidth);
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
 <div class="editor">
-  <header class:two-rows={twoRows} bind:clientWidth={headerWidth}>
+  <header class:two-rows={twoRows} bind:clientWidth={headerWidth} data-tauri-drag-region>
     <div class="capture" bind:clientWidth={captureWidth}>
       <button title={withHotkey(t("gallery.title"), "open_gallery")} aria-label={t("gallery.title")} onclick={() => (editor.galleryOpen = true)}>
         <Icon name="gallery" />
@@ -304,61 +306,82 @@
 </div>
 
 <style>
+  /* Glas: Leinwand und Bildliste liegen als Flächen auf dem durchscheinenden
+     Fensterhintergrund, die Leisten schweben als Kapseln darüber. */
   .editor {
     display: grid;
     /* minmax(0, …): Inhalt darf die Spalte nicht über das Fenster hinaus weiten. */
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 216px;
     grid-template-rows: auto 1fr auto;
+    column-gap: var(--space-2);
+    row-gap: var(--space-2);
     height: 100vh;
+    padding: 0 var(--space-2) var(--space-2);
+    box-sizing: border-box;
     overflow: hidden;
   }
+  .editor > :global(.side) {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    margin-top: var(--space-2);
+  }
+  .editor > :global(.timeline) {
+    grid-column: 1;
+  }
   header {
+    grid-column: 1;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas: "capture props actions";
     align-items: center;
-    column-gap: var(--space-4);
+    column-gap: var(--space-3);
     row-gap: 6px;
-    padding: 6px var(--space-3);
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
+    padding: var(--space-2) 0 0 var(--space-2);
     min-height: 44px;
+  }
+  /* Platz für die Fensterknöpfe von macOS (Titelleiste über dem Inhalt). */
+  :global(.glass) header {
+    padding-left: 84px;
   }
   header.two-rows {
     grid-template-areas:
       "capture . actions"
       "props props props";
   }
-  /* Aufnahme-Knöpfe mit roter Fläche – Rot heisst „aufnehmen“. */
   .capture {
     grid-area: capture;
-    --icon-tone: var(--accent);
-    --icon-tone-opacity: 0.28;
-  }
-  /* Die Galerie ist keine Aufnahme. */
-  .capture > button:first-child {
-    --icon-tone: currentColor;
-    --icon-tone-opacity: 0.2;
   }
   .actions {
     grid-area: actions;
   }
   header :global(.props) {
     grid-area: props;
+    justify-self: center;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 3px 12px;
   }
   .capture,
-  .actions {
+  .actions,
+  header :global(.props) {
     display: flex;
     align-items: center;
     gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
   }
   header button {
     display: grid;
     place-items: center;
-    min-width: 30px;
-    height: 30px;
+    min-width: 32px;
+    height: 32px;
     border: none;
-    border-radius: 6px;
+    border-radius: 999px;
     background: transparent;
     color: var(--text);
     font: inherit;
@@ -385,20 +408,25 @@
     margin: 0 6px;
   }
   main {
+    grid-column: 1;
     position: relative;
     display: flex;
+    gap: var(--space-2);
     min-height: 0;
   }
-  main > :global(.canvas) {
-    flex: 1;
-  }
+  main > :global(.canvas),
   .start {
     flex: 1;
+    border-radius: var(--radius-panel);
+    overflow: hidden;
+  }
+  .start {
     display: grid;
     place-content: center;
     text-align: center;
     gap: var(--space-3);
-    background: var(--canvas-bg);
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
   }
   .start h1 {
     margin: 0;
@@ -416,9 +444,9 @@
   }
   .start-buttons button {
     padding: 10px 16px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--surface);
+    border-radius: 999px;
+    border: 1px solid var(--glass-edge);
+    background: var(--glass-strong);
     color: var(--text);
     font: inherit;
     cursor: pointer;
@@ -431,10 +459,10 @@
   .toast {
     position: fixed;
     left: 50%;
-    bottom: 112px;
+    bottom: 32px;
     transform: translateX(-50%);
     padding: 8px 16px;
-    border-radius: 8px;
+    border-radius: 999px;
     background: rgb(30 30 30 / 0.92);
     color: #fff;
     box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);

@@ -1,6 +1,5 @@
 <script lang="ts">
-  // Symbol aus $lib/icons (Phosphor, Duotone): Umriss in der Textfarbe, die
-  // Fläche dahinter getönt. Tönung über `--icon-tone` (Standard: Textfarbe).
+  // Symbol aus $lib/icons (Phosphor Light) in der Textfarbe.
   import { ICONS, type IconName } from "$lib/icons";
 
   let { name, size = 18 }: { name: IconName; size?: number } = $props();
@@ -13,9 +12,5 @@
 <style>
   svg {
     flex: none;
-  }
-  svg :global(.tone) {
-    fill: var(--icon-tone, currentColor);
-    opacity: var(--icon-tone-opacity, 0.2);
   }
 </style>

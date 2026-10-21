@@ -1,8 +1,14 @@
 <script lang="ts">
+  // Bildliste rechts neben der Leinwand: Suche oben (bleibt stehen), darunter
+  // die Aufnahmen nach Tagen, neueste zuerst. Nur die Liste scrollt.
   import { tick } from "svelte";
-  import { fileUrl } from "$lib/api";
-  import { t } from "$lib/i18n";
+  import { fileUrl, type CaptureInfo } from "$lib/api";
+  import { locale, t } from "$lib/i18n";
+  import { groupByDay } from "./gallery";
+  import Icon from "./Icon.svelte";
   import { editor } from "./state.svelte";
+
+  const MODES = ["region", "window", "screen", "scroll", "video"] as const;
 
   let urls = $state<Record<string, string>>({});
 
@@ -14,18 +20,26 @@
     }
   });
 
+  const days = $derived(
+    groupByDay(editor.captures, Date.now(), locale(), {
+      today: t("gallery.today"),
+      yesterday: t("gallery.yesterday"),
+      unknown: t("gallery.unknown_date"),
+    }),
+  );
+
   // Geöffnete Aufnahme sichtbar halten (z. B. nach Wahl in der Galerie).
-  let strip: HTMLElement;
+  let list: HTMLElement;
   $effect(() => {
     const id = editor.current?.id;
     void editor.captures;
     if (!id) return;
     tick().then(() => {
-      const thumb = strip?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+      const thumb = list?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
       if (!thumb) return;
-      const box = strip.getBoundingClientRect();
+      const box = list.getBoundingClientRect();
       const r = thumb.getBoundingClientRect();
-      if (r.left < box.left || r.right > box.right) thumb.scrollIntoView({ inline: "center", block: "nearest" });
+      if (r.top < box.top || r.bottom > box.bottom) thumb.scrollIntoView({ block: "nearest" });
     });
   });
 
@@ -37,96 +51,167 @@
   }
 
   function time(ms: number | null) {
-    return ms ? new Date(ms).toLocaleString() : "";
+    return ms ? new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) : "";
+  }
+
+  function kind(c: CaptureInfo) {
+    const mode = MODES.find((m) => m === c.mode);
+    return mode ? t(`gallery.mode.${mode}`) : "";
   }
 </script>
 
-<section class="strip" bind:this={strip} aria-label={t("gallery.title")}>
-  <input class="search" type="search" placeholder={t("gallery.search")} value={editor.query} oninput={onSearch} />
-  {#each editor.captures as c (c.id)}
-    <button
-      class="thumb"
-      data-id={c.id}
-      class:current={editor.current?.id === c.id}
-      title={time(c.createdAt)}
-      onclick={() => editor.open(c.id)}
-      oncontextmenu={(e) => editor.openCaptureMenu(e, c.id)}
-      draggable="true"
-      ondragstart={(e) => e.dataTransfer?.setData("text/x-grabmark-capture", c.id)}
-    >
-      {#if urls[c.id]}
-        <img src={urls[c.id]} alt="" draggable="false" />
-      {/if}
-      {#if c.starred}<span class="star">★</span>{/if}
-      {#if c.videoPath}<span class="play" aria-label={t("gallery.mode.video")}>▶</span>{/if}
-    </button>
-  {:else}
-    <p class="empty">{t("gallery.empty", { shortcut: editor.hotkey("capture_region") })}</p>
-  {/each}
-</section>
+<aside class="side" aria-label={t("gallery.title")}>
+  <label class="search">
+    <Icon name="search" size={15} />
+    <input type="search" placeholder={t("gallery.search")} value={editor.query} oninput={onSearch} />
+  </label>
+  <div class="list" bind:this={list}>
+    {#each days as day (day.key)}
+      <h2>{day.label}</h2>
+      {#each day.items as c (c.id)}
+        <button
+          class="thumb"
+          data-id={c.id}
+          class:current={editor.current?.id === c.id}
+          onclick={() => editor.open(c.id)}
+          oncontextmenu={(e) => editor.openCaptureMenu(e, c.id)}
+          draggable="true"
+          ondragstart={(e) => e.dataTransfer?.setData("text/x-grabmark-capture", c.id)}
+        >
+          <span class="image">
+            {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}
+            {#if c.starred}<span class="star">★</span>{/if}
+            {#if c.videoPath}<span class="play" aria-label={t("gallery.mode.video")}>▶</span>{/if}
+          </span>
+          <span class="meta"><span>{time(c.createdAt)}</span><span class="muted">{kind(c)}</span></span>
+        </button>
+      {/each}
+    {:else}
+      <p class="empty">{t("gallery.empty", { shortcut: editor.hotkey("capture_region") })}</p>
+    {/each}
+  </div>
+</aside>
 
 <style>
-  .strip {
+  .side {
     display: flex;
+    flex-direction: column;
+    min-height: 0;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    overflow-x: auto;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    min-height: 92px;
-    align-items: center;
+    padding: var(--space-2);
+    border-radius: var(--radius-panel);
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
   }
+  /* Suche steht fest über der Liste – nur die Liste scrollt. */
   .search {
     flex: none;
-    width: 180px;
-    align-self: center;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--bg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--glass-strong);
+    color: var(--text-muted);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: transparent;
     color: var(--text);
     font: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 2px;
+    scrollbar-width: thin;
+  }
+  h2 {
+    margin: 6px 4px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .thumb {
-    position: relative;
     flex: none;
-    height: 72px;
-    min-width: 72px;
-    max-width: 140px;
-    padding: 0;
-    border: 2px solid transparent;
-    border-radius: 6px;
-    background: var(--canvas-bg);
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 5px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
     cursor: pointer;
   }
-  .thumb.current {
-    border-color: var(--active);
+  .thumb:hover {
+    background: var(--hover);
   }
-  .thumb img {
-    height: 100%;
+  .thumb.current {
+    background: var(--glass-strong);
+    box-shadow: inset 0 0 0 2px var(--active);
+  }
+  .image {
+    position: relative;
+    display: block;
+    aspect-ratio: 16 / 10;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--canvas-bg);
+  }
+  .image img {
     width: 100%;
+    height: 100%;
     object-fit: contain;
     display: block;
   }
+  .meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 3px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .muted {
+    color: var(--text-muted);
+  }
   .star {
     position: absolute;
-    top: 2px;
-    right: 4px;
+    top: 3px;
+    right: 5px;
     color: #fbc02d;
     text-shadow: 0 0 2px #000;
     font-size: 13px;
   }
   .play {
     position: absolute;
-    left: 4px;
+    left: 5px;
     bottom: 3px;
     color: #fff;
     text-shadow: 0 0 3px #000;
     font-size: 12px;
   }
   .empty {
+    margin: var(--space-3) var(--space-2);
     color: var(--text-muted);
-    margin: 0 auto;
+    font-size: 13px;
   }
 </style>

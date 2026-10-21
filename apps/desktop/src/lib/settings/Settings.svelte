@@ -169,6 +169,8 @@
 <svelte:window onfocus={refreshSystemShortcuts} />
 
 <div class="page">
+  <!-- Mit Glas (macOS) liegt die Titelleiste über dem Inhalt: Titel selbst zeigen. -->
+  <div class="titlebar" data-tauri-drag-region>{t("settings.title")}</div>
   <div class="content">
     <nav>
       {#each tabs as tb (tb.id)}
@@ -458,8 +460,24 @@
   .page {
     height: 100vh;
     overflow: auto;
-    background: var(--surface);
+    background: var(--window-bg);
     color: var(--text);
+  }
+  .titlebar {
+    display: none;
+  }
+  :global(.glass) .titlebar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    height: 38px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--glass);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
   }
   .content {
     max-width: 580px;
@@ -470,11 +488,22 @@
     font-size: 13px;
     margin: var(--space-4) 0 var(--space-1);
   }
+  /* Reiter als Kapsel, Inhalt als Glasfläche darunter. */
   nav {
     display: flex;
-    gap: 4px;
-    margin: var(--space-3) 0 var(--space-4);
-    border-bottom: 1px solid var(--border);
+    gap: 2px;
+    width: fit-content;
+    margin: var(--space-3) auto var(--space-4);
+    padding: 4px;
+    border-radius: 999px;
+    background: var(--hover);
+  }
+  section {
+    padding: 4px var(--space-4) var(--space-3);
+    border-radius: var(--radius-panel);
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow);
   }
   nav button,
   .link,
@@ -486,20 +515,24 @@
     cursor: pointer;
   }
   nav button {
-    padding: 8px 10px;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
   }
   nav button.on {
-    border-color: var(--active);
+    background: var(--glass-strong);
     font-weight: 600;
+    box-shadow: 0 2px 6px rgb(30 40 90 / 0.12);
   }
   .row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: var(--space-4);
-    padding: 7px 0;
+    padding: 9px 0;
+  }
+  .row + .row {
+    border-top: 1px solid var(--hover);
   }
   /* Ein/Aus als Schalter rechts – wie im Tray und in den Systemeinstellungen. */
   .row.check {
@@ -531,7 +564,7 @@
     transition: transform 0.15s;
   }
   .row.check input[type="checkbox"]:checked {
-    background: var(--active);
+    background: var(--switch-on);
   }
   .row.check input[type="checkbox"]:checked::after {
     transform: translateX(12px);
@@ -547,10 +580,10 @@
   select,
   input[type="text"] {
     font: inherit;
-    padding: 4px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg);
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--glass-edge);
+    background: var(--glass-strong);
     color: var(--text);
     min-width: 200px;
   }
@@ -561,10 +594,10 @@
   }
   .key {
     min-width: 120px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg);
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--glass-edge);
+    background: var(--glass-strong);
     color: var(--text);
     font: inherit;
     cursor: pointer;
@@ -591,9 +624,10 @@
     color: #2e7d32;
   }
   .buttons button {
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--glass-edge);
+    background: var(--glass-strong);
   }
   code {
     font-size: 12px;
