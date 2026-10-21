@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-bench"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
  "fmshot-library",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-capture"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "block2",
  "fmshot-core",
@@ -1615,14 +1615,14 @@ dependencies = [
 
 [[package]]
 name = "fmshot-cli"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "clap",
 ]
 
 [[package]]
 name = "fmshot-clipboard"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "arboard",
  "fmshot-core",
@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-core"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1646,7 +1646,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-desktop"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-capture",
  "fmshot-clipboard",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-hotkeys"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "plist",
  "serde",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-library"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "chrono",
  "fmshot-core",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-media"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "block2",
  "dispatch2",
@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-ocr"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
  "fmshot-render",
@@ -1746,8 +1746,9 @@ dependencies = [
 
 [[package]]
 name = "fmshot-overlay"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
+ "block2",
  "dispatch2",
  "fmshot-core",
  "log",
@@ -1763,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-render"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "cosmic-text",
  "fmshot-core",
@@ -1777,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-render-wasm"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
  "fmshot-render",
@@ -1789,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-settings"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
  "fmshot-hotkeys",
@@ -1802,14 +1803,14 @@ dependencies = [
 
 [[package]]
 name = "fmshot-stitch"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
 ]
 
 [[package]]
 name = "fmshot-video"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "bytemuck",
  "fmshot-core",
@@ -1824,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "fmshot-vision"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "fmshot-core",
  "fmshot-render",
@@ -4857,9 +4858,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -6923,9 +6924,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]

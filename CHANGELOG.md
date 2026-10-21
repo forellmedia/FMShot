@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.0-beta.2
+
+**Neu**
+- **Video aufnehmen** (macOS, ADR 0011): Bereich, Fenster oder Vollbild mit
+  Ton (⇧⌘6), Countdown, Aufnahmeleiste mit Pause (⇧⌘9), Stopp und Pegel.
+  - Webcam als Blase, auf Wunsch nur der Kopf mit weichem Rand und
+    unscharfem oder entferntem Hintergrund
+  - Nur Webcam aufnehmen in 16:9, 9:16 oder 1:1 (⇧⌘7)
+  - **Live zeichnen** während der Aufnahme (⇧⌘8): Pfeil, Linie, Rahmen,
+    Kreis, Freihand, Nummer, Textmarker. Verschwindet nach ein paar
+    Sekunden oder mit Esc. In den Einstellungen wählbar, ob Zeichnen nach
+    einer Markierung an bleibt.
+  - Eigener Mauszeiger, Klicks als Kreis, Vergrössern (auch automatisch
+    aus den Klicks)
+- **Video-Editor** in der gewohnten Leinwand: Schneiden, Trimmen, Webcam je
+  Abschnitt, Lautstärke, Pfeile und Text mit Zeitbereich. Die Zeitleiste hat
+  eine Zeile je Werkzeug; Markierungen und Klicks lassen sich dort wählen,
+  verschieben, verlängern und löschen. Ausgabe als MP4, GIF oder Einzelbild.
+- **Einstellungen → Video:** Auflösung, Codec (H.264/HEVC), Qualität und
+  Bilder pro Sekunde für das fertige Video.
+- **Tray-Fenster mit Tabs** Bild · Bildschirm · Webcam · Einstellungen, dazu
+  „Beim Anmelden starten“ und **„Editor öffnen“**.
+- **Speichern als …** (⇧⌘S bzw. Ctrl+Shift+S) fragt nach dem Format (PNG
+  oder JPG).
+- **Galerie:** Ein Tag-Symbol neben dem Stern zeigt die Stichwörter einer
+  Aufnahme; ein Klick auf ein Stichwort sucht danach.
+
+**Verbessert**
+- ⌘C und ⌘S (Ctrl+C / Ctrl+S) kopieren bzw. speichern das ganze Bild auch
+  direkt nach dem Zeichnen, ohne vorher Esc. Eine markierte Ebene lässt sich
+  danach in FMShot trotzdem mit ⌘V einfügen.
+- Das Rechtsklick-Menü der Leiste unten im Editor wird am rechten Rand nicht
+  mehr abgeschnitten.
+- Fehlende Freigaben öffnen direkt die Systemeinstellungen.
+- Abhängigkeiten mit Sicherheitsmeldungen aktualisiert (rustls-webpki,
+  webpki-root-certs).
+
+**Hinweise**
+- Video-Aufnahme gibt es vorerst nur auf dem Mac. Unter Windows und Linux
+  funktionieren Screenshots, Editor und Galerie wie bisher.
+
 ## 0.2.0-beta.1
 
 **Neu**
