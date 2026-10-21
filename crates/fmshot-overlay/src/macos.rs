@@ -24,8 +24,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSCursor, NSDragOperation, NSDraggingContext, NSDraggingItem,
-    NSDraggingSession, NSDraggingSource, NSEvent, NSImage, NSPanel, NSResponder, NSScreen,
-    NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSImage, NSPanel, NSResponder,
+    NSScreen, NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
@@ -56,6 +56,28 @@ const MIN_DRAG_POINTS: f64 = 3.0;
 const MAGNIFIER_SIZE: f64 = 128.0;
 const MAGNIFIER_ZOOM: f64 = 8.0;
 const DIM_ALPHA: f64 = 0.35;
+
+/// Lokaler Ereignis-Monitor: sieht nur Ereignisse an Fenster dieser App,
+/// also genau die Klicks in FMShot selbst.
+pub(crate) struct ClickWatch(Retained<AnyObject>);
+
+pub(crate) fn watch_own_clicks(on_press: Box<dyn Fn()>) -> Option<ClickWatch> {
+    let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        on_press();
+        // Ereignis unverändert weitergeben.
+        event.as_ptr()
+    });
+    unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::LeftMouseDown, &block)
+    }
+    .map(ClickWatch)
+}
+
+impl Drop for ClickWatch {
+    fn drop(&mut self) {
+        unsafe { NSEvent::removeMonitor(&self.0) };
+    }
+}
 
 pub(crate) struct Handle {
     session: Weak<RefCell<Session>>,
@@ -888,7 +910,20 @@ fn open_bar(
         border
     });
 
-    let bar_width = 14.0 + BAR_STATUS_WIDTH + buttons.len() as f64 * (BAR_BUTTON_WIDTH + BAR_GAP);
+    // Knopfbreite nach Text, mindestens BAR_BUTTON_WIDTH (z. B. „Zeichnen ⇧⌘8“).
+    let widths: Vec<f64> = buttons
+        .iter()
+        .map(|(label, _)| {
+            let probe = CATextLayer::new();
+            probe.setFontSize(13.0);
+            let ns = NSString::from_str(label);
+            unsafe { probe.setString(Some(as_any(&ns))) };
+            (probe.preferredFrameSize().width + 20.0)
+                .ceil()
+                .max(BAR_BUTTON_WIDTH)
+        })
+        .collect();
+    let bar_width = 14.0 + BAR_STATUS_WIDTH + widths.iter().map(|w| w + BAR_GAP).sum::<f64>();
     // Unter dem Bereich, sonst darüber, sonst innen unten.
     let (bx, by) = match area {
         Some(cocoa) => {
@@ -916,10 +951,13 @@ fn open_bar(
     let bar = OverlayPanel::new(mtm, bar_frame);
     bar.setHasShadow(true);
 
-    let ranges: Vec<(f64, f64)> = (0..buttons.len())
-        .map(|i| {
-            let x = 14.0 + BAR_STATUS_WIDTH + i as f64 * (BAR_BUTTON_WIDTH + BAR_GAP);
-            (x, x + BAR_BUTTON_WIDTH)
+    let mut x = 14.0 + BAR_STATUS_WIDTH;
+    let ranges: Vec<(f64, f64)> = widths
+        .iter()
+        .map(|w| {
+            let range = (x, x + w);
+            x += w + BAR_GAP;
+            range
         })
         .collect();
     let view = BarView::alloc(mtm).set_ivars(BarIvars {

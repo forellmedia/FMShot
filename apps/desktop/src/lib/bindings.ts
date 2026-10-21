@@ -33,6 +33,8 @@ export const commands = {
 	/**  Texterkennung auf der Originalaufnahme. */
 	recognizeText: (id: string) => typedError<OcrBlock[], string>(__TAURI_INVOKE("recognize_text", { id })),
 	copyText: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_text", { text })),
+	/**  Änderungszähler der Zwischenablage (`None` = gibt es hier nicht). */
+	clipboardChangeCount: () => __TAURI_INVOKE<number | null>("clipboard_change_count"),
 	deleteCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_capture", { id })),
 	setStarred: (id: string, starred: boolean) => typedError<null, string>(__TAURI_INVOKE("set_starred", { id, starred })),
 	/**  Zeigt die Originaldatei im Finder / Explorer. */
@@ -295,6 +297,13 @@ export type Document_Serialize = {
 	video?: VideoDoc_Serialize | null,
 };
 
+/**  Live zeichnen während der Aufnahme: Wann es wieder aufhört. */
+export type DrawMode = 
+/**  Bleibt an, bis es ausgeschaltet wird (Kürzel, Knopf, Esc, Rechtsklick). */
+"sticky" | 
+/**  Nach jeder Markierung zurück: Klicks gehen wieder an die Apps. */
+"once";
+
 export type ExportFormat = "png" | "jpg";
 
 /**  Flächenfüllung. */
@@ -460,7 +469,7 @@ export type LineStyle = "solid" | "dashed" | "dotted" |
 "double";
 
 /**  Was das Tray-Fenster im Hauptfenster öffnen kann. */
-export type MainView = "gallery" | "settings" | "library";
+export type MainView = "editor" | "gallery" | "settings" | "library";
 
 /**  Ein Mikrofon für die Auswahl im Video-Tab. */
 export type Microphone = {
@@ -616,6 +625,11 @@ export type VideoDoc_Deserialize = {
 	 */
 	layer_times?: LayerTime[],
 	/**
+	 *  Gelöschte Klicks (Zeit der Aufnahme beim Tastendruck): kein Kreis,
+	 *  kein Auto-Zoom. Die Mausspur selbst bleibt unverändert.
+	 */
+	hidden_clicks?: number[],
+	/**
 	 *  Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
 	 *  füllt dann das ganze Bild.
 	 */
@@ -648,6 +662,11 @@ export type VideoDoc_Serialize = {
 	 *  Eintrag sind immer zu sehen.
 	 */
 	layer_times?: LayerTime[],
+	/**
+	 *  Gelöschte Klicks (Zeit der Aufnahme beim Tastendruck): kein Kreis,
+	 *  kein Auto-Zoom. Die Mausspur selbst bleibt unverändert.
+	 */
+	hidden_clicks?: number[],
 	/**
 	 *  Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
 	 *  füllt dann das ganze Bild.
@@ -708,6 +727,7 @@ export type VideoSettings = {
 	camera?: CameraSettings,
 	/**  Auflösung, Codec und Qualität des fertigen Videos. */
 	encoding?: VideoEncoding,
+	draw_mode?: DrawMode,
 };
 
 /**  Was bei einer Video-Aufnahme aufgenommen wird. */

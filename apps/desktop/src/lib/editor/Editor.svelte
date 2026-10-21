@@ -9,9 +9,8 @@
   import GalleryStrip from "./GalleryStrip.svelte";
   import Icon from "./Icon.svelte";
   import LayersPanel from "./LayersPanel.svelte";
-  import { LAYER_MARKER } from "./clipboard";
   import PropertiesBar from "./PropertiesBar.svelte";
-  import Settings from "./Settings.svelte";
+  import SaveAs from "./SaveAs.svelte";
   import Toolbar from "./Toolbar.svelte";
   import Timeline from "./Timeline.svelte";
   import { player } from "./video.svelte";
@@ -36,11 +35,11 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (isTyping(e) || editor.settingsOpen || editor.galleryOpen) return;
+    if (isTyping(e) || editor.galleryOpen || editor.saveAsOpen) return;
     const modKey = e.metaKey || e.ctrlKey;
     if (modKey && e.key === ",") {
       e.preventDefault();
-      editor.settingsOpen = true;
+      void api.openMain("settings");
       return;
     }
     if (!editor.doc) return;
@@ -50,15 +49,11 @@
       const actions: Record<string, () => void> = {
         z: () => (e.shiftKey ? editor.redo() : editor.undo()),
         y: () => editor.redo(),
-        c: () => {
-          // Mit Auswahl: Ebene kopieren, sonst das fertige Bild.
-          if (editor.copyLayer()) api.copyText(LAYER_MARKER);
-          else editor.copy();
-        },
+        c: () => void editor.copyShortcut(),
         d: () => editor.duplicate(),
         a: () => editor.selectAll(),
         g: () => (e.shiftKey ? editor.ungroupSelection() : editor.groupSelection()),
-        s: () => editor.save(),
+        s: () => editor.saveShortcut(e.shiftKey),
         "0": () => editor.fit(),
         "1": () => editor.actualSize(),
         "=": () => editor.zoomAt(1.25),
@@ -210,7 +205,7 @@
             <button
               class="item"
               onclick={() => {
-                editor.settingsOpen = true;
+                void api.openMain("settings");
                 close();
               }}
             >
@@ -226,7 +221,7 @@
         >
           <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
         </button>
-        <button title={t("editor.settings")} onclick={() => (editor.settingsOpen = true)}>
+        <button title={t("editor.settings")} onclick={() => api.openMain("settings")}>
           <Icon d="M12 9a3 3 0 110 6 3 3 0 010-6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z" />
         </button>
       {/if}
@@ -263,8 +258,8 @@
     <Gallery />
   {/if}
 
-  {#if editor.settingsOpen}
-    <Settings />
+  {#if editor.saveAsOpen}
+    <SaveAs />
   {/if}
 
   {#if editor.message}

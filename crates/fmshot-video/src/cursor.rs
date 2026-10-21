@@ -20,6 +20,9 @@ const AUTO_AFTER_MS: u32 = 1800;
 const AUTO_SCALE: f32 = 1.8;
 /// Normale Zeigergrösse in Bildschirmpunkten (Höhe des Pfeils).
 pub const CURSOR_POINTS: f32 = 24.0;
+/// So weit darf ein gemeldeter Klick in FMShot selbst von der Probe der
+/// Mausspur abweichen (Abtastung alle 16 ms, Meldung im Haupt-Thread).
+const OWN_CLICK_SLACK_MS: u32 = 250;
 
 /// Ein Klick (Taste gedrückt) an einer Stelle.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,6 +66,11 @@ impl CursorTrack {
         &self.clicks
     }
 
+    /// Klicks ohne die im Editor gelöschten (`hidden` = Zeiten der Klicks).
+    pub fn visible_clicks<'a>(&'a self, hidden: &'a [u32]) -> impl Iterator<Item = &'a Click> {
+        self.clicks.iter().filter(|c| !hidden.contains(&c.t_ms))
+    }
+
     /// Lage des Zeigers zur Quellzeit (Anteil des Bildschirms), zwischen
     /// zwei Proben weich.
     pub fn position(&self, t_ms: f64) -> Option<(f32, f32)> {
@@ -80,15 +88,44 @@ impl CursorTrack {
         }
     }
 
-    /// Klicks, deren Kreis zur Quellzeit zu sehen ist: (Klick, Fortschritt 0–1).
-    pub fn active_clicks(&self, t_ms: f64) -> impl Iterator<Item = (Click, f32)> + '_ {
+    /// Klicks, deren Kreis zur Quellzeit zu sehen ist: (Klick, Fortschritt
+    /// 0–1). Gelöschte (`hidden`) fehlen.
+    pub fn active_clicks<'a>(
+        &'a self,
+        t_ms: f64,
+        hidden: &'a [u32],
+    ) -> impl Iterator<Item = (Click, f32)> + 'a {
         let from = self
             .clicks
             .partition_point(|c| (c.t_ms as f64) < t_ms - CLICK_MS);
         self.clicks[from..]
             .iter()
             .take_while(move |c| (c.t_ms as f64) <= t_ms)
+            .filter(move |c| !hidden.contains(&c.t_ms))
             .map(move |c| (*c, ((t_ms - c.t_ms as f64) / CLICK_MS) as f32))
+    }
+}
+
+/// Nimmt Klicks aus der Mausspur, die in FMShot selbst passiert sind
+/// (Zeichenleiste, Zeichnen, Aufnahmeleiste, Webcam-Blase): Die Taste gilt
+/// dort als nicht gedrückt – kein Kreis, kein Auto-Zoom. `own_ms` sind die
+/// Zeitpunkte dieser Klicks (Zeit im Video); `samples` zeitlich geordnet.
+pub fn remove_own_clicks(samples: &mut [InputSample], own_ms: &[u32]) {
+    if own_ms.is_empty() {
+        return;
+    }
+    let mut was_down = false;
+    let mut own = false;
+    for s in samples.iter_mut() {
+        if s.down && !was_down {
+            own = own_ms
+                .iter()
+                .any(|&t| t.abs_diff(s.t_ms) <= OWN_CLICK_SLACK_MS);
+        }
+        was_down = s.down;
+        if own && s.down {
+            s.down = false;
+        }
     }
 }
 
@@ -125,10 +162,10 @@ pub fn zoom_crop(x: f32, y: f32, scale: f32) -> Rect {
 }
 
 /// Zoom-Abschnitte aus den Klicks: nahe beieinander liegende Klicks ergeben
-/// einen Abschnitt, mittig auf ihre Lage.
-pub fn auto_zooms(track: &CursorTrack, duration_ms: u32) -> Vec<ZoomSection> {
+/// einen Abschnitt, mittig auf ihre Lage. Gelöschte Klicks (`hidden`) zählen nicht.
+pub fn auto_zooms(track: &CursorTrack, duration_ms: u32, hidden: &[u32]) -> Vec<ZoomSection> {
     let mut groups: Vec<Vec<Click>> = Vec::new();
-    for c in track.clicks() {
+    for c in track.visible_clicks(hidden) {
         match groups.last_mut() {
             Some(g) if c.t_ms - g.last().map_or(0, |l| l.t_ms) <= AUTO_GAP_MS => g.push(*c),
             _ => groups.push(vec![*c]),
@@ -280,6 +317,30 @@ mod tests {
     }
 
     #[test]
+    fn eigene_klicks_fallen_weg() {
+        let sample = |t_ms, down| InputSample {
+            t_ms,
+            x: 0.5,
+            y: 0.5,
+            down,
+        };
+        let mut samples = vec![
+            sample(0, false),
+            sample(100, true),
+            sample(150, true),
+            sample(200, false),
+            sample(1000, true),
+            sample(1100, false),
+            sample(3000, true),
+        ];
+        // Klick in der Leiste bei 90 ms, beim Zeichnen bei 3010 ms.
+        remove_own_clicks(&mut samples, &[90, 3010]);
+        let t = CursorTrack::new(&InputTrack { samples });
+        assert_eq!(t.clicks().len(), 1);
+        assert_eq!(t.clicks()[0].t_ms, 1000);
+    }
+
+    #[test]
     fn zeiger_wird_zwischen_proben_gemittelt() {
         let t = track(&[(0, 0.0, 0.0, false), (100, 1.0, 0.5, false)]);
         assert_eq!(t.position(50.0), Some((0.5, 0.25)));
@@ -290,11 +351,13 @@ mod tests {
     #[test]
     fn klickkreis_nur_kurz_sichtbar() {
         let t = track(&[(1000, 0.5, 0.5, true)]);
-        assert_eq!(t.active_clicks(900.0).count(), 0);
-        let (c, p) = t.active_clicks(1300.0).next().unwrap();
+        assert_eq!(t.active_clicks(900.0, &[]).count(), 0);
+        let (c, p) = t.active_clicks(1300.0, &[]).next().unwrap();
         assert_eq!(c.t_ms, 1000);
         assert!((p - 0.5).abs() < 0.01);
-        assert_eq!(t.active_clicks(1700.0).count(), 0);
+        assert_eq!(t.active_clicks(1700.0, &[]).count(), 0);
+        // Im Editor gelöscht: kein Kreis.
+        assert_eq!(t.active_clicks(1300.0, &[1000]).count(), 0);
     }
 
     #[test]
@@ -328,11 +391,14 @@ mod tests {
             (2100, 0.4, 0.2, false),
             (9000, 0.8, 0.9, true),
         ]);
-        let z = auto_zooms(&t, 10_000);
+        let z = auto_zooms(&t, 10_000, &[]);
         assert_eq!(z.len(), 2);
         assert_eq!((z[0].start_ms, z[0].end_ms), (300, 3800));
         assert!((z[0].x - 0.3).abs() < 1e-6);
         assert_eq!(z[1].end_ms, 10_000);
+        // Gelöschte Klicks ergeben keinen Zoom.
+        let z = auto_zooms(&t, 10_000, &[9000]);
+        assert_eq!(z.len(), 1);
     }
 
     #[test]

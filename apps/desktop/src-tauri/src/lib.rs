@@ -38,6 +38,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         editor::add_asset_from_capture,
         editor::recognize_text,
         editor::copy_text,
+        editor::clipboard_change_count,
         editor::delete_capture,
         editor::set_starred,
         editor::reveal_capture,
@@ -134,9 +135,13 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()))
-        .on_window_event(|window, event| {
-            // Fenster schliessen = verstecken; die App läuft im Tray weiter.
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            // Einstellungen schliessen sich wirklich (beim nächsten Öffnen frisch).
+            WindowEvent::CloseRequested { .. } if window.label() == tray::SETTINGS => {
+                tray::update_activation(window.app_handle(), tray::SETTINGS);
+            }
+            // Sonst: schliessen = verstecken; die App läuft im Tray weiter.
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 if window.label() == tray::POPOVER {
                     tray::hide_popover(window.app_handle());
@@ -144,6 +149,7 @@ pub fn run() {
                     tray::hide_main_window(window.app_handle());
                 }
             }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("FMShot konnte nicht gestartet werden");
@@ -163,6 +169,10 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
         ["capture", "webcam", ..] => Some(capture::Mode::Webcam),
         ["gallery", ..] => {
             tray::show_main_window(app);
+            None
+        }
+        ["settings", ..] => {
+            tray::open_settings(app);
             None
         }
         _ => None,

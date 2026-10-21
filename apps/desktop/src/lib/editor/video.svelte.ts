@@ -43,6 +43,8 @@ export type EditOp =
   | { op: "addZoom"; t: number; x: number; y: number }
   | { op: "setZoom"; index: number; zoom: ZoomSection | null }
   | { op: "autoZoom" }
+  | { op: "hideClick"; source: number }
+  | { op: "showClicks" }
   | { op: "layerTime"; layer: number; range: [number, number] | null };
 
 type Urls = { screen: string | null; webcam: string | null; system: string | null; mic: string | null };
@@ -63,8 +65,10 @@ export class VideoPlayer {
   exporting = $state<number | null>(null);
   /** Das fertige Video ist älter als das Dokument. */
   dirty = $state(false);
-  /** Klicks in Ausgabe-Zeit (Zeitleiste). */
+  /** Sichtbare Klicks in Ausgabe-Zeit (Zeitleiste). */
   clicks = $state<number[]>([]);
+  /** Dieselben Klicks in Zeit der Aufnahme (zum Löschen). */
+  clickSources = $state<number[]>([]);
   hasInput = $state(false);
   /** Grössen in Pixeln, sobald die Videos geladen sind. */
   screenSize = $state<[number, number] | null>(null);
@@ -213,6 +217,7 @@ export class VideoPlayer {
     this.preview.setDoc(json);
     this.durationMs = this.preview.duration();
     this.clicks = Array.from(this.preview.clickTimes());
+    this.clickSources = Array.from(this.preview.clickSources());
     this.outputMs = Math.min(this.outputMs, this.durationMs);
     this.updateScene();
     if (!first) this.scheduleExport();

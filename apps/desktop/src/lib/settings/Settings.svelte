@@ -1,11 +1,11 @@
 <script lang="ts">
-  // Einstellungen: Allgemein, Tastenkürzel, Speichern, Video, Info.
+  // Einstellungen: Allgemein, Tastenkürzel, Speichern, Video, Info. Eigenes
+  // Fenster (Seite `/settings`), unabhängig von Editor und Galerie.
 
   import { onMount } from "svelte";
   import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
-  import type { VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
+  import type { DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
   import { t, type MessageKey } from "$lib/i18n";
-  import { editor } from "./state.svelte";
 
   const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
@@ -19,11 +19,11 @@
   let version = $state("");
   let tab = $state<"general" | "hotkeys" | "saving" | "video" | "about">("general");
   let recording = $state<string | null>(null);
-  let initialLanguage: string | null | undefined;
+  /** Fehlermeldung (z. B. Speichern fehlgeschlagen). */
+  let error = $state<string | null>(null);
 
   onMount(async () => {
     settings = await api.getSettings();
-    initialLanguage = settings.language;
     hotkeys = await api.getHotkeys();
     diagnostics = await api.diagnostics();
     version = (await api.appInfo()).version;
@@ -36,7 +36,7 @@
     try {
       await api.setLaunchAtLogin(enabled);
     } catch (e) {
-      editor.flash(String(e));
+      error = String(e);
     }
     launchAtLogin = await api.getLaunchAtLogin().catch(() => false);
   }
@@ -58,9 +58,9 @@
     try {
       await api.setSettings($state.snapshot(settings) as Settings);
       hotkeys = await api.getHotkeys();
-      if (settings.language !== initialLanguage) location.reload();
+      error = null;
     } catch (e) {
-      editor.flash(String(e));
+      error = String(e);
     }
   }
 
@@ -167,12 +167,8 @@
 
 <svelte:window onfocus={refreshSystemShortcuts} />
 
-<div class="backdrop" role="presentation" onpointerdown={() => (editor.settingsOpen = false)}>
-  <div class="dialog" role="dialog" aria-label={t("settings.title")} tabindex="-1" onpointerdown={(e) => e.stopPropagation()}>
-    <header>
-      <h1>{t("settings.title")}</h1>
-      <button class="close" aria-label="✕" onclick={() => (editor.settingsOpen = false)}>✕</button>
-    </header>
+<div class="page">
+  <div class="content">
     <nav>
       {#each tabs as tb (tb.id)}
         <button class:on={tab === tb.id} onclick={() => (tab = tb.id)}>{t(tb.label)}</button>
@@ -410,6 +406,26 @@
             </select>
           </label>
           <p class="hint">{t("settings.video_hint")}</p>
+
+          <h2>{t("settings.draw_title")}</h2>
+          <label class="row">
+            <span>{t("settings.draw_mode")}</span>
+            <select
+              value={settings.video?.draw_mode ?? "sticky"}
+              onchange={(e) => {
+                settings!.video = { ...settings!.video, draw_mode: e.currentTarget.value as DrawMode };
+                save();
+              }}
+            >
+              <option value="sticky">{t("settings.draw_mode_sticky")}</option>
+              <option value="once">{t("settings.draw_mode_once")}</option>
+            </select>
+          </label>
+          <p class="hint">
+            {t((settings.video?.draw_mode ?? "sticky") === "once" ? "settings.draw_hint_once" : "settings.draw_hint_sticky", {
+              shortcut: hotkeys.find((h) => h.action === "record_draw")?.label ?? "",
+            })}
+          </p>
         {:else}
           <p><b>FMShot {version}</b> · © forellmedia.ch</p>
           <div class="buttons">
@@ -431,36 +447,23 @@
         {/if}
       </section>
     {/if}
+    {#if error}
+      <p class="hint warn" role="alert">{error}</p>
+    {/if}
   </div>
 </div>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgb(0 0 0 / 0.35);
-    display: grid;
-    place-items: center;
-    z-index: 40;
-  }
-  .dialog {
-    width: min(560px, calc(100vw - 32px));
-    max-height: calc(100vh - 64px);
+  .page {
+    height: 100vh;
     overflow: auto;
     background: var(--surface);
     color: var(--text);
-    border-radius: 12px;
-    box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
-    padding: var(--space-4) var(--space-6) var(--space-6);
   }
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  h1 {
-    font-size: 18px;
-    margin: 0;
+  .content {
+    max-width: 580px;
+    margin: 0 auto;
+    padding: var(--space-2) var(--space-6) var(--space-6);
   }
   h2 {
     font-size: 13px;
@@ -473,7 +476,6 @@
     border-bottom: 1px solid var(--border);
   }
   nav button,
-  .close,
   .link,
   .buttons button {
     border: none;

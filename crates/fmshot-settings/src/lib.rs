@@ -65,6 +65,18 @@ pub enum VideoTarget {
     Screen,
 }
 
+/// Live zeichnen während der Aufnahme: Wann es wieder aufhört.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum DrawMode {
+    /// Bleibt an, bis es ausgeschaltet wird (Kürzel, Knopf, Esc, Rechtsklick).
+    #[default]
+    Sticky,
+    /// Nach jeder Markierung zurück: Klicks gehen wieder an die Apps.
+    Once,
+}
+
 /// Einstellungen der Video-Aufnahme (ADR 0011).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -91,6 +103,7 @@ pub struct VideoSettings {
     pub camera: CameraSettings,
     /// Auflösung, Codec und Qualität des fertigen Videos.
     pub encoding: VideoEncoding,
+    pub draw_mode: DrawMode,
 }
 
 /// Einstellungen für Videos nur mit der Webcam.
@@ -153,6 +166,7 @@ impl Default for VideoSettings {
             webcam_layout: WebcamLayout::default(),
             camera: CameraSettings::default(),
             encoding: VideoEncoding::default(),
+            draw_mode: DrawMode::default(),
         }
     }
 }

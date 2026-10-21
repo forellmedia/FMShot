@@ -73,6 +73,8 @@ export const api = {
     isTauri ? ((await unwrap(commands.recognizeText(id))) as OcrBlock[]) : mock.recognizeText(id),
   copyText: (text: string): Promise<null> =>
     isTauri ? unwrap(commands.copyText(text)) : navigator.clipboard.writeText(text).then(() => null),
+  clipboardChangeCount: (): Promise<number | null> =>
+    isTauri ? commands.clipboardChangeCount() : Promise.resolve(null),
   deleteCapture: (id: string): Promise<null> =>
     isTauri ? unwrap(commands.deleteCapture(id)) : mock.deleteCapture(id),
   setStarred: (id: string, starred: boolean): Promise<null> =>

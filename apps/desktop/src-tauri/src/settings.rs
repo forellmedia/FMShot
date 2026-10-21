@@ -7,7 +7,7 @@ use fmshot_hotkeys::{Action, Platform, Shortcut};
 use fmshot_settings::{Settings, action_key};
 use serde::Serialize;
 use specta::Type;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 pub struct SettingsState {
@@ -65,8 +65,15 @@ pub fn get_settings(app: AppHandle) -> Settings {
 pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let state = app.state::<SettingsState>();
     settings.save(&state.path).map_err(|e| e.to_string())?;
-    *state.current.write().unwrap_or_else(|e| e.into_inner()) = settings.clone();
+    let previous = std::mem::replace(
+        &mut *state.current.write().unwrap_or_else(|e| e.into_inner()),
+        settings.clone(),
+    );
     crate::i18n::set_language(settings.language.as_deref());
+    // Alle Fenster laden in der neuen Sprache neu.
+    if previous.language != settings.language {
+        let _ = app.emit("language-changed", ());
+    }
     crate::hotkeys::register(&app);
     if let Err(e) = crate::tray::create(&app) {
         log::error!("Tray-Menü: {e}");

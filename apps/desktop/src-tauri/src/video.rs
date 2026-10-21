@@ -15,13 +15,14 @@ use fmshot_core::{
     CameraFormat, Document, InputSample, InputTrack, LayerTime, Point, Rect, Size, VideoDoc,
     WebcamBackground, WebcamLayout, WebcamMode, WebcamSection, WebcamShape, WebcamTrack,
 };
+use fmshot_hotkeys::{Action, Platform};
 use fmshot_library::VideoSlot;
 use fmshot_media::{MediaError, Permission, RecordFiles, RecordOptions, RecordTarget, Recording};
 use fmshot_overlay::{
     BubbleStyle, DrawEvent, DrawSurface, DrawTool, OverlayHandle, OverlayMode, OverlayResult,
-    RecordAction, RecordLabels, RecordUi, WebcamBubble, WindowTarget,
+    OwnClickWatch, RecordAction, RecordLabels, RecordUi, WebcamBubble, WindowTarget,
 };
-use fmshot_settings::{VideoSettings, VideoTarget};
+use fmshot_settings::{DrawMode, VideoSettings, VideoTarget};
 use fmshot_video::SectionLog;
 use fmshot_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
 use tauri::{AppHandle, Manager};
@@ -57,6 +58,9 @@ thread_local! {
     static OVERLAY: RefCell<Option<OverlayHandle>> = const { RefCell::new(None) };
     static BUBBLE: RefCell<Option<WebcamBubble>> = const { RefCell::new(None) };
     static SURFACE: RefCell<Option<DrawSurface>> = const { RefCell::new(None) };
+    static OWN_CLICKS: RefCell<Option<OwnClickWatch>> = const { RefCell::new(None) };
+    /// Kürzel für Zeichnen ein/aus, steht auf dem Knopf der Leiste.
+    static DRAW_SHORTCUT: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// Was nach der Auswahl aufgenommen wird.
@@ -508,7 +512,8 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     }
     let mouse = (!camera_only).then(|| MouseLog::start(app, &recording, &choice));
     // Live zeichnen gibt es nur mit Bildschirm.
-    let sketch = (!camera_only).then(|| Sketch::open(app, &choice, &recording));
+    let draw_once = settings.draw_mode == DrawMode::Once;
+    let sketch = (!camera_only).then(|| Sketch::open(app, &choice, &recording, draw_once));
 
     let mut failure = None;
     while !flags.stop.load(Ordering::Acquire) && !flags.cancel.load(Ordering::Acquire) {
@@ -619,6 +624,8 @@ struct Sketch {
     /// Ausgabepixel je Pixel der Aufnahme fürs Bild auf dem Bildschirm
     /// (Punkte reichen, das fertige Video zeichnet in voller Grösse).
     render_scale: f32,
+    /// Nach jeder Markierung zurück (Einstellung [`DrawMode::Once`]).
+    once: bool,
 }
 
 /// SF Symbol je Werkzeug.
@@ -635,13 +642,19 @@ fn tool_symbol(tool: SketchTool) -> &'static str {
 }
 
 impl Sketch {
-    fn open(app: &AppHandle, choice: &Choice, recording: &Arc<dyn Recording>) -> Arc<Self> {
+    fn open(
+        app: &AppHandle,
+        choice: &Choice,
+        recording: &Arc<dyn Recording>,
+        once: bool,
+    ) -> Arc<Self> {
         let (_, _, w, h) = choice.area;
         let sketch = Arc::new(Self {
             state: Mutex::new(LiveSketch::new((w, h), choice.scale)),
             recording: recording.clone(),
             started: Instant::now(),
             render_scale: 1.0 / choice.scale.max(1.0),
+            once,
         });
         let (s, display_id, area) = (sketch.clone(), choice.display_id, choice.area);
         let _ = app.run_on_main_thread(move || {
@@ -709,7 +722,11 @@ impl Sketch {
             }
             DrawEvent::Press { x, y } => s.press(Point::new(x, y), clock),
             DrawEvent::Drag { x, y, shift } => s.drag(Point::new(x, y), shift),
-            DrawEvent::Release { x, y, shift } => s.release(Point::new(x, y), shift, clock),
+            DrawEvent::Release { x, y, shift } => {
+                if s.release(Point::new(x, y), shift, clock) && self.once {
+                    with_surface(|surface| set_drawing(surface, false));
+                }
+            }
             // Esc entfernt die Zeichnungen, ein zweites Esc beendet das Zeichnen.
             DrawEvent::Escape => {
                 if !s.clear(clock) {
@@ -770,7 +787,7 @@ fn with_surface(f: impl FnOnce(&DrawSurface)) {
 /// Zeichnen ein/aus und den Knopf in der Leiste nachführen (Haupt-Thread).
 fn set_drawing(surface: &DrawSurface, on: bool) {
     surface.set_active(on);
-    let label = t(if on { "video.draw_done" } else { "video.draw" }, &[]);
+    let label = DRAW_SHORTCUT.with(|s| draw_label(on, &s.borrow()));
     UI.with(|u| {
         if let Some(ui) = u.borrow().as_ref() {
             ui.set_label(RecordAction::Draw, &label);
@@ -782,15 +799,29 @@ fn set_drawing(surface: &DrawSurface, on: bool) {
 const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Mausspur während der Aufnahme (Etappe 5): Lage relativ zum
-/// aufgenommenen Bereich und ob die Taste gedrückt ist.
+/// aufgenommenen Bereich und ob die Taste gedrückt ist. Klicks in FMShot
+/// selbst (Leisten, Zeichnen) fallen beim Abschluss heraus.
 struct MouseLog {
+    app: AppHandle,
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Vec<InputSample>>>,
+    /// Zeitpunkte der Klicks in FMShot selbst (Zeit im Video).
+    own_clicks: Arc<Mutex<Vec<u32>>>,
 }
 
 impl MouseLog {
     fn start(app: &AppHandle, recording: &Arc<dyn Recording>, choice: &Choice) -> Self {
+        let own_clicks = Arc::new(Mutex::new(Vec::new()));
+        let (rec, own) = (recording.clone(), own_clicks.clone());
+        let _ = app.run_on_main_thread(move || {
+            let watch = fmshot_overlay::watch_own_clicks(Box::new(move || {
+                let at = rec.elapsed().as_millis().min(u32::MAX as u128) as u32;
+                own.lock().unwrap_or_else(|e| e.into_inner()).push(at);
+            }));
+            OWN_CLICKS.with(|w| *w.borrow_mut() = Some(watch));
+        });
         let running = Arc::new(AtomicBool::new(true));
+        let handle = app.clone();
         let area = area_points(app, choice);
         let (app, recording, flag) = (app.clone(), recording.clone(), running.clone());
         let thread = std::thread::spawn(move || {
@@ -822,17 +853,37 @@ impl MouseLog {
             samples
         });
         Self {
+            app: handle,
             running,
             thread: Some(thread),
+            own_clicks,
         }
     }
 
     fn finish(mut self) -> Vec<InputSample> {
-        self.running.store(false, Ordering::Release);
-        self.thread
+        self.stop();
+        let mut samples = self
+            .thread
             .take()
             .and_then(|t| t.join().ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let own = self.own_clicks.lock().unwrap_or_else(|e| e.into_inner());
+        fmshot_video::cursor::remove_own_clicks(&mut samples, &own);
+        samples
+    }
+
+    fn stop(&self) {
+        self.running.store(false, Ordering::Release);
+        let _ = self.app.run_on_main_thread(|| {
+            OWN_CLICKS.with(|w| w.borrow_mut().take());
+        });
+    }
+}
+
+/// Auch bei Abbruch: Abtastung und Wächter beenden.
+impl Drop for MouseLog {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -1103,6 +1154,27 @@ fn close_ui(app: &AppHandle) {
     });
 }
 
+/// Beschriftung des Zeichnen-Knopfs, mit Kürzel (z. B. „Zeichnen  ⇧⌘8“).
+fn draw_label(on: bool, shortcut: &str) -> String {
+    let label = t(if on { "video.draw_done" } else { "video.draw" }, &[]);
+    if shortcut.is_empty() {
+        label
+    } else {
+        format!("{label}  {shortcut}")
+    }
+}
+
+/// Aktuelles Kürzel für Zeichnen ein/aus (leer, wenn keins belegt ist).
+fn draw_shortcut(app: &AppHandle) -> String {
+    let platform = Platform::current();
+    crate::settings::get(app)
+        .effective_hotkeys(platform)
+        .into_iter()
+        .find(|(a, _)| *a == Action::RecordDraw)
+        .map(|(_, s)| s.label(platform))
+        .unwrap_or_default()
+}
+
 fn set_label(app: &AppHandle, action: RecordAction, text: String) {
     let _ = app.run_on_main_thread(move || {
         UI.with(|u| {
@@ -1138,9 +1210,11 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
     });
     let large = webcam.map(|_| t("video.webcam_large", &[]));
     // Zeichnen nur mit Bildschirm.
-    let draw = choice.target.map(|_| t("video.draw", &[]));
+    let shortcut = draw_shortcut(app);
+    let draw = choice.target.map(|_| draw_label(false, &shortcut));
     let (display_id, rect, flags) = (choice.display_id, choice.rect, flags.clone());
     let _ = app.run_on_main_thread(move || {
+        DRAW_SHORTCUT.with(|s| *s.borrow_mut() = shortcut);
         let ui = fmshot_overlay::open_record_ui(
             display_id,
             rect,

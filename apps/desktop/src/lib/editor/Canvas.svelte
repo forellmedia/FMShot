@@ -43,7 +43,6 @@
   } from "./model";
   import { measureText, render, renderer } from "./renderer";
   import { LayerCache, type Surface } from "./layerCache";
-  import { LAYER_MARKER } from "./clipboard";
   import { player } from "./video.svelte";
   import { visibleVideoLayers, withVisible } from "./videoLayers";
   import VideoStage from "./VideoStage.svelte";
@@ -971,16 +970,16 @@
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
     const items = [...(e.clipboardData?.items ?? [])];
-    const image = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
-    if (image) {
-      e.preventDefault();
-      const file = image.getAsFile();
-      if (file) editor.addImageBytes(new Uint8Array(await file.arrayBuffer()));
+    // Datei sofort holen – nach dem ersten await ist die Zwischenablage weg.
+    const file = items.find((i) => i.kind === "file" && i.type.startsWith("image/"))?.getAsFile();
+    if (!file && !editor.hasLayerClipboard) return;
+    e.preventDefault();
+    // Noch die eigene ⌘C-Kopie mit Ebenen drin: die Ebenen einfügen, nicht das Bild.
+    if (await editor.clipboardHoldsLayers()) {
+      editor.pasteLayer();
       return;
     }
-    if (e.clipboardData?.getData("text/plain") === LAYER_MARKER && editor.pasteLayer()) {
-      e.preventDefault();
-    }
+    if (file) editor.addImageBytes(new Uint8Array(await file.arrayBuffer()));
   }
 
   function onDoubleClick(e: MouseEvent) {
@@ -1059,9 +1058,21 @@
 
   function onTextKey(e: KeyboardEvent) {
     e.stopPropagation();
-    if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+    const mod = e.metaKey || e.ctrlKey;
+    if (e.key === "Escape" || (e.key === "Enter" && mod)) {
       e.preventDefault();
       commitText();
+      return;
+    }
+    // Speichern und Kopieren mitten im Schreiben: Text übernehmen, dann wie
+    // sonst. ⌘C mit markiertem Text kopiert weiterhin nur diesen.
+    const key = e.key.toLowerCase();
+    const noTextSelected = textarea?.selectionStart === textarea?.selectionEnd;
+    if (mod && (key === "s" || (key === "c" && noTextSelected))) {
+      e.preventDefault();
+      commitText();
+      if (key === "s") editor.saveShortcut(e.shiftKey);
+      else void editor.copyShortcut();
     }
   }
 

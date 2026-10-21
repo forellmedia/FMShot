@@ -34,6 +34,10 @@ pub struct VideoDoc {
     /// Eintrag sind immer zu sehen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_times: Vec<LayerTime>,
+    /// Gelöschte Klicks (Zeit der Aufnahme beim Tastendruck): kein Kreis,
+    /// kein Auto-Zoom. Die Mausspur selbst bleibt unverändert.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_clicks: Vec<u32>,
     /// Nur Webcam, ohne Bildschirm: Format des fertigen Videos. Die Webcam
     /// füllt dann das ganze Bild.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,6 +239,7 @@ impl Default for VideoDoc {
             cursor: CursorStyle::default(),
             zooms: Vec::new(),
             layer_times: Vec::new(),
+            hidden_clicks: Vec::new(),
             camera_only: None,
         }
     }

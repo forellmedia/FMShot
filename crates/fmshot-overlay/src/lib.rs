@@ -379,6 +379,28 @@ pub fn show_toast(text: &str) {
     let _ = text;
 }
 
+/// Meldet Mausklicks in Fenstern von FMShot selbst (Aufnahmeleiste,
+/// Zeichenfläche, Webcam-Blase, Tray …), solange der Wächter lebt. So
+/// erscheinen sie in der Mausspur des Videos nicht als Klick.
+pub struct OwnClickWatch {
+    #[cfg(target_os = "macos")]
+    _inner: Option<macos::ClickWatch>,
+}
+
+/// Startet den Wächter; `on_press` läuft im Haupt-Thread. Erstellen und
+/// freigeben im Haupt-Thread. Windows/Linux: meldet vorerst nichts.
+pub fn watch_own_clicks(on_press: Box<dyn Fn()>) -> OwnClickWatch {
+    #[cfg(target_os = "macos")]
+    return OwnClickWatch {
+        _inner: macos::watch_own_clicks(on_press),
+    };
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = on_press;
+        OwnClickWatch {}
+    }
+}
+
 /// Rechteck in Punkten (Ursprung oben links) → physische Pixel.
 /// Rundet nach aussen, damit nichts Sichtbares abgeschnitten wird, und
 /// begrenzt auf den Monitor.
@@ -507,7 +529,7 @@ pub enum DrawEvent {
     },
     /// Esc gedrückt.
     Escape,
-    /// Knopf „Fertig“ in der Leiste.
+    /// Knopf „Fertig“ in der Leiste oder Rechtsklick.
     Exit,
 }
 

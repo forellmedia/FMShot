@@ -411,7 +411,7 @@ pub fn scene_full(
     };
     let mut extra = Vec::new();
     if style.highlight_clicks {
-        for (c, p) in track.active_clicks(t_ms) {
+        for (c, p) in track.active_clicks(t_ms, &doc.hidden_clicks) {
             if let Some((x, y)) = to_output(c.x, c.y) {
                 let d = size * 1.4 * (0.5 + 0.9 * p);
                 extra.push((

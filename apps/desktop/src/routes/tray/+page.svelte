@@ -19,12 +19,6 @@
   import { t, type MessageKey } from "$lib/i18n";
 
   type Tab = "image" | "screen" | "webcam" | "settings";
-  const TABS: [Tab, MessageKey][] = [
-    ["image", "tray.tab_image"],
-    ["screen", "tray.tab_screen"],
-    ["webcam", "tray.tab_webcam"],
-    ["settings", "tray.tab_settings"],
-  ];
   const TAB_KEY = "fmshot.tray.tab";
 
   const ICONS = {
@@ -34,10 +28,26 @@
     scroll: "M7 3h10v18H7zM12 7v6M9.5 10.5 12 13l2.5-2.5",
     text: "M5 6V4h14v2M12 4v16M9 20h6",
     gallery: "M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z",
+    // Stift
+    editor: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
     folder: "M3 6h6l2 2h10v11H3z",
-    settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12h2M3 12h2M12 3v2M12 19v2M17 7l1.5-1.5M5.5 18.5 7 17M17 17l1.5 1.5M5.5 5.5 7 7",
+    // Zahnrad
+    settings:
+      "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0",
     quit: "M10 4H5v16h5M14 8l4 4-4 4M18 12H9",
+    // Reiter: Foto (Rahmen mit Berg und Sonne), Bildschirm mit Wiedergabe-Dreieck,
+    // Webcam (Linse auf Fuss).
+    image: "M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M14 8.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0",
+    record: "M3 4h18v12H3zM8 20h8M12 16v4M10.5 7.5v5l4-2.5z",
+    webcam: "M6 10a6 6 0 1 0 12 0 6 6 0 1 0-12 0M10 10a2 2 0 1 0 4 0 2 2 0 1 0-4 0M12 16v4M8 20h8",
   };
+
+  const TABS: [Tab, MessageKey, string][] = [
+    ["image", "tray.tab_image", ICONS.image],
+    ["screen", "tray.tab_screen", ICONS.record],
+    ["webcam", "tray.tab_webcam", ICONS.webcam],
+    ["settings", "tray.tab_settings", ICONS.settings],
+  ];
 
   const IMAGE_ACTIONS: { mode: CaptureMode; hotkey: string; label: MessageKey; icon: string }[] = [
     { mode: "region", hotkey: "capture_region", label: "capture.region", icon: ICONS.region },
@@ -176,9 +186,10 @@
 
 <div class="tray">
   <div class="tabs" role="tablist">
-    {#each TABS as [id, label] (id)}
+    {#each TABS as [id, label, icon] (id)}
       <button role="tab" aria-selected={tab === id} class:on={tab === id} onclick={() => (tab = id)}>
-        {t(label)}
+        <Icon d={icon} size={20} />
+        <span>{t(label)}</span>
       </button>
     {/each}
   </div>
@@ -528,6 +539,10 @@
   </section>
 
   <footer>
+    <button class="link" onclick={() => api.openMain("editor")}>
+      <Icon d={ICONS.editor} size={16} />
+      {t("tray.open_editor")}
+    </button>
     <button class="link" onclick={() => api.openMain("gallery")}>
       <Icon d={ICONS.gallery} size={16} />
       {t("tray.open_gallery")}
@@ -559,19 +574,23 @@
 
   .tabs {
     display: grid;
-    grid-template-columns: repeat(4, auto);
+    grid-template-columns: repeat(4, 1fr);
     padding: 3px;
     border-radius: var(--radius);
     background: var(--hover);
   }
 
   .tabs button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
     border: 0;
     background: none;
     color: var(--text-muted);
     font: inherit;
-    font-size: 13px;
-    padding: 6px 4px;
+    font-size: 11px;
+    padding: 6px 2px 5px;
     border-radius: 6px;
     cursor: pointer;
     white-space: nowrap;
@@ -655,10 +674,12 @@
     cursor: pointer;
   }
 
+  /* Innen statt aussen verstärkt: Der Rand bleibt innerhalb des Knopfs und
+     wird vom scrollenden Bereich nicht abgeschnitten. */
   .targets button.on {
     border-color: var(--accent);
     color: var(--text);
-    box-shadow: 0 0 0 1px var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
   .rows {

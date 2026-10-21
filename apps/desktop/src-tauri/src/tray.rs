@@ -24,6 +24,9 @@ use crate::i18n::t;
 
 /// Fenster-Kennung des Tray-Fensters.
 pub const POPOVER: &str = "tray";
+/// Fenster-Kennung der Einstellungen (eigenes Fenster, Svelte-Seite `/settings`).
+pub const SETTINGS: &str = "settings";
+const SETTINGS_SIZE: (f64, f64) = (620.0, 660.0);
 const POPOVER_SIZE: (f64, f64) = (340.0, 500.0);
 /// Klick aufs Symbol bei offenem Fenster: Das Fenster verliert zuerst den
 /// Fokus und schliesst sich – der Klick soll es nicht gleich wieder öffnen.
@@ -45,7 +48,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let text = item("capture_text", "capture.text")?;
     let video = item("capture_video", "tray.capture_video")?;
     let webcam = item("capture_webcam", "tray.capture_webcam")?;
-    let open = item("open_window", "tray.open_window")?;
+    let open = item("open_window", "tray.open_editor")?;
     let library = item("open_library", "tray.open_library")?;
     let settings = item("settings", "tray.settings")?;
     let quit = item("quit", "tray.quit")?;
@@ -102,7 +105,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "capture_scroll_auto" => capture::start(app, capture::Mode::ScrollAuto),
             "capture_video" => capture::start(app, capture::Mode::Video),
             "capture_webcam" => capture::start(app, capture::Mode::Webcam),
-            "open_window" => show_main_window(app),
+            "open_window" => open_editor(app),
             "open_library" => open_library(app),
             "settings" => open_settings(app),
             "quit" => app.exit(0),
@@ -127,9 +130,53 @@ fn open_library(app: &AppHandle) {
     }
 }
 
-fn open_settings(app: &AppHandle) {
-    show_main_window(app);
-    let _ = app.emit("open-settings", ());
+/// Einstellungen als eigenes Fenster, unabhängig vom Hauptfenster. Es wird
+/// bei jedem Öffnen neu angelegt und beim Schliessen entfernt – so zeigt es
+/// immer den aktuellen Stand.
+pub fn open_settings(app: &AppHandle) {
+    // Mit offenem Fenster ins Dock und in ⌘⇥, damit man es wiederfindet.
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    if let Some(window) = app.get_webview_window(SETTINGS) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings".into()))
+        .title(t("settings.title", &[]))
+        .inner_size(SETTINGS_SIZE.0, SETTINGS_SIZE.1)
+        .min_inner_size(520.0, 420.0)
+        .center()
+        .build();
+    match built {
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(e) => log::error!("Einstellungen: {e}"),
+    }
+}
+
+/// Ohne sichtbares Fenster (Haupt- oder Einstellungsfenster) verschwindet
+/// FMShot aus Dock und ⌘⇥. `closing` = Fenster, das gerade zugeht.
+pub fn update_activation(app: &AppHandle, closing: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let open = ["main", SETTINGS].iter().any(|label| {
+            *label != closing
+                && app
+                    .get_webview_window(label)
+                    .is_some_and(|w| w.is_visible().unwrap_or(false))
+        });
+        let policy = if open {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        let _ = app.set_activation_policy(policy);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, closing);
 }
 
 // --- Tray-Fenster ------------------------------------------------------------------
@@ -246,13 +293,18 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// Hauptfenster mit dem Editor zeigen (eine offene Galerie schliesst sich).
+fn open_editor(app: &AppHandle) {
+    show_main_window(app);
+    let _ = app.emit("open-editor", ());
+}
+
 /// Fenster verstecken – FMShot läuft im Tray weiter.
 pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    update_activation(app, "main");
 }
 
 // --- Commands für das Tray-Fenster ---------------------------------------------------
@@ -261,6 +313,7 @@ pub fn hide_main_window(app: &AppHandle) {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum MainView {
+    Editor,
     Gallery,
     Settings,
     Library,
@@ -268,9 +321,11 @@ pub enum MainView {
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_main(app: AppHandle, view: MainView) {
+// async: Fenster aus einem synchronen Befehl anzulegen blockiert unter Windows.
+pub async fn open_main(app: AppHandle, view: MainView) {
     hide_popover(&app);
     match view {
+        MainView::Editor => open_editor(&app),
         MainView::Gallery => {
             show_main_window(&app);
             let _ = app.emit("open-gallery", ());

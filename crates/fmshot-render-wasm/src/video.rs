@@ -53,6 +53,12 @@ enum Op {
     },
     /// Zoom-Abschnitte aus den Klicks neu berechnen (ersetzt alle).
     AutoZoom,
+    /// Klick löschen (`source` = Zeit der Aufnahme, siehe `clickSources`).
+    HideClick {
+        source: u32,
+    },
+    /// Alle gelöschten Klicks wieder zeigen.
+    ShowClicks,
     LayerTime {
         layer: u32,
         range: Option<(f64, f64)>,
@@ -194,13 +200,21 @@ impl VideoPreview {
         timeline::skip_cut(&self.doc, source_ms).unwrap_or(-1.0)
     }
 
-    /// Klicks in Ausgabe-Zeit (für die Zeitleiste): `[t, t, …]`.
+    /// Sichtbare Klicks in Ausgabe-Zeit (für die Zeitleiste): `[t, t, …]`.
     #[wasm_bindgen(js_name = clickTimes)]
     pub fn click_times(&self) -> Vec<f64> {
         self.cursor
-            .clicks()
-            .iter()
+            .visible_clicks(&self.doc.hidden_clicks)
             .map(|c| timeline::output_time(&self.doc, c.t_ms as f64))
+            .collect()
+    }
+
+    /// Dieselben Klicks in Zeit der Aufnahme (zum Löschen).
+    #[wasm_bindgen(js_name = clickSources)]
+    pub fn click_sources(&self) -> Vec<u32> {
+        self.cursor
+            .visible_clicks(&self.doc.hidden_clicks)
+            .map(|c| c.t_ms)
             .collect()
     }
 
@@ -217,10 +231,12 @@ impl VideoPreview {
             Op::AddZoom { t, x, y } => edit::add_zoom(doc, t, x, y),
             Op::SetZoom { index, zoom } => edit::set_zoom(doc, index, zoom),
             Op::AutoZoom => VideoDoc {
-                zooms: auto_zooms(&self.cursor, doc.duration_ms),
+                zooms: auto_zooms(&self.cursor, doc.duration_ms, &doc.hidden_clicks),
                 ..doc.clone()
             },
             Op::LayerTime { layer, range } => edit::set_layer_time(doc, layer, range),
+            Op::HideClick { source } => edit::hide_click(doc, source),
+            Op::ShowClicks => edit::show_clicks(doc),
         };
         Ok(serde_json::to_string(&out)?)
     }

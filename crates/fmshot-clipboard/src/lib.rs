@@ -64,6 +64,18 @@ pub fn copy_file(path: &std::path::Path) -> Result<(), ClipboardError> {
     }
 }
 
+/// Zähler, der bei jeder Änderung der Zwischenablage weiterzählt – auch
+/// durch andere Programme. So lässt sich prüfen, ob noch die eigene Kopie
+/// drinliegt. `None`, wo es keinen gibt (Linux).
+pub fn change_count() -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    return Some(macos::change_count());
+    #[cfg(target_os = "windows")]
+    return Some(windows::change_count());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    None
+}
+
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -103,6 +115,11 @@ mod macos {
         } else {
             Err(ClipboardError::Unavailable("writeObjects".into()))
         }
+    }
+
+    pub fn change_count() -> u32 {
+        // Nur Gleichheit zählt – Abschneiden auf 32 Bit schadet nicht.
+        NSPasteboard::generalPasteboard().changeCount() as u32
     }
 
     pub fn copy_text(text: &str) -> Result<(), ClipboardError> {

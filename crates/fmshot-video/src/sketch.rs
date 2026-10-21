@@ -246,9 +246,11 @@ impl LiveSketch {
     }
 
     /// Maustaste los: Die Zeichnung kommt in die Gruppe (zu kleine
-    /// Zeichnungen, z. B. ein Klick mit dem Pfeil, fallen weg).
-    pub fn release(&mut self, p: Point, shift: bool, clock: Clock) {
+    /// Zeichnungen, z. B. ein Klick mit dem Pfeil, fallen weg). Gibt zurück,
+    /// ob eine Zeichnung entstanden ist.
+    pub fn release(&mut self, p: Point, shift: bool, clock: Clock) -> bool {
         self.drag(p, shift);
+        let mut drawn = false;
         if let Some(active) = self.active.take()
             && !self.too_small(&active.kind)
         {
@@ -256,8 +258,10 @@ impl LiveSketch {
                 kind: active.kind,
                 start_ms: active.start_ms,
             });
+            drawn = true;
         }
         self.expires = (!self.visible.is_empty()).then_some(clock.wall_ms + HOLD_MS);
+        drawn
     }
 
     fn too_small(&self, kind: &LayerKind) -> bool {
@@ -381,10 +385,10 @@ mod tests {
         Clock { rec_ms, wall_ms }
     }
 
-    fn draw(s: &mut LiveSketch, a: (f32, f32), b: (f32, f32), clock: Clock) {
+    fn draw(s: &mut LiveSketch, a: (f32, f32), b: (f32, f32), clock: Clock) -> bool {
         s.press(Point::new(a.0, a.1), clock);
         s.drag(Point::new((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0), false);
-        s.release(Point::new(b.0, b.1), false, clock);
+        s.release(Point::new(b.0, b.1), false, clock)
     }
 
     #[test]
@@ -409,9 +413,9 @@ mod tests {
         let mut s = LiveSketch::new((400, 300), 1.0);
         assert!(!s.clear(at(0, 0)));
         // Nur geklickt: kein Pfeil
-        draw(&mut s, (10.0, 10.0), (11.0, 10.0), at(500, 1000));
+        assert!(!draw(&mut s, (10.0, 10.0), (11.0, 10.0), at(500, 1000)));
         assert!(s.is_empty());
-        draw(&mut s, (10.0, 10.0), (90.0, 10.0), at(700, 1200));
+        assert!(draw(&mut s, (10.0, 10.0), (90.0, 10.0), at(700, 1200)));
         assert!(s.clear(at(900, 1400)));
         assert!(s.is_empty());
         let items = s.finish(5000);

@@ -18,6 +18,8 @@
   let panel = $state<"audio" | "cursor" | null>(null);
   /** Ausgewählter Zoom-Abschnitt (Index in `video.zooms`). */
   let zoomIndex = $state<number | null>(null);
+  /** Ausgewählter Klick (Zeit der Aufnahme) – löschen mit Entf. */
+  let clickSource = $state<number | null>(null);
   let drag: { start: number; moved: boolean } | null = null;
 
   const video = $derived(editor.doc?.video ?? null);
@@ -196,6 +198,36 @@
 
   const zoom = $derived(zoomIndex != null ? (video?.zooms?.[zoomIndex] ?? null) : null);
 
+  /** Ausgewählter Klick in Ausgabe-Zeit, solange es ihn gibt. */
+  const clickAt = $derived.by(() => {
+    if (clickSource == null) return null;
+    const i = player.clickSources.indexOf(clickSource);
+    return i < 0 ? null : player.clicks[i];
+  });
+  const hiddenClicks = $derived(video?.hidden_clicks?.length ?? 0);
+
+  // Eine Ebene gewählt: Der Klick ist nicht mehr gemeint.
+  $effect(() => {
+    if (editor.selectedIds.length) clickSource = null;
+  });
+
+  function selectClick(e: PointerEvent, i: number) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    player.pause();
+    // Ebenen abwählen, sonst löscht Entf auch die Ebene.
+    editor.selectedIds = [];
+    zoomIndex = null;
+    clickSource = player.clickSources[i];
+    player.seek(player.clicks[i]);
+  }
+
+  function deleteClick() {
+    if (clickSource == null) return;
+    player.edit({ op: "hideClick", source: clickSource });
+    clickSource = null;
+  }
+
   function setZoom(patch: Partial<{ x: number; y: number; scale: number }>) {
     if (zoomIndex == null || !zoom) return;
     player.edit({ op: "setZoom", index: zoomIndex, zoom: { ...zoom, ...patch } });
@@ -204,8 +236,13 @@
   function onKey(e: KeyboardEvent) {
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-    if (editor.settingsOpen || editor.galleryOpen || editor.editingTextId) return;
-    if (e.code === "Space") {
+    if (editor.galleryOpen || editor.editingTextId) return;
+    if (clickAt != null && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      deleteClick();
+    } else if (clickAt != null && e.key === "Escape") {
+      clickSource = null;
+    } else if (e.code === "Space") {
       e.preventDefault();
       player.toggle();
     } else if (e.key === "ArrowLeft" && e.altKey) {
@@ -325,6 +362,11 @@
         />
         <span>{t("video.cursor_clicks")}</span>
       </label>
+      {#if hiddenClicks}
+        <button class="link" onclick={() => player.edit({ op: "showClicks" })}>
+          {t("video.clicks_restore", { count: String(hiddenClicks) })}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -348,10 +390,22 @@
       {#each cutMarks as m, i (i)}
         <span class="cutmark" style:left="{x(m)}px" title={t("video.cut_here")}></span>
       {/each}
-      {#each player.clicks as c, i (i)}
-        <span class="click" style:left="{x(c)}px"></span>
-      {/each}
     </div>
+    {#if player.hasInput && !cameraOnly && (player.clicks.length || hiddenClicks)}
+      <div class="lane">
+        <span class="name">{t("video.track_clicks")}</span>
+        {#each player.clicks as c, i (player.clickSources[i])}
+          <button
+            class="click"
+            class:selected={clickSource === player.clickSources[i]}
+            style:left="{x(c)}px"
+            title={t("video.click_hint")}
+            aria-label={t("video.click_at", { time: formatTime(c, true) })}
+            onpointerdown={(e) => selectClick(e, i)}
+          ></button>
+        {/each}
+      </div>
+    {/if}
     {#if video?.webcam && !cameraOnly}
       <div class="lane">
         <span class="name">{t("video.webcam")}</span>
@@ -438,6 +492,19 @@
           zoomIndex = null;
         }}>{t("video.zoom_delete")}</button
       >
+    </div>
+  {/if}
+  {#if clickAt != null}
+    <div class="panel">
+      <span class="label">{t("video.click")}</span>
+      <span class="muted">{formatTime(clickAt, true)}</span>
+      <span class="grow"></span>
+      {#if hiddenClicks}
+        <button class="link" onclick={() => player.edit({ op: "showClicks" })}>
+          {t("video.clicks_restore", { count: String(hiddenClicks) })}
+        </button>
+      {/if}
+      <button onclick={deleteClick}>{t("video.click_delete")}</button>
     </div>
   {/if}
   {#if layer && layerBlock}
@@ -646,15 +713,28 @@
     margin-left: -1px;
     background: var(--accent);
   }
+  /* Punkt mit grösserer Trefferfläche (Rand durchsichtig). */
   .click {
     position: absolute;
-    top: 7px;
-    width: 6px;
-    height: 6px;
-    margin-left: -3px;
+    top: 2px;
+    width: 16px;
+    height: 16px;
+    margin-left: -8px;
+    padding: 0;
+    border: 5px solid transparent;
     border-radius: 50%;
-    background: var(--accent);
-    opacity: 0.7;
+    background: var(--accent) content-box;
+    opacity: 0.75;
+    cursor: pointer;
+    z-index: 3;
+  }
+  .click:hover,
+  .click.selected {
+    opacity: 1;
+    border-width: 4px;
+  }
+  .click.selected {
+    box-shadow: 0 0 0 2px var(--text);
   }
   .selection {
     position: absolute;

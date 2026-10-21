@@ -126,11 +126,14 @@ export class Editor {
   busy = $state(false);
   /** Suchbegriff der Galerie (Volltext über erkannten Text). */
   query = $state("");
-  settingsOpen = $state(false);
   /** Galerie im Vollbild offen. */
   galleryOpen = $state(false);
+  /** Auswahl des Formats für „Speichern als …“ (⇧⌘S) offen. */
+  saveAsOpen = $state(false);
   /** Kopierte Ebenen für ⌘V. */
   private layerClipboard: Layer[] = [];
+  /** Änderungszähler der Zwischenablage, als die Ebenen kopiert wurden. */
+  private layerClipboardStamp: number | null = null;
   /** Zählt jede Änderung am Dokument – die Leinwand zeichnet dann neu. */
   revision = $state(0);
 
@@ -221,8 +224,8 @@ export class Editor {
       await this.refreshCaptures();
       await this.open(id);
     });
-    await on("open-settings", () => (this.settingsOpen = true));
     await on("open-gallery", () => (this.galleryOpen = true));
+    await on("open-editor", () => (this.galleryOpen = false));
   }
 
   async refreshCaptures() {
@@ -695,6 +698,29 @@ export class Editor {
     return true;
   }
 
+  /**
+   * ⌘C: immer das fertige Bild in die Zwischenablage – auch mit Auswahl
+   * (z. B. direkt nach dem Zeichnen eines Pfeils). Die ausgewählten Ebenen
+   * merkt sich der Editor dazu: ⌘V fügt sie ein, solange seither nichts
+   * anderes kopiert wurde.
+   */
+  async copyShortcut() {
+    const layers = this.copyLayer();
+    this.layerClipboardStamp = null;
+    await this.copy();
+    if (layers) this.layerClipboardStamp = await api.clipboardChangeCount();
+  }
+
+  /** Liegt noch die Kopie aus `copyShortcut` mit Ebenen in der Zwischenablage? */
+  async clipboardHoldsLayers(): Promise<boolean> {
+    if (!this.layerClipboard.length || this.layerClipboardStamp == null) return false;
+    return (await api.clipboardChangeCount()) === this.layerClipboardStamp;
+  }
+
+  get hasLayerClipboard() {
+    return this.layerClipboard.length > 0;
+  }
+
   duplicate() {
     if (this.copyLayer()) this.pasteLayer();
   }
@@ -731,11 +757,17 @@ export class Editor {
     }
   }
 
-  /** Speichern im Format aus den Einstellungen (⌘S). */
+  /** Speichern im Format aus den Einstellungen (⌘S); ⇧⌘S fragt danach. */
   async save() {
     if (this.current?.videoPath) return player.saveAs();
     const format = (await api.getSettings()).save_format ?? "png";
     await this.exportAs(format);
+  }
+
+  /** ⌘S speichert gleich, ⇧⌘S fragt zuerst nach dem Format (Video: immer MP4). */
+  saveShortcut(askFormat: boolean) {
+    if (askFormat && this.doc && !this.current?.videoPath) this.saveAsOpen = true;
+    else void this.save();
   }
 
   async exportAs(format: "png" | "jpg") {

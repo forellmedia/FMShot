@@ -10,7 +10,8 @@ use std::time::Duration;
 use fmshot_core::RgbaImage;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{CF_DIBV5, CF_UNICODETEXT};
@@ -35,6 +36,10 @@ pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardE
         }
         set_data(CF_DIBV5.0 as u32, &dib)
     })
+}
+
+pub fn change_count() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
 }
 
 pub fn copy_text(text: &str) -> Result<(), ClipboardError> {

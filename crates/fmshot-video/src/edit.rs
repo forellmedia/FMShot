@@ -150,6 +150,24 @@ pub fn set_zoom(doc: &VideoDoc, index: usize, zoom: Option<ZoomSection>) -> Vide
     d
 }
 
+/// Klick löschen (`source_ms` = Zeit des Klicks in der Aufnahme).
+pub fn hide_click(doc: &VideoDoc, source_ms: u32) -> VideoDoc {
+    let mut d = doc.clone();
+    if !d.hidden_clicks.contains(&source_ms) {
+        d.hidden_clicks.push(source_ms);
+        d.hidden_clicks.sort_unstable();
+    }
+    d
+}
+
+/// Alle gelöschten Klicks wieder zeigen.
+pub fn show_clicks(doc: &VideoDoc) -> VideoDoc {
+    VideoDoc {
+        hidden_clicks: Vec::new(),
+        ..doc.clone()
+    }
+}
+
 /// Ebene nur im Bereich (Ausgabe-Zeit) zeigen; `None` = immer.
 pub fn set_layer_time(doc: &VideoDoc, layer: u32, range: Option<(f64, f64)>) -> VideoDoc {
     let mut d = doc.clone();
@@ -278,5 +296,14 @@ mod tests {
         assert!(layer_visible(&d, 8, 500.0));
         let d = set_layer_time(&d, 7, None);
         assert!(layer_visible(&d, 7, 500.0));
+    }
+
+    #[test]
+    fn klicks_loeschen_und_zurueckholen() {
+        let d = hide_click(&doc(), 2500);
+        let d = hide_click(&d, 1200);
+        let d = hide_click(&d, 2500);
+        assert_eq!(d.hidden_clicks, vec![1200, 2500]);
+        assert!(show_clicks(&d).hidden_clicks.is_empty());
     }
 }

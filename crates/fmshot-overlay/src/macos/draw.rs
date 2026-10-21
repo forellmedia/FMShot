@@ -137,6 +137,15 @@ define_class!(
             (iv.on_event)(DrawEvent::Release { x, y, shift: shift(event) });
         }
 
+        /// Rechtsklick beendet das Zeichnen (ausser mitten in einem Strich).
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, _event: &NSEvent) {
+            let iv = self.ivars();
+            if !iv.pressing.get() {
+                (iv.on_event)(DrawEvent::Exit);
+            }
+        }
+
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
             let iv = self.ivars();

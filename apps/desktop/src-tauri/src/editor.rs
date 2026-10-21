@@ -346,6 +346,13 @@ pub fn copy_text(text: String) -> Result<(), String> {
     fmshot_clipboard::copy_text(&text).map_err(err)
 }
 
+/// Änderungszähler der Zwischenablage (`None` = gibt es hier nicht).
+#[tauri::command]
+#[specta::specta]
+pub fn clipboard_change_count() -> Option<u32> {
+    fmshot_clipboard::change_count()
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn delete_capture(app: AppHandle, id: String) -> Result<(), String> {
