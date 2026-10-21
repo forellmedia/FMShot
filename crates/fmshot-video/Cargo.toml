@@ -39,3 +39,4 @@ wgpu = { version = "30", optional = true, default-features = false, features = [
 
 [dev-dependencies]
 png = "0.18"
+serde_json.workspace = true

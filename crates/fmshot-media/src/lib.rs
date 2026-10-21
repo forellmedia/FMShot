@@ -303,6 +303,29 @@ pub fn frame_at(video: &Path, at: Duration) -> Result<RgbaImage> {
     }
 }
 
+/// Freier Platz auf dem Laufwerk von `path` in Bytes (`None` = unbekannt).
+pub fn free_space(path: &Path) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    return macos::free_space(path);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Länge einer Spur. Funktioniert auch bei einer Datei, deren Aufnahme
+/// abgebrochen ist (Fragmente alle 2 s) – dann bis zum letzten Fragment.
+pub fn duration(path: &Path) -> Result<Duration> {
+    #[cfg(target_os = "macos")]
+    return macos::file_duration(path);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err(MediaError::NotImplemented)
+    }
+}
+
 /// Videos mit H.264/HEVC brauchen gerade Kantenlängen (4:2:0).
 pub fn even(v: u32) -> u32 {
     (v & !1).max(2)

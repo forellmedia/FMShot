@@ -110,6 +110,13 @@ pub trait ScreenCapturer: Send + Sync {
         Err(CaptureError::NotImplemented("Fenster auflisten"))
     }
 
+    /// Lage eines Fensters jetzt (globale Punkte) – z. B. damit der Rahmen
+    /// einer Video-Aufnahme dem Fenster folgt. Günstig genug für mehrmals
+    /// pro Sekunde. `None` = unbekannt oder geschlossen.
+    fn window_bounds(&self, _window_id: u32) -> Option<Rect> {
+        None
+    }
+
     /// Nimmt ein einzelnes Fenster auf (mit durchsichtigen Ecken).
     fn capture_window(&self, _window_id: u32) -> Result<Frame> {
         Err(CaptureError::NotImplemented("Fenster aufnehmen"))

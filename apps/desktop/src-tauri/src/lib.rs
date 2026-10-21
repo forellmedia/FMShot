@@ -145,6 +145,8 @@ pub fn run() {
             menu::create(app.handle())?;
             hotkeys::register(app.handle());
             services::start(app.handle());
+            // Abgestürzte Aufnahme vom letzten Mal? (ADR 0012)
+            video::offer_recovery(app.handle());
             vision::start(app.handle());
             // Erster Start mit Argumenten (z. B. aus der Kommandozeile).
             let argv: Vec<String> = std::env::args().collect();

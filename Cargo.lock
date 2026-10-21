@@ -1677,6 +1677,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-specta",
+ "tempfile",
 ]
 
 [[package]]
@@ -1819,6 +1820,7 @@ dependencies = [
  "log",
  "png 0.18.1",
  "pollster",
+ "serde_json",
  "thiserror 2.0.21",
  "wgpu",
 ]

@@ -216,6 +216,32 @@ impl RecordUi {
         let _ = text;
     }
 
+    /// Grosse Zeit der laufenden Aufnahme, daneben klein `detail` (Pegel,
+    /// Warnung). `live` = roter Punkt (aus = Pause).
+    pub fn set_time(&self, time: &str, detail: &str, live: bool) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_time(time, detail, live);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (time, detail, live);
+    }
+
+    /// Aufnahme unterbrochen: Rahmen und Text werden orange.
+    pub fn set_failed(&self, text: &str) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_failed(text);
+        #[cfg(not(target_os = "macos"))]
+        let _ = text;
+    }
+
+    /// Rahmen an einen neuen Bereich legen (physische Pixel des Monitors),
+    /// z. B. wenn das aufgenommene Fenster verschoben wurde.
+    pub fn set_rect(&self, rect: (u32, u32, u32, u32)) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_rect(rect);
+        #[cfg(not(target_os = "macos"))]
+        let _ = rect;
+    }
+
     /// Text eines Knopfs, z. B. Pause → „Weiter“, Webcam → „Webcam an“.
     pub fn set_label(&self, action: RecordAction, text: &str) {
         #[cfg(target_os = "macos")]
@@ -231,8 +257,9 @@ impl RecordUi {
 }
 
 /// Zeigt die Leiste der Video-Aufnahme. Mit `rect` (physische Pixel des
-/// Monitors) zusätzlich einen roten Rahmen um den Bereich. FMShot selbst ist
-/// im Video nie zu sehen.
+/// Monitors) zusätzlich einen roten Rahmen um den Bereich – füllt er den
+/// Monitor, liegt der Rahmen am Rand nach innen. FMShot selbst ist im Video
+/// nie zu sehen.
 pub fn open_record_ui(
     display_id: u32,
     rect: Option<(u32, u32, u32, u32)>,

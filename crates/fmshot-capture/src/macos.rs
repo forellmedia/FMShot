@@ -15,14 +15,15 @@ use block2::RcBlock;
 use fmshot_core::{Rect, RgbaImage};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFArray, CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFArray, CFDictionary, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
     CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage, CGImageAlphaInfo,
     CGImageByteOrderInfo, CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess,
-    CGPreflightScreenCaptureAccess, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
-    CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCreate, CGWindowListOption,
-    kCGColorSpaceSRGB, kCGNullWindowID,
+    CGPreflightScreenCaptureAccess, CGRectMakeWithDictionaryRepresentation,
+    CGRequestPostEventAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit,
+    CGWarpMouseCursorPosition, CGWindowListCopyWindowInfo, CGWindowListCreate, CGWindowListOption,
+    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -169,6 +170,34 @@ impl ScreenCapturer for MacCapturer {
             });
         }
         Ok(result)
+    }
+
+    fn window_bounds(&self, window_id: u32) -> Option<Rect> {
+        // Ohne ScreenCaptureKit: Die Fensterliste von Core Graphics ist
+        // synchron und schnell genug für jeden Takt der Aufnahmeleiste.
+        let array =
+            CGWindowListCopyWindowInfo(CGWindowListOption::OptionIncludingWindow, window_id)?;
+        let array: &CFArray = &array;
+        if array.count() == 0 {
+            return None;
+        }
+        // SAFETY: Die Einträge sind CFDictionary; „kCGWindowBounds“ ist ein
+        // Dictionary mit X, Y, Width, Height.
+        unsafe {
+            let info = &*(array.value_at_index(0) as *const CFDictionary);
+            let bounds = info.value(kCGWindowBounds as *const _ as *const c_void);
+            let bounds = (bounds as *const CFDictionary).as_ref()?;
+            let mut r = CGRect::default();
+            if !CGRectMakeWithDictionaryRepresentation(Some(bounds), &mut r) {
+                return None;
+            }
+            Some(Rect::new(
+                r.origin.x as f32,
+                r.origin.y as f32,
+                r.size.width as f32,
+                r.size.height as f32,
+            ))
+        }
     }
 
     fn capture_window(&self, window_id: u32) -> Result<Frame> {

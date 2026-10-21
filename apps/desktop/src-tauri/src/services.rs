@@ -126,6 +126,22 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Neue Aufnahme in Suche und Galerie bringen – ohne die Schritte nach
+/// einer Aufnahme (z. B. für wiederhergestellte Videos).
+pub fn index_capture(app: &AppHandle, rec: &CaptureRecord) {
+    if let Some(tx) = app
+        .state::<Services>()
+        .ocr_wakeup
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        let _ = tx.send(());
+    }
+    crate::vision::wake(app);
+    let _ = app.emit("capture-saved", rec.id.clone());
+}
+
 /// Nach jeder gespeicherten Aufnahme (läuft im Hintergrund-Thread).
 pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mode: Mode) {
     let settings = settings::get(app);
@@ -138,18 +154,7 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
     {
         log::error!("Auto-Export: {e}");
     }
-    // Suchindex nachführen.
-    if let Some(tx) = app
-        .state::<Services>()
-        .ocr_wakeup
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        let _ = tx.send(());
-    }
-    crate::vision::wake(app);
-    let _ = app.emit("capture-saved", rec.id.clone());
+    index_capture(app, rec);
 
     // Scroll-Aufnahmen will man fast immer gleich ansehen.
     let after = if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {

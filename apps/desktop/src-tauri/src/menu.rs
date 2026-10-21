@@ -32,7 +32,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         "close_editor" => crate::tray::hide_main_window(app),
-        "quit_app" => app.exit(0),
+        "quit_app" => crate::video::quit(app),
         _ => {}
     }
 }

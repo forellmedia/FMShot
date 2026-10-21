@@ -83,16 +83,30 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] Tab **Bildschirm**: Bereich wählen, Mikrofon an → beim ersten Mal fragt
       macOS nach dem Mikrofon
 - [ ] Countdown 3–2–1 in der Leiste, roter Rahmen um den Bereich
-- [ ] Leiste zeigt Zeit und Mikrofon-Pegel (sprechen → Balken)
+- [ ] Leiste zeigt grosse Zeit mit rotem Punkt und daneben den Mikrofon-Pegel
+      (sprechen → Balken); in der Pause ist der Punkt grau
 - [ ] Pause → Zeit steht, „Weiter“ → läuft weiter; im Video fehlt die Pause
 - [ ] Stopp (Leiste oder ⇧⌘6) → Vorschau erscheint, Video liegt in der
       Zwischenablage (in Finder/Mail einfügen)
 - [ ] Galerie: Kachel mit ▶ und Dauer; öffnen spielt das Video mit Ton
       (Mikrofon und Ton des Computers, z. B. YouTube im Hintergrund)
 - [ ] Leiste und Rahmen sind im Video nicht zu sehen
-- [ ] Ziel **Fenster**: Fenster anklicken, Fenster verschieben → Video folgt
-- [ ] Ziel **Vollbild**: ganzer Monitor unter der Maus, Leiste unten
+- [ ] Ziel **Fenster**: Fenster anklicken, Fenster verschieben → Video und
+      roter Rahmen folgen
+- [ ] Ziel **Vollbild**: ganzer Monitor unter der Maus, roter Rahmen am
+      Monitorrand, Leiste unten
 - [ ] „Abbrechen“ → kein Eintrag in der Galerie
+
+### 4c. Absturzsicher (ADR 0012)
+- [ ] Aufnahme 20 s mit Ton und Webcam, dann `kill -9 $(pgrep -x fmshot-desktop)`
+      → FMShot starten → Frage „Abgebrochene Aufnahme gefunden“ →
+      „Wiederherstellen“ → Hinweis, Video in der Galerie, mit Ton, ~18–20 s
+- [ ] Dasselbe, aber „Später“ → beim nächsten Start wird wieder gefragt;
+      „Verwerfen“ → weg, keine Reste im Bibliotheksordner
+- [ ] Fenster aufnehmen und das Fenster schliessen → Rahmen und Text orange
+      („Unterbrochen – gesichert bis …“), Video ist gesichert, danach Hinweis
+- [ ] Während der Aufnahme über Menü/Tray „FMShot beenden“ → Video wird
+      gesichert, danach beendet sich FMShot
 - [ ] Mikrofon in den Systemeinstellungen verbieten → Start öffnet direkt
       Systemeinstellungen → Mikrofon
 

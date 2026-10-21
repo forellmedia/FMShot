@@ -108,7 +108,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "open_window" => open_editor(app),
             "open_library" => open_library(app),
             "settings" => open_settings(app),
-            "quit" => app.exit(0),
+            "quit" => crate::video::quit(app),
             _ => {}
         });
     // Schwarz-auf-durchsichtig als Vorlage: macOS färbt es passend zur
@@ -338,7 +338,8 @@ pub async fn open_main(app: AppHandle, view: MainView) {
 #[tauri::command]
 #[specta::specta]
 pub fn quit_app(app: AppHandle) {
-    app.exit(0);
+    // Läuft eine Aufnahme, wird sie erst gesichert.
+    crate::video::quit(&app);
 }
 
 /// Ein Mikrofon für die Auswahl im Video-Tab.

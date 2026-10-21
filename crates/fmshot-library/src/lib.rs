@@ -125,6 +125,16 @@ pub fn faces_file(id: &str) -> String {
     format!("{id}_faces.json")
 }
 
+/// Video: Zwischenstand während der Aufnahme (ADR 0012).
+pub fn checkpoint_file(id: &str) -> String {
+    format!("{id}_recording.json")
+}
+
+/// Video: Mausspur während der Aufnahme, Zeile für Zeile (ADR 0012).
+pub fn input_log_file(id: &str) -> String {
+    format!("{id}_input.jsonl")
+}
+
 /// Video: Mausspur (Etappe 5).
 pub fn input_file(id: &str) -> String {
     format!("{id}_input.json")

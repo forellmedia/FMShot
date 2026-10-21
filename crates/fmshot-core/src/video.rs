@@ -412,6 +412,46 @@ impl Default for WebcamBorder {
     }
 }
 
+/// Zwischenstand einer laufenden Aufnahme (`<id>_recording.json`): was nicht
+/// in den Spuren steht. Nach einem Absturz entsteht daraus wieder das
+/// Dokument (ADR 0012). Wird bei jeder Änderung neu geschrieben.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecordingCheckpoint {
+    pub fps: u32,
+    /// Pixel je Punkt (Bildschirm-Skalierung; 1 bei „nur Webcam“).
+    pub scale: f32,
+    pub camera_only: Option<CameraFormat>,
+    /// Startlage der Webcam (aus den Einstellungen).
+    pub webcam_layout: WebcamLayout,
+    /// Webcam-Abschnitte bis jetzt.
+    pub webcam_sections: Vec<WebcamSection>,
+    /// Fertige Live-Zeichnungen.
+    pub drawings: Vec<CheckpointDrawing>,
+}
+
+impl Default for RecordingCheckpoint {
+    fn default() -> Self {
+        Self {
+            fps: default_fps(),
+            scale: 1.0,
+            camera_only: None,
+            webcam_layout: WebcamLayout::default(),
+            webcam_sections: Vec::new(),
+            drawings: Vec::new(),
+        }
+    }
+}
+
+/// Eine Live-Zeichnung im Zwischenstand: Ebene und wann sie zu sehen ist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckpointDrawing {
+    pub kind: crate::LayerKind,
+    pub opacity: f32,
+    pub start_ms: u32,
+    pub end_ms: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

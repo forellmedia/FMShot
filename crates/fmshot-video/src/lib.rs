@@ -1,6 +1,6 @@
 //! Video (ADR 0011), plattformunabhängig: Webcam-Layout und Abschnitte
 //! rechnen ([`layout`]), Abschnitte während der Aufnahme mitschreiben
-//! ([`sections`]) und – mit der Funktion `gpu` – den Export zusammensetzen
+//! ([`sections`]), abgebrochene Aufnahmen wiederherstellen ([`recovery`]) und – mit der Funktion `gpu` – den Export zusammensetzen
 //! ([`export()`]).
 //!
 //! Dekodieren und Kodieren macht das System (`fmshot-media`); diese Crate
@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod edit;
 pub mod head;
 pub mod layout;
+pub mod recovery;
 pub mod sections;
 pub mod timeline;
 

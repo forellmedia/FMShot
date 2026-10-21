@@ -10,9 +10,9 @@ use rusqlite::Connection;
 use crate::encode::{encode_png, encode_webp, thumbnail};
 use crate::index::{self, CaptureQuery, CaptureRecord};
 use crate::{
-    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, document_file, faces_file, input_file,
-    microphone_file, month_dir, original_file, screen_file, system_audio_file, thumbnail_file,
-    video_file, webcam_file,
+    CaptureId, INDEX_FILE, THUMBNAIL_MAX, asset_file, checkpoint_file, document_file, faces_file,
+    input_file, input_log_file, microphone_file, month_dir, original_file, screen_file,
+    system_audio_file, thumbnail_file, video_file, webcam_file,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +78,14 @@ impl VideoSlot {
 
     pub fn input_path(&self) -> PathBuf {
         self.dir.join(input_file(&self.id))
+    }
+
+    pub fn checkpoint_path(&self) -> PathBuf {
+        self.dir.join(checkpoint_file(&self.id))
+    }
+
+    pub fn input_log_path(&self) -> PathBuf {
+        self.dir.join(input_log_file(&self.id))
     }
 }
 
@@ -215,6 +223,58 @@ impl Library {
     /// Verwirft ein abgebrochenes Video samt Reservierung.
     pub fn discard_video(&self, slot: &VideoSlot) {
         remove_files_of(&slot.dir, &slot.id);
+    }
+
+    /// Videos, deren Aufnahme nie fertig wurde (Absturz, Beenden): leerer
+    /// Platzhalter `<id>.json` ohne Index-Eintrag, aber mit Bildschirm- oder
+    /// Webcam-Spur. Platzhalter ohne Spur werden dabei still entfernt. Nur
+    /// beim Start aufrufen – sonst zählt eine laufende Aufnahme mit.
+    pub fn unfinished_videos(&self) -> Vec<VideoSlot> {
+        let mut found = Vec::new();
+        let Ok(years) = fs::read_dir(&self.root) else {
+            return found;
+        };
+        for year in years.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(months) = fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten().filter(|e| e.path().is_dir()) {
+                let dir = month.path();
+                let Ok(entries) = fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let Some(id) = name.strip_suffix(".json").filter(|id| !id.contains('_')) else {
+                        continue;
+                    };
+                    let Ok(meta) = entry.metadata() else { continue };
+                    if meta.len() > 0 || self.get(id).is_ok() {
+                        continue;
+                    }
+                    let created_at_ms = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_millis() as i64);
+                    let slot = VideoSlot {
+                        id: id.to_string(),
+                        dir: dir.clone(),
+                        created_at_ms,
+                    };
+                    let has_track = [slot.screen_path(), slot.webcam_path()]
+                        .iter()
+                        .any(|p| fs::metadata(p).is_ok_and(|m| m.len() > 0));
+                    if has_track {
+                        found.push(slot);
+                    } else {
+                        remove_files_of(&slot.dir, &slot.id);
+                    }
+                }
+            }
+        }
+        found.sort_by(|a, b| a.id.cmp(&b.id));
+        found
     }
 
     /// Neueste Aufnahmen zuerst.
@@ -584,6 +644,38 @@ mod tests {
 
         lib.delete(&rec.id).unwrap();
         assert!(files(&slot.dir).is_empty());
+    }
+
+    #[test]
+    fn abgebrochene_aufnahmen_werden_gefunden_leere_platzhalter_entfernt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        // Abgestürzt mitten in der Aufnahme: Platzhalter + Bildschirm-Spur.
+        let crashed = lib.reserve_video(1_792_172_712_083).unwrap();
+        fs::write(crashed.screen_path(), b"mp4").unwrap();
+        fs::write(crashed.checkpoint_path(), b"{}").unwrap();
+        // Abgestürzt vor dem ersten Bild: nur der Platzhalter.
+        let empty = lib.reserve_video(1_792_172_712_084).unwrap();
+        // Fertig gespeichert: kein Kandidat.
+        let done = lib.reserve_video(1_792_172_712_085).unwrap();
+        fs::write(done.video_path(), b"mp4").unwrap();
+        let mut doc = Document::from_capture_scaled(640, 400, 2.0);
+        doc.video = Some(VideoDoc::default());
+        let poster = RgbaImage::filled(320, 200, [0, 0, 0, 255]);
+        lib.save_video(&done, &poster, 2.0, doc).unwrap();
+        // Ein Bild im selben Ordner bleibt unberührt.
+        let image = lib.save_capture(&capture(1_792_172_712_086)).unwrap();
+
+        let found = lib.unfinished_videos();
+        assert_eq!(
+            found.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            [crashed.id.as_str()]
+        );
+        assert_eq!(found[0].dir, crashed.dir);
+        assert!(found[0].created_at_ms > 0);
+        assert!(!empty.dir.join(document_file(&empty.id)).exists());
+        assert!(lib.get(&done.id).is_ok());
+        assert!(lib.get(&image.id).is_ok());
     }
 
     #[test]

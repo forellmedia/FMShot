@@ -314,6 +314,11 @@ impl LiveSketch {
         self.expires = None;
     }
 
+    /// Fertige Zeichnungen bis jetzt (für den Zwischenstand, ADR 0012).
+    pub fn done(&self) -> &[SketchItem] {
+        &self.done
+    }
+
     /// Ende der Aufnahme: Was noch zu sehen ist, endet hier.
     pub fn finish(&mut self, end_ms: u32) -> Vec<SketchItem> {
         self.active = None;

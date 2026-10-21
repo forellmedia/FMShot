@@ -123,7 +123,31 @@ struct Track {
     samples: u64,
 }
 
+/// Wie eine Spur nach `Track::finish` dasteht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Finished {
+    /// Nichts aufgenommen – Datei gelöscht.
+    Empty,
+    Complete,
+    /// Schreiben ist unterwegs gescheitert; die Datei bleibt bis zum letzten
+    /// Fragment lesbar und wird behalten.
+    Partial,
+}
+
 impl Track {
+    /// Fehler des Schreibers, falls er aufgegeben hat (Platte voll, Kodierer …).
+    fn failure(&self) -> Option<String> {
+        let writer = &self.writer.0;
+        unsafe {
+            (writer.status() == AVAssetWriterStatus::Failed).then(|| {
+                writer
+                    .error()
+                    .map(|e| e.localizedDescription().to_string())
+                    .unwrap_or_else(|| "Datei kann nicht geschrieben werden".into())
+            })
+        }
+    }
+
     fn append(&self, sample: &CMSampleBuffer) -> bool {
         unsafe {
             if !self.input.0.isReadyForMoreMediaData() {
@@ -135,14 +159,18 @@ impl Track {
     }
 
     /// Schliesst die Datei ab. Ohne eine einzige Probe ist sie wertlos und
-    /// wird gelöscht.
-    fn finish(&self, end: CMTime) -> std::result::Result<bool, String> {
+    /// wird gelöscht; ist der Schreiber unterwegs gescheitert, bleiben die
+    /// geschriebenen Fragmente stehen.
+    fn finish(&self, end: CMTime) -> std::result::Result<Finished, String> {
         let writer = &self.writer.0;
         unsafe {
+            if self.samples > 0 && writer.status() == AVAssetWriterStatus::Failed {
+                return Ok(Finished::Partial);
+            }
             if writer.status() != AVAssetWriterStatus::Writing || self.samples == 0 {
                 writer.cancelWriting();
                 let _ = std::fs::remove_file(&self.path);
-                return Ok(false);
+                return Ok(Finished::Empty);
             }
             writer.endSessionAtSourceTime(end);
             self.input.0.markAsFinished();
@@ -156,7 +184,7 @@ impl Track {
             .map_err(|_| "Datei abschliessen dauert zu lange".to_string())?;
         unsafe {
             if writer.status() == AVAssetWriterStatus::Completed {
-                Ok(true)
+                Ok(Finished::Complete)
             } else {
                 Err(writer
                     .error()
@@ -386,6 +414,11 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
     };
     if ok {
         track.samples += 1;
+    } else if let Some(e) = track.failure()
+        && st.failure.is_none()
+    {
+        // Die App sieht das über `failure()` und sichert, was da ist.
+        st.failure = Some(e);
     }
 }
 
@@ -897,12 +930,18 @@ impl Recording for MacRecording {
                 [st.system.as_ref(), st.mic.as_ref(), None],
             ),
         };
-        if !main.finish(end).map_err(MediaError::Backend)? {
+        let main_state = main.finish(end).map_err(MediaError::Backend)?;
+        if main_state == Finished::Empty {
             for track in others.into_iter().flatten() {
                 track.cancel();
             }
             return Err(MediaError::Empty);
         }
+        // Abgebrochen: nur so lang, wie die Datei wirklich reicht.
+        let duration = match main_state {
+            Finished::Partial => file_duration(&main.path).map_or(duration, |d| d.min(duration)),
+            _ => duration,
+        };
         for track in others.into_iter().flatten() {
             if let Err(e) = track.finish(end) {
                 log::warn!("Spur {}: {e}", track.path.display());
@@ -1100,6 +1139,9 @@ fn video_track(path: &Path, width: u32, height: u32, fps: u32, bitrate: u32) -> 
 fn audio_track(path: &Path, channels: u32) -> Result<Track> {
     let file_type = unsafe { AVFileTypeAppleM4A }.ok_or(MediaError::NotImplemented)?;
     let writer = new_writer(path, file_type)?;
+    // Wie beim Bild: Nach einem Absturz bleibt der Ton bis zum letzten
+    // Fragment lesbar (ohne Fragmente: „Cannot Open“).
+    unsafe { writer.setMovieFragmentInterval(CMTime::new(2, 1)) };
     let (format, rate, ch, bitrate) = (
         number(AUDIO_FORMAT_AAC),
         number(SAMPLE_RATE),
@@ -1515,6 +1557,29 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
             .map(|e| backend(&e))
             .unwrap_or_else(|| MediaError::Backend("Export fehlgeschlagen".into()))),
     }
+}
+
+/// Freier Platz auf dem Laufwerk von `path` in Bytes (wie der Finder ihn
+/// zählt, inklusive löschbarer Caches).
+pub(crate) fn free_space(path: &Path) -> Option<u64> {
+    let url = file_url(path);
+    let key = unsafe { objc2_foundation::NSURLVolumeAvailableCapacityForImportantUsageKey };
+    let values = url
+        .resourceValuesForKeys_error(&NSArray::from_slice(&[key]))
+        .ok()?;
+    let value = values.objectForKey(key)?;
+    let number = value.downcast::<NSNumber>().ok()?;
+    Some(number.longLongValue().max(0) as u64)
+}
+
+/// Länge einer Datei – auch einer unfertigen mit Fragmenten (nach Absturz).
+pub(crate) fn file_duration(path: &Path) -> Result<Duration> {
+    let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) };
+    let secs = unsafe { asset.duration().seconds() };
+    if !secs.is_finite() || secs <= 0.0 {
+        return Err(MediaError::Empty);
+    }
+    Ok(Duration::from_secs_f64(secs))
 }
 
 pub(crate) fn frame_at(video: &Path, at: Duration) -> Result<RgbaImage> {

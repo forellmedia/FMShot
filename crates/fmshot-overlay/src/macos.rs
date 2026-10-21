@@ -24,11 +24,11 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSCursor, NSDragOperation, NSDraggingContext, NSDraggingItem,
-    NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSImage, NSPanel, NSResponder,
-    NSScreen, NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSFont, NSFontWeightSemibold,
+    NSImage, NSPanel, NSResponder, NSScreen, NSScreenSaverWindowLevel, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFRetained, CFType, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapInfo, CGColor, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
     CGImageAlphaInfo, CGImageByteOrderInfo, CGMutablePath, kCGColorSpaceSRGB,
@@ -736,20 +736,167 @@ impl OverlayView {
 
 const BAR_HEIGHT: f64 = 44.0;
 const BAR_STATUS_WIDTH: f64 = 176.0;
+/// Video: Platz für die grosse Zeit und den Pegel daneben.
+const BAR_TIME_WIDTH: f64 = 232.0;
 const BAR_BUTTON_WIDTH: f64 = 84.0;
 const BAR_GAP: f64 = 6.0;
+/// Abstand des Rahmens um den Bereich (Punkte).
+const BORDER_MARGIN: f64 = 3.0;
+const RED: (f64, f64, f64) = (0.9, 0.22, 0.21);
+/// Warnzustand: Aufnahme unterbrochen.
+const AMBER: (f64, f64, f64) = (1.0, 0.62, 0.0);
+
+fn srgb((r, g, b): (f64, f64, f64)) -> CFRetained<CGColor> {
+    CGColor::new_srgb(r, g, b, 1.0)
+}
+
+/// Lage auf dem Monitor: Pixel (oben links) ↔ Cocoa-Punkte (unten links).
+#[derive(Clone, Copy)]
+struct BarGeometry {
+    sf: NSRect,
+    vf: NSRect,
+    scale: f64,
+    width: f64,
+}
+
+impl BarGeometry {
+    fn area(&self, r: (u32, u32, u32, u32)) -> NSRect {
+        let s = self.scale;
+        let (x, y, w, h) = (
+            r.0 as f64 / s,
+            r.1 as f64 / s,
+            r.2 as f64 / s,
+            r.3 as f64 / s,
+        );
+        NSRect::new(
+            CGPoint::new(
+                self.sf.origin.x + x,
+                self.sf.origin.y + self.sf.size.height - y - h,
+            ),
+            CGSize::new(w, h),
+        )
+    }
+
+    /// Rahmen etwas ausserhalb des Bereichs; füllt der Bereich den ganzen
+    /// Monitor (Vollbild), liegt er am Rand nach innen.
+    fn border(&self, area: NSRect) -> NSRect {
+        let full = area.size.width >= self.sf.size.width - 1.0
+            && area.size.height >= self.sf.size.height - 1.0;
+        if full {
+            return self.sf;
+        }
+        NSRect::new(
+            CGPoint::new(area.origin.x - BORDER_MARGIN, area.origin.y - BORDER_MARGIN),
+            CGSize::new(
+                area.size.width + 2.0 * BORDER_MARGIN,
+                area.size.height + 2.0 * BORDER_MARGIN,
+            ),
+        )
+    }
+
+    /// Unter dem Bereich, sonst darüber, sonst innen unten (Vollbild).
+    fn bar_origin(&self, area: Option<NSRect>) -> CGPoint {
+        let (vf, w) = (self.vf, self.width);
+        match area {
+            Some(a) => {
+                let x = (a.origin.x + (a.size.width - w) / 2.0)
+                    .clamp(vf.origin.x + 4.0, vf.origin.x + vf.size.width - w - 4.0);
+                let below = a.origin.y - BORDER_MARGIN - 10.0 - BAR_HEIGHT;
+                let above = a.origin.y + a.size.height + BORDER_MARGIN + 10.0;
+                let y = if below >= vf.origin.y {
+                    below
+                } else if above + BAR_HEIGHT <= vf.origin.y + vf.size.height {
+                    above
+                } else {
+                    (a.origin.y + 12.0).max(vf.origin.y + 24.0)
+                };
+                CGPoint::new(x, y)
+            }
+            None => CGPoint::new(vf.origin.x + (vf.size.width - w) / 2.0, vf.origin.y + 24.0),
+        }
+    }
+}
+
+/// Grosse Zeit der Video-Leiste: roter Punkt, „12:34“, Pegel klein daneben.
+struct TimeLayers {
+    dot: Retained<CALayer>,
+    time: Retained<CATextLayer>,
+    detail: Retained<CATextLayer>,
+}
 
 /// Rahmen um den Bereich (optional) und eine Leiste mit Status und Knöpfen.
 struct Bar {
-    border: Option<Retained<OverlayPanel>>,
+    border: Option<(Retained<OverlayPanel>, Retained<CAShapeLayer>)>,
     bar: Retained<OverlayPanel>,
     status: Retained<CATextLayer>,
+    time: Option<TimeLayers>,
     labels: Vec<Retained<CATextLayer>>,
+    geometry: BarGeometry,
 }
 
 impl Bar {
+    /// Text statt der Zeit (Countdown, Fortschritt).
     fn set_status(&self, text: &str) {
         set_text(&self.status, text);
+        self.show_time(false);
+    }
+
+    fn set_time(&self, time: &str, detail: &str, live: bool) {
+        let Some(t) = &self.time else {
+            return self.set_status(&format!("{time}  {detail}"));
+        };
+        set_text(&t.time, time);
+        set_text(&t.detail, detail);
+        let color = if live {
+            srgb(RED)
+        } else {
+            CGColor::new_srgb(1.0, 1.0, 1.0, 0.45)
+        };
+        without_animation(|| t.dot.setBackgroundColor(Some(&color)));
+        self.show_time(true);
+    }
+
+    fn show_time(&self, on: bool) {
+        if let Some(t) = &self.time {
+            without_animation(|| {
+                t.dot.setHidden(!on);
+                t.time.setHidden(!on);
+                t.detail.setHidden(!on);
+                self.status.setHidden(on);
+            });
+        }
+    }
+
+    /// Warnzustand: Rahmen und Text orange.
+    fn set_failed(&self, text: &str) {
+        self.set_status(text);
+        without_animation(|| {
+            self.status.setForegroundColor(Some(&srgb(AMBER)));
+            if let Some((_, shape)) = &self.border {
+                shape.setStrokeColor(Some(&srgb(AMBER)));
+                shape.setLineWidth(3.0);
+            }
+        });
+    }
+
+    /// Rahmen (und Leiste) an einen neuen Bereich legen, z. B. wenn das
+    /// aufgenommene Fenster verschoben wurde.
+    fn set_rect(&self, rect: (u32, u32, u32, u32)) {
+        let Some((panel, shape)) = &self.border else {
+            return;
+        };
+        let area = self.geometry.area(rect);
+        let frame = self.geometry.border(area);
+        panel.setFrame_display(frame, true);
+        if let Some(view) = panel.contentView() {
+            view.setFrame(NSRect::new(CGPoint::new(0.0, 0.0), frame.size));
+        }
+        without_animation(|| {
+            shape.setFrame(NSRect::new(CGPoint::new(0.0, 0.0), frame.size));
+            shape.setPath(Some(&border_path(frame.size)));
+        });
+        self.bar
+            .setFrameOrigin(self.geometry.bar_origin(Some(area)));
     }
 
     fn set_label(&self, index: usize, text: &str) {
@@ -759,11 +906,18 @@ impl Bar {
     }
 
     fn close(&self) {
-        if let Some(border) = &self.border {
+        if let Some((border, _)) = &self.border {
             border.orderOut(None);
         }
         self.bar.orderOut(None);
     }
+}
+
+fn border_path(size: CGSize) -> CFRetained<CGMutablePath> {
+    rect_path(CGRect::new(
+        CGPoint::new(1.5, 1.5),
+        CGSize::new(size.width - 3.0, size.height - 3.0),
+    ))
 }
 
 fn set_text(layer: &CATextLayer, text: &str) {
@@ -792,6 +946,18 @@ pub(crate) struct RecordUi {
 impl RecordUi {
     pub fn set_status(&self, text: &str) {
         self.bar.set_status(text);
+    }
+
+    pub fn set_time(&self, time: &str, detail: &str, live: bool) {
+        self.bar.set_time(time, detail, live);
+    }
+
+    pub fn set_failed(&self, text: &str) {
+        self.bar.set_failed(text);
+    }
+
+    pub fn set_rect(&self, rect: (u32, u32, u32, u32)) {
+        self.bar.set_rect(rect);
     }
 
     pub fn set_label(&self, action: RecordAction, text: &str) {
@@ -845,11 +1011,13 @@ type BarButton<'a> = (&'a str, bool);
 
 /// Zeigt die Leiste. `rect` (physische Pixel des Monitors) bekommt einen
 /// roten Rahmen, die Leiste sitzt darunter; ohne `rect` sitzt sie unten in
-/// der Mitte des Monitors. Mausklicks gehen weiterhin an die Apps darunter.
+/// der Mitte des Monitors. `big_time` = Video: grosse Zeit statt Statuszeile.
+/// Mausklicks gehen weiterhin an die Apps darunter.
 fn open_bar(
     display_id: u32,
     rect: Option<(u32, u32, u32, u32)>,
     status: &str,
+    big_time: bool,
     buttons: &[BarButton<'_>],
     on_click: Box<dyn Fn(usize)>,
 ) -> Result<Bar, OverlayError> {
@@ -860,55 +1028,7 @@ fn open_bar(
         .find(|s| screen_number(s) == Some(display_id))
         .or_else(|| screens.firstObject())
         .ok_or(OverlayError::NoScreens)?;
-    let sf = screen.frame();
-    let vf = screen.visibleFrame();
     let scale = screen.backingScaleFactor().max(1.0);
-    let margin = 3.0;
-
-    // Pixel (oben links im Monitor) → Cocoa-Koordinaten (unten links global)
-    let area = rect.map(|r| {
-        let (x, y, w, h) = (
-            r.0 as f64 / scale,
-            r.1 as f64 / scale,
-            r.2 as f64 / scale,
-            r.3 as f64 / scale,
-        );
-        NSRect::new(
-            CGPoint::new(sf.origin.x + x, sf.origin.y + sf.size.height - y - h),
-            CGSize::new(w, h),
-        )
-    });
-
-    // Rahmen: durchlässig für Maus und Scrollen.
-    let border = area.map(|cocoa| {
-        let border_frame = NSRect::new(
-            CGPoint::new(cocoa.origin.x - margin, cocoa.origin.y - margin),
-            CGSize::new(
-                cocoa.size.width + 2.0 * margin,
-                cocoa.size.height + 2.0 * margin,
-            ),
-        );
-        let border = OverlayPanel::new(mtm, border_frame);
-        border.setIgnoresMouseEvents(true);
-        let bview = NSView::initWithFrame(
-            NSView::alloc(mtm),
-            NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size),
-        );
-        bview.setWantsLayer(true);
-        let shape = shape_layer(NSRect::new(CGPoint::new(0.0, 0.0), border_frame.size));
-        shape.setPath(Some(&rect_path(CGRect::new(
-            CGPoint::new(1.0, 1.0),
-            CGSize::new(
-                border_frame.size.width - 2.0,
-                border_frame.size.height - 2.0,
-            ),
-        ))));
-        shape.setStrokeColor(Some(&CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)));
-        shape.setLineWidth(2.0);
-        bview.layer().expect("Ebene").addSublayer(&shape);
-        border.setContentView(Some(&bview));
-        border
-    });
 
     // Knopfbreite nach Text, mindestens BAR_BUTTON_WIDTH (z. B. „Zeichnen ⇧⌘8“).
     let widths: Vec<f64> = buttons
@@ -923,35 +1043,47 @@ fn open_bar(
                 .max(BAR_BUTTON_WIDTH)
         })
         .collect();
-    let bar_width = 14.0 + BAR_STATUS_WIDTH + widths.iter().map(|w| w + BAR_GAP).sum::<f64>();
-    // Unter dem Bereich, sonst darüber, sonst innen unten.
-    let (bx, by) = match area {
-        Some(cocoa) => {
-            let bx = (cocoa.origin.x + (cocoa.size.width - bar_width) / 2.0).clamp(
-                vf.origin.x + 4.0,
-                vf.origin.x + vf.size.width - bar_width - 4.0,
-            );
-            let below = cocoa.origin.y - margin - 10.0 - BAR_HEIGHT;
-            let above = cocoa.origin.y + cocoa.size.height + margin + 10.0;
-            let by = if below >= vf.origin.y {
-                below
-            } else if above + BAR_HEIGHT <= vf.origin.y + vf.size.height {
-                above
-            } else {
-                cocoa.origin.y + 12.0
-            };
-            (bx, by)
-        }
-        None => (
-            vf.origin.x + (vf.size.width - bar_width) / 2.0,
-            vf.origin.y + 24.0,
-        ),
+    let status_width = if big_time {
+        BAR_TIME_WIDTH
+    } else {
+        BAR_STATUS_WIDTH
     };
-    let bar_frame = NSRect::new(CGPoint::new(bx, by), CGSize::new(bar_width, BAR_HEIGHT));
+    let bar_width = 14.0 + status_width + widths.iter().map(|w| w + BAR_GAP).sum::<f64>();
+    let geometry = BarGeometry {
+        sf: screen.frame(),
+        vf: screen.visibleFrame(),
+        scale,
+        width: bar_width,
+    };
+    let area = rect.map(|r| geometry.area(r));
+
+    // Rahmen: durchlässig für Maus und Scrollen.
+    let border = area.map(|area| {
+        let frame = geometry.border(area);
+        let border = OverlayPanel::new(mtm, frame);
+        border.setIgnoresMouseEvents(true);
+        let bview = NSView::initWithFrame(
+            NSView::alloc(mtm),
+            NSRect::new(CGPoint::new(0.0, 0.0), frame.size),
+        );
+        bview.setWantsLayer(true);
+        let shape = shape_layer(NSRect::new(CGPoint::new(0.0, 0.0), frame.size));
+        shape.setPath(Some(&border_path(frame.size)));
+        shape.setStrokeColor(Some(&srgb(RED)));
+        shape.setLineWidth(3.0);
+        bview.layer().expect("Ebene").addSublayer(&shape);
+        border.setContentView(Some(&bview));
+        (border, shape)
+    });
+
+    let bar_frame = NSRect::new(
+        geometry.bar_origin(area),
+        CGSize::new(bar_width, BAR_HEIGHT),
+    );
     let bar = OverlayPanel::new(mtm, bar_frame);
     bar.setHasShadow(true);
 
-    let mut x = 14.0 + BAR_STATUS_WIDTH;
+    let mut x = 14.0 + status_width;
     let ranges: Vec<(f64, f64)> = widths
         .iter()
         .map(|w| {
@@ -988,12 +1120,46 @@ fn open_bar(
     let status_layer = text(
         CGRect::new(
             CGPoint::new(14.0, 13.0),
-            CGSize::new(BAR_STATUS_WIDTH - 6.0, 18.0),
+            CGSize::new(status_width - 6.0, 18.0),
         ),
         status,
         13.0,
     );
     root.addSublayer(&status_layer);
+
+    let time = big_time.then(|| {
+        let dot = CALayer::new();
+        dot.setFrame(CGRect::new(
+            CGPoint::new(14.0, 17.0),
+            CGSize::new(10.0, 10.0),
+        ));
+        dot.setCornerRadius(5.0);
+        dot.setBackgroundColor(Some(&srgb(RED)));
+        let time = text(
+            CGRect::new(CGPoint::new(30.0, 8.0), CGSize::new(96.0, 28.0)),
+            "",
+            22.0,
+        );
+        // Gleich breite Ziffern: Die Zeit springt nicht hin und her.
+        let font =
+            NSFont::monospacedDigitSystemFontOfSize_weight(22.0, unsafe { NSFontWeightSemibold });
+        // SAFETY: NSFont und CTFont sind gebührenfrei austauschbar.
+        unsafe { time.setFont(Some(&*(Retained::as_ptr(&font) as *const CFType))) };
+        let detail = text(
+            CGRect::new(
+                CGPoint::new(130.0, 15.0),
+                CGSize::new(status_width - 122.0, 16.0),
+            ),
+            "",
+            11.0,
+        );
+        detail.setForegroundColor(Some(&CGColor::new_srgb(1.0, 1.0, 1.0, 0.7)));
+        for l in [&*dot, &**time, &**detail] {
+            l.setHidden(true);
+            root.addSublayer(l);
+        }
+        TimeLayers { dot, time, detail }
+    });
 
     let mut labels = Vec::new();
     for ((label, primary), (x0, x1)) in buttons.iter().zip(&ranges) {
@@ -1003,7 +1169,7 @@ fn open_bar(
             CGSize::new(x1 - x0, 28.0),
         ));
         let color = if *primary {
-            CGColor::new_srgb(0.9, 0.22, 0.21, 1.0)
+            srgb(RED)
         } else {
             CGColor::new_srgb(1.0, 1.0, 1.0, 0.12)
         };
@@ -1021,7 +1187,7 @@ fn open_bar(
     }
 
     bar.setContentView(Some(&view));
-    if let Some(border) = &border {
+    if let Some((border, _)) = &border {
         border.orderFrontRegardless();
     }
     bar.orderFrontRegardless();
@@ -1029,7 +1195,9 @@ fn open_bar(
         border,
         bar,
         status: status_layer,
+        time,
         labels,
+        geometry,
     })
 }
 
@@ -1043,6 +1211,7 @@ pub(crate) fn open_scroll_ui(
         display_id,
         Some(rect),
         labels.0,
+        false,
         &[(labels.1, true), (labels.2, false)],
         Box::new(move |i| {
             on_action(if i == 0 {
@@ -1080,6 +1249,7 @@ pub(crate) fn open_record_ui(
         display_id,
         rect,
         labels.status,
+        true,
         &bar_buttons,
         Box::new(move |i| {
             if let Some(action) = click.get(i) {
