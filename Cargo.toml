@@ -47,5 +47,7 @@ todo = "warn"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Kein `panic = "abort"`: wry fängt Objective-C-Exceptions von WebKit mit
+# `objc2::exception::catch` ab. Mit „abort“ beendet jede solche Exception die
+# ganze App (Absturz beim Abspielen von Videos im Editor).
 strip = true

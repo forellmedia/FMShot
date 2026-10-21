@@ -73,8 +73,23 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     ])
 }
 
+/// Paniken ins Log schreiben. Die Meldung landet sonst nur auf stderr – und
+/// das sieht beim Start aus dem Finder niemand.
+fn log_panics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!(
+            "Absturz: {info}\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        log::logger().flush();
+        default_hook(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log_panics();
     let builder = specta_builder();
     tauri::Builder::default()
         // Zweiter Start (z. B. `FMShot capture region`): an die laufende App
@@ -191,6 +206,25 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
 #[cfg(test)]
 mod tests {
     use specta_typescript::Typescript;
+
+    /// Release muss abwickeln können: wry fängt Objective-C-Exceptions von
+    /// WebKit mit `objc2::exception::catch` – mit `panic = "abort"` beendet
+    /// jede davon die App. Tests selbst laufen immer mit „unwind“, darum wird
+    /// die Einstellung geprüft.
+    #[test]
+    fn release_bricht_bei_panik_nicht_ab() {
+        let manifest = include_str!("../../../../Cargo.toml");
+        let release = manifest
+            .split("[profile.release]")
+            .nth(1)
+            .and_then(|s| s.split("\n[").next())
+            .expect("[profile.release] fehlt");
+        let aborts = release
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").replace(' ', ""))
+            .any(|l| l == "panic=\"abort\"");
+        assert!(!aborts, "panic = \"abort\" in [profile.release]");
+    }
 
     /// Schreibt die TypeScript-Bindings. Die CI prüft danach per `git diff`,
     /// ob die eingecheckte Datei aktuell ist.
