@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use grabmark_core::RgbaImage;
-use grabmark_vision::{Embedding, ImageEncoder, TextEncoder};
+use grabmark_vision::{Embedding, ImageEncoder, ImageVectors, TextEncoder};
 
 const BILDER: [&str; 7] = ["wald", "mann", "hunde", "auto", "strand", "katze", "berg"];
 
@@ -99,10 +99,15 @@ fn stichwoerter_und_suche_mit_grundwert() {
     let tagger = grabmark_vision::Tagger::build(&texts).unwrap();
     println!("Begriffe berechnen: {:?}", start.elapsed());
 
-    let vektoren: Vec<Embedding> = BILDER
+    let start = Instant::now();
+    let alle_vektoren: Vec<ImageVectors> = BILDER
         .iter()
-        .map(|n| images.embed(&bild(n)).unwrap())
+        .map(|n| images.embed_all(&bild(n)).unwrap())
         .collect();
+    println!(
+        "Bild mit Ausschnitten → Vektoren: {:?} je Bild",
+        start.elapsed() / BILDER.len() as u32
+    );
     let erwartet = [
         ("wald", "forest"),
         ("mann", "man"),
@@ -112,13 +117,14 @@ fn stichwoerter_und_suche_mit_grundwert() {
         ("katze", "cat"),
         ("berg", "mountain"),
     ];
-    for ((name, key), v) in erwartet.iter().zip(&vektoren) {
+    for ((name, key), v) in erwartet.iter().zip(&alle_vektoren) {
         let tags: Vec<_> = tagger.tags(v).into_iter().map(|t| t.0).collect();
         println!("{name}: {tags:?}");
         assert!(tags.contains(key), "{name}: {tags:?}");
     }
 
-    let alle: Vec<(&str, &Embedding)> = BILDER.iter().copied().zip(&vektoren).collect();
+    let vektoren: Vec<&Embedding> = alle_vektoren.iter().map(|v| &v.whole).collect();
+    let alle: Vec<(&str, &Embedding)> = BILDER.iter().copied().zip(vektoren).collect();
     let suche = |q: &str| -> Vec<&str> {
         tagger
             .search(&texts.embed(q).unwrap(), alle.iter().copied())

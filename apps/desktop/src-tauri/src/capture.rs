@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use grabmark_capture::{Frame, PrivacyPane, ScreenCapturer, display_at};
+use grabmark_capture::{Frame, OwnWindows, PrivacyPane, ScreenCapturer, display_at};
 use grabmark_core::RgbaImage;
 use grabmark_library::{CaptureRecord, Library, NewCapture};
 use grabmark_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
@@ -30,6 +30,9 @@ pub struct CaptureState {
     pub ocr: Option<Box<dyn grabmark_ocr::OcrEngine>>,
     /// Verhindert zwei Aufnahmen gleichzeitig (Taste doppelt gedrückt).
     busy: AtomicBool,
+    /// Laufende Aufnahme zeigt offene Fenster von Grabmark (Tastenkürzel) –
+    /// das Tray-Fenster bleibt dann offen, obwohl das Overlay den Fokus hat.
+    own_shown: AtomicBool,
 }
 
 impl CaptureState {
@@ -39,6 +42,7 @@ impl CaptureState {
             library,
             ocr: grabmark_ocr::platform_engine(),
             busy: AtomicBool::new(false),
+            own_shown: AtomicBool::new(false),
         }
     }
 }
@@ -96,8 +100,14 @@ struct Pending {
     finished: bool,
 }
 
-/// Startet eine Aufnahme. Kehrt sofort zurück.
+/// Startet eine Aufnahme ohne die Fenster von Grabmark. Kehrt sofort zurück.
 pub fn start(app: &AppHandle, mode: Mode) {
+    start_with(app, mode, OwnWindows::Hidden);
+}
+
+/// Wie [`start`]; `own` bestimmt, ob offene Fenster von Grabmark (Editor,
+/// Einstellungen) mit ins Bild kommen – bei globalen Tastenkürzeln ja.
+pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
     let started = Instant::now();
     // Zweites Drücken während einer Scroll-Aufnahme = „Fertig“.
     if matches!(mode, Mode::Scroll | Mode::ScrollAuto) && crate::scroll::finish_running(app) {
@@ -116,6 +126,9 @@ pub fn start(app: &AppHandle, mode: Mode) {
     if state.busy.swap(true, Ordering::AcqRel) {
         return;
     }
+    state
+        .own_shown
+        .store(own == OwnWindows::Shown, Ordering::Release);
     if !state.capturer.has_permission() {
         release(app);
         // Beim ersten Mal fragt macOS mit eigenem Fenster (mit Knopf zu den
@@ -139,11 +152,11 @@ pub fn start(app: &AppHandle, mode: Mode) {
         return;
     }
     match mode {
-        Mode::Region | Mode::Text | Mode::Scroll | Mode::ScrollAuto => {
-            start_region(app, started, mode)
-        }
-        Mode::Window => start_window(app),
-        Mode::Screen => start_screen(app),
+        // Scroll-Aufnahmen setzen Ausschnitte ohne Grabmark zusammen.
+        Mode::Scroll | Mode::ScrollAuto => start_region(app, started, mode, OwnWindows::Hidden),
+        Mode::Region | Mode::Text => start_region(app, started, mode, own),
+        Mode::Window => start_window(app, own),
+        Mode::Screen => start_screen(app, own),
         Mode::Video => {
             // Das Video verwaltet seinen Zustand selbst.
             release(app);
@@ -154,12 +167,23 @@ pub fn start(app: &AppHandle, mode: Mode) {
 }
 
 fn release(app: &AppHandle) {
-    app.state::<CaptureState>()
-        .busy
-        .store(false, Ordering::Release);
+    let state = app.state::<CaptureState>();
+    state.busy.store(false, Ordering::Release);
+    // Fokus zurück ans offene Tray-Fenster – sonst schlösse es sich beim
+    // nächsten Klick daneben nicht mehr.
+    if state.own_shown.swap(false, Ordering::AcqRel) {
+        crate::tray::refocus_popover(app);
+    }
 }
 
-fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
+/// Läuft eine Aufnahme, auf der Grabmark selbst zu sehen sein soll?
+pub fn shows_own_windows(app: &AppHandle) -> bool {
+    app.state::<CaptureState>()
+        .own_shown
+        .load(Ordering::Acquire)
+}
+
+fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) {
     let pending = Arc::new(Mutex::new(Pending::default()));
 
     // 1. Overlay sofort öffnen (Haupt-Thread).
@@ -216,7 +240,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
-        match state.capturer.capture_all() {
+        match state.capturer.capture_all(own) {
             Ok(frames) => {
                 crate::services::timing(
                     &app,
@@ -317,11 +341,11 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
     });
 }
 
-fn start_window(app: &AppHandle) {
+fn start_window(app: &AppHandle, own: OwnWindows) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
-        let windows: Vec<WindowTarget> = match state.capturer.windows() {
+        let windows: Vec<WindowTarget> = match state.capturer.windows(own) {
             Ok(w) => w
                 .into_iter()
                 .map(|w| WindowTarget {
@@ -379,7 +403,7 @@ fn start_window(app: &AppHandle) {
     });
 }
 
-fn start_screen(app: &AppHandle) {
+fn start_screen(app: &AppHandle, own: OwnWindows) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
@@ -389,7 +413,7 @@ fn start_screen(app: &AppHandle) {
                 .and_then(|c| display_at(&displays, c))
                 .or_else(|| displays.iter().find(|d| d.is_primary))
                 .map(|d| d.id);
-            let frames = state.capturer.capture_all()?;
+            let frames = state.capturer.capture_all(own)?;
             Ok(frames.into_iter().find(|f| Some(f.display_id) == target))
         });
         release(&app);

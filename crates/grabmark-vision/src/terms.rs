@@ -6,8 +6,9 @@
 //! am treffsichersten ist. Angezeigt wird die Übersetzung.
 
 /// Gruppen in der Reihenfolge der Schnellfilter. `objects` hat keinen Filter.
-pub const GROUPS: [&str; 10] = [
+pub const GROUPS: [&str; 11] = [
     "people",
+    "clothing",
     "animals",
     "nature",
     "food",
@@ -24,6 +25,31 @@ pub struct Term {
     pub key: &'static str,
     pub group: &'static str,
     pub prompt: &'static str,
+}
+
+/// Wie ein Begriff im Bild gesucht wird.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Art des ganzen Bildes („Webseite“, „Quellcode“, „Logo“) – nur im
+    /// ganzen Bild, nicht in Ausschnitten.
+    Kind,
+    /// Etwas im Bild („Mann“, „Schuh“) – auch in Ausschnitten.
+    Thing,
+    /// Gerät mit Bildschirm: Jedes Bildschirmfoto sieht für das Modell ein
+    /// wenig nach Computer aus. Zählt darum nur, wo es besser passt als jede
+    /// Bildart.
+    Device,
+}
+
+impl Term {
+    pub fn scope(&self) -> Scope {
+        match (self.group, self.key) {
+            ("documents" | "code" | "charts" | "apps", _) => Scope::Kind,
+            (_, "logo" | "icon" | "drawing" | "painting" | "selfie") => Scope::Kind,
+            (_, "computer" | "keyboard" | "phone") => Scope::Device,
+            _ => Scope::Thing,
+        }
+    }
 }
 
 const fn t(key: &'static str, group: &'static str, prompt: &'static str) -> Term {
@@ -63,7 +89,7 @@ pub const TERMS: &[Term] = &[
     t("sky", "nature", "a photo of the sky with clouds"),
     t("sunset", "nature", "a photo of a sunset"),
     t("snow", "nature", "a photo of snow"),
-    t("flower", "nature", "a photo of flowers"),
+    t("flower", "nature", "a photo of a flower"),
     t("garden", "nature", "a photo of a garden"),
     t("meadow", "nature", "a photo of a field or meadow"),
     t("landscape", "nature", "a landscape photo"),
@@ -139,10 +165,19 @@ pub const TERMS: &[Term] = &[
     t("keyboard", "objects", "a photo of a keyboard"),
     t("phone", "objects", "a photo of a smartphone"),
     t("book", "objects", "a photo of a book"),
-    t("ball", "objects", "a photo of a ball"),
+    t("ball", "objects", "a photo of a football"),
     t("sport", "objects", "a photo of people doing sports"),
     t("music", "objects", "a photo of a musical instrument"),
-    t("clothes", "objects", "a photo of clothes"),
+    t("clothes", "clothing", "a photo of clothes"),
+    t("shirt", "clothing", "a photo of a shirt"),
+    t("dress", "clothing", "a photo of a girl's dress"),
+    t("shoes", "clothing", "a product photo of a pair of shoes"),
+    t("jacket", "clothing", "a photo of a jacket"),
+    t("bag", "clothing", "a photo of a handbag"),
+    t("hat", "clothing", "a photo of a hat"),
+    t("glasses", "clothing", "a photo of glasses"),
+    t("watch", "clothing", "a photo of a wristwatch"),
+    t("jewelry", "clothing", "a photo of jewelry"),
     t("money", "objects", "a photo of money"),
     t("furniture", "objects", "a photo of furniture"),
     t("toy", "objects", "a photo of a toy"),

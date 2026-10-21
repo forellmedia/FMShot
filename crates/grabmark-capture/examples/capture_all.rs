@@ -14,7 +14,9 @@ fn main() {
     }
     for run in 1..=3 {
         let start = Instant::now();
-        let frames = capturer.capture_all().expect("Aufnahme");
+        let frames = capturer
+            .capture_all(grabmark_capture::OwnWindows::Hidden)
+            .expect("Aufnahme");
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         let sizes: Vec<_> = frames
             .iter()

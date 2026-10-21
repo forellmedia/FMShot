@@ -5,7 +5,7 @@ use std::path::Path;
 
 use grabmark_core::RgbaImage;
 
-use crate::{Embedding, VisionError};
+use crate::{Embedding, ImageVectors, VisionError};
 
 fn unavailable() -> VisionError {
     VisionError::Runtime(
@@ -21,6 +21,10 @@ impl ImageEncoder {
     }
 
     pub fn embed(&self, _image: &RgbaImage) -> Result<Embedding, VisionError> {
+        Err(unavailable())
+    }
+
+    pub fn embed_all(&self, _image: &RgbaImage) -> Result<ImageVectors, VisionError> {
         Err(unavailable())
     }
 }

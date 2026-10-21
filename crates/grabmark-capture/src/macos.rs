@@ -15,7 +15,9 @@ use block2::RcBlock;
 use grabmark_core::{Rect, RgbaImage};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFArray, CFDictionary, CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{
+    CFArray, CFDictionary, CFNumber, CFRetained, CFString, CGPoint, CGRect, CGSize,
+};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
     CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage, CGImageAlphaInfo,
@@ -23,7 +25,8 @@ use objc2_core_graphics::{
     CGPreflightScreenCaptureAccess, CGRectMakeWithDictionaryRepresentation,
     CGRequestPostEventAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit,
     CGWarpMouseCursorPosition, CGWindowListCopyWindowInfo, CGWindowListCreate, CGWindowListOption,
-    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds,
+    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber,
+    kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -31,7 +34,9 @@ use objc2_screen_capture_kit::{
     SCStreamConfiguration, SCWindow,
 };
 
-use crate::{CaptureError, Display, Frame, PixelRect, Result, ScreenCapturer, WindowInfo};
+use crate::{
+    CaptureError, Display, Frame, OwnWindows, PixelRect, Result, ScreenCapturer, WindowInfo,
+};
 
 /// Wie lange auf ScreenCaptureKit gewartet wird, bevor wir aufgeben.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -83,13 +88,17 @@ impl MacCapturer {
         });
     }
 
-    fn capture_all_with(&self, content: &SCShareableContent) -> Result<Vec<Frame>> {
+    fn capture_all_with(
+        &self,
+        content: &SCShareableContent,
+        own: OwnWindows,
+    ) -> Result<Vec<Frame>> {
         let displays = unsafe { content.displays() };
-        let own = own_app(content);
+        let excluded = Excluded::new(content, own);
         // Alle Monitore gleichzeitig anstossen, dann einsammeln.
         let pending = displays
             .iter()
-            .map(|d| start_display_capture(&d, own.as_deref()))
+            .map(|d| start_display_capture(&d, &excluded))
             .collect::<Vec<_>>();
         pending.into_iter().map(wait_frame).collect()
     }
@@ -131,10 +140,15 @@ impl ScreenCapturer for MacCapturer {
         Ok(displays.iter().map(|d| display_info(&d)).collect())
     }
 
-    fn windows(&self) -> Result<Vec<WindowInfo>> {
+    fn windows(&self, own_windows: OwnWindows) -> Result<Vec<WindowInfo>> {
         let content = self.fresh_content()?;
         let own_pid = std::process::id() as i32;
         let sc_windows = unsafe { content.0.windows() };
+        // Eigene Fenster nur auf Wunsch – dann auch das schwebende Tray-Fenster.
+        let own_app = match own_windows {
+            OwnWindows::Hidden => Vec::new(),
+            OwnWindows::Shown => own_app_windows(&content.0),
+        };
         let mut result = Vec::new();
         for id in window_ids_front_to_back() {
             let Some(w) = sc_windows.iter().find(|w| unsafe { w.windowID() } == id) else {
@@ -142,14 +156,15 @@ impl ScreenCapturer for MacCapturer {
             };
             let frame = unsafe { w.frame() };
             let app = unsafe { w.owningApplication() };
-            let normal = unsafe { w.windowLayer() } == 0 && unsafe { w.isOnScreen() };
-            let own = app
+            let is_own = app
                 .as_ref()
                 .is_some_and(|a| unsafe { a.processID() } == own_pid);
-            if !normal
-                || own
-                || frame.size.width < MIN_WINDOW_SIZE
-                || frame.size.height < MIN_WINDOW_SIZE
+            let normal = if is_own {
+                own_app.iter().any(|o| unsafe { o.windowID() } == id)
+            } else {
+                unsafe { w.windowLayer() == 0 && w.isOnScreen() }
+            };
+            if !normal || frame.size.width < MIN_WINDOW_SIZE || frame.size.height < MIN_WINDOW_SIZE
             {
                 continue;
             }
@@ -221,7 +236,7 @@ impl ScreenCapturer for MacCapturer {
             .find(|d| unsafe { d.displayID() } == display_id)
             .ok_or(CaptureError::UnknownDisplay(display_id))?;
         let info = display_info(&display);
-        let own = own_app(&content.0);
+        let excluded = Excluded::new(&content.0, OwnWindows::Hidden);
         let scale = info.scale_factor.max(1.0) as f64;
         let source = CGRect::new(
             CGPoint::new(rect.x as f64 / scale, rect.y as f64 / scale),
@@ -229,7 +244,7 @@ impl ScreenCapturer for MacCapturer {
         );
         let rx = start_display_capture_rect(
             &display,
-            own.as_deref(),
+            &excluded,
             Some((source, rect.width as usize, rect.height as usize)),
         );
         wait_frame(rx)
@@ -257,18 +272,29 @@ impl ScreenCapturer for MacCapturer {
     }
 
     fn capture_display(&self, display_id: u32) -> Result<Frame> {
-        self.capture_all()?
+        self.capture_all(OwnWindows::Hidden)?
             .into_iter()
             .find(|f| f.display_id == display_id)
             .ok_or(CaptureError::UnknownDisplay(display_id))
     }
 
-    fn capture_all(&self) -> Result<Vec<Frame>> {
-        let content = self.content()?;
-        let frames = match self.capture_all_with(&content.0) {
+    fn capture_all(&self, own: OwnWindows) -> Result<Vec<Frame>> {
+        let mut content = self.content()?;
+        // Ein eigenes Fenster, das erst nach dem Schnappschuss aufging, kennt
+        // dieser noch nicht – dann frisch abfragen.
+        if own == OwnWindows::Shown {
+            let known = own_windows(&content.0);
+            if own_normal_window_ids()
+                .iter()
+                .any(|id| !known.iter().any(|w| unsafe { w.windowID() } == *id))
+            {
+                content = self.fresh_content()?;
+            }
+        }
+        let frames = match self.capture_all_with(&content.0, own) {
             Ok(f) => f,
             // Veralteter Schnappschuss (z. B. Monitor abgesteckt) – frisch versuchen.
-            Err(_) => self.capture_all_with(&self.fresh_content()?.0)?,
+            Err(_) => self.capture_all_with(&self.fresh_content()?.0, own)?,
         };
         self.refresh_later();
         Ok(frames)
@@ -306,6 +332,83 @@ fn own_app(content: &SCShareableContent) -> Option<Retained<SCRunningApplication
     unsafe { content.applications() }
         .iter()
         .find(|a| unsafe { a.processID() } == pid)
+}
+
+/// Ebene des Overlays (`NSScreenSaverWindowLevel`): Auswahl, Aufnahmeleiste
+/// und Hinweise liegen hier und sind nie im Bild.
+const OVERLAY_LAYER: isize = 1000;
+
+/// Sichtbare Fenster von Grabmark unter dem Overlay im Schnappschuss –
+/// Editor, Einstellungen, Tray-Fenster, aber auch die Vorschaubilder.
+fn own_windows(content: &SCShareableContent) -> Vec<Retained<SCWindow>> {
+    let pid = std::process::id() as i32;
+    unsafe { content.windows() }
+        .iter()
+        .filter(|w| unsafe {
+            w.windowLayer() < OVERLAY_LAYER as _
+                && w.isOnScreen()
+                && w.owningApplication().is_some_and(|a| a.processID() == pid)
+        })
+        .collect()
+}
+
+/// Fenster der App mit Titel (Editor, Einstellungen, Tray-Fenster) – die
+/// Vorschaubilder nach einer Aufnahme haben keinen und bleiben draussen.
+fn own_app_windows(content: &SCShareableContent) -> Vec<Retained<SCWindow>> {
+    own_windows(content)
+        .into_iter()
+        .filter(|w| unsafe { w.title() }.is_some_and(|t| t.length() > 0))
+        .collect()
+}
+
+/// Wie [`own_windows`], aber jetzt (Core Graphics, synchron und schnell).
+fn own_normal_window_ids() -> Vec<u32> {
+    let options =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let Some(array) = CGWindowListCopyWindowInfo(options, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    let array: &CFArray = &array;
+    let pid = std::process::id() as i64;
+    let number = |info: &CFDictionary, key: &CFString| -> Option<i64> {
+        // SAFETY: Die Einträge zu diesen Schlüsseln sind CFNumber.
+        unsafe {
+            let value = info.value(key as *const _ as *const c_void);
+            (value as *const CFNumber).as_ref()?.as_i64()
+        }
+    };
+    (0..array.count())
+        .filter_map(|i| {
+            // SAFETY: Die Einträge sind CFDictionary.
+            let info = unsafe { &*(array.value_at_index(i) as *const CFDictionary) };
+            let own = number(info, unsafe { kCGWindowOwnerPID }) == Some(pid);
+            let normal =
+                number(info, unsafe { kCGWindowLayer }).is_some_and(|l| l < OVERLAY_LAYER as i64);
+            (own && normal)
+                .then(|| number(info, unsafe { kCGWindowNumber }))
+                .flatten()
+                .map(|id| id as u32)
+        })
+        .collect()
+}
+
+/// Was in einer Monitor-Aufnahme fehlen soll: Grabmark selbst, ausser
+/// den normalen Fenstern bei [`OwnWindows::Shown`].
+struct Excluded {
+    app: Option<Retained<SCRunningApplication>>,
+    except: Vec<Retained<SCWindow>>,
+}
+
+impl Excluded {
+    fn new(content: &SCShareableContent, own: OwnWindows) -> Self {
+        Self {
+            app: own_app(content),
+            except: match own {
+                OwnWindows::Hidden => Vec::new(),
+                OwnWindows::Shown => own_app_windows(content),
+            },
+        }
+    }
 }
 
 /// Fenster-IDs in Bildschirm-Reihenfolge (vorne zuerst).
@@ -357,14 +460,14 @@ fn pixel_size(d: &SCDisplay) -> (usize, usize) {
 type PendingFrame = mpsc::Receiver<std::result::Result<Frame, String>>;
 
 /// Startet die Aufnahme eines Monitors; das Ergebnis kommt über den Kanal.
-fn start_display_capture(display: &SCDisplay, own: Option<&SCRunningApplication>) -> PendingFrame {
-    start_display_capture_rect(display, own, None)
+fn start_display_capture(display: &SCDisplay, excluded: &Excluded) -> PendingFrame {
+    start_display_capture_rect(display, excluded, None)
 }
 
 /// Wie oben, optional nur ein Ausschnitt (Punkte im Monitor + Pixelgrösse).
 fn start_display_capture_rect(
     display: &SCDisplay,
-    own: Option<&SCRunningApplication>,
+    excluded: &Excluded,
     source: Option<(CGRect, usize, usize)>,
 ) -> PendingFrame {
     let info = display_info(display);
@@ -372,16 +475,17 @@ fn start_display_capture_rect(
         Some((_, w, h)) => (w, h),
         None => pixel_size(display),
     };
-    let excluded = match own {
-        Some(app) => NSArray::from_slice(&[app]),
+    let apps = match &excluded.app {
+        Some(app) => NSArray::from_slice(&[&**app]),
         None => NSArray::new(),
     };
+    let except: Vec<&SCWindow> = excluded.except.iter().map(|w| &**w).collect();
     let filter = unsafe {
         SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
             SCContentFilter::alloc(),
             display,
-            &excluded,
-            &NSArray::new(),
+            &apps,
+            &NSArray::from_slice(&except),
         )
     };
     let config = unsafe { SCStreamConfiguration::new() };

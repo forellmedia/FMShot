@@ -293,7 +293,7 @@ const mock = (() => {
       for (const item of filtered) {
         for (const g of new Set(item.tags.map((tag) => MOCK_GROUPS[tag]))) counts.set(g, (counts.get(g) ?? 0) + 1);
       }
-      const order = ["people", "animals", "nature", "food", "vehicles", "buildings", "documents", "code", "charts", "apps"];
+      const order = ["people", "clothing", "animals", "nature", "food", "vehicles", "buildings", "documents", "code", "charts", "apps"];
       const groups = order.filter((g) => counts.has(g)).map((group) => ({ group, count: counts.get(group)! }));
       const hits = filtered.filter(({ tags }) => !q.group || tags.some((tag) => MOCK_GROUPS[tag] === q.group));
       hits.sort((a, b) => ((a.capture.createdAt ?? 0) - (b.capture.createdAt ?? 0)) * (q.oldestFirst ? 1 : -1));

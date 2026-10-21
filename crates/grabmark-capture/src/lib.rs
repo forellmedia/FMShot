@@ -54,6 +54,17 @@ pub struct WindowInfo {
     pub title: String,
 }
 
+/// Sind die Fenster von Grabmark selbst im Bild?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnWindows {
+    /// Nein – etwa wenn die Aufnahme aus Grabmark heraus startet.
+    Hidden,
+    /// Normale Fenster (Editor, Galerie, Einstellungen) ja, damit sich
+    /// Grabmark selbst fotografieren lässt. Overlay und schwebende Fenster
+    /// (Tray-Fenster, Hinweise) bleiben trotzdem draussen.
+    Shown,
+}
+
 /// Ein aufgenommenes Bild mit der Herkunft.
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -105,8 +116,8 @@ pub trait ScreenCapturer: Send + Sync {
     fn warm_up(&self) {}
 
     /// Sichtbare normale Fenster, von vorne nach hinten. Die eigenen Fenster
-    /// der App sind nicht dabei.
-    fn windows(&self) -> Result<Vec<WindowInfo>> {
+    /// der App sind nur mit [`OwnWindows::Shown`] dabei.
+    fn windows(&self, _own: OwnWindows) -> Result<Vec<WindowInfo>> {
         Err(CaptureError::NotImplemented("Fenster auflisten"))
     }
 
@@ -147,7 +158,8 @@ pub trait ScreenCapturer: Send + Sync {
     /// Fenster von Grabmark selbst (z. B. das Overlay) sind nie zu sehen.
     fn capture_display(&self, display_id: u32) -> Result<Frame>;
     /// Nimmt alle Monitore auf einmal auf – Grundlage fürs eingefrorene Overlay.
-    fn capture_all(&self) -> Result<Vec<Frame>> {
+    /// Das Overlay ist nie zu sehen, die übrigen Fenster von Grabmark je nach `own`.
+    fn capture_all(&self, _own: OwnWindows) -> Result<Vec<Frame>> {
         self.displays()?
             .iter()
             .map(|d| self.capture_display(d.id))

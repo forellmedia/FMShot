@@ -6,8 +6,9 @@
   import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
   import type { DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
   import { t, type MessageKey } from "$lib/i18n";
+  import { currentPlatform, formatShortcut } from "$lib/shortcuts";
 
-  const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const isMac = currentPlatform() === "mac";
 
   let settings = $state<Settings | null>(null);
   let hotkeys = $state<HotkeyInfo[]>([]);
@@ -219,7 +220,7 @@
             </select>
           </label>
         {:else if tab === "hotkeys"}
-          <p class="hint">{t("settings.hotkeys_hint")}</p>
+          <p class="hint">{t("settings.hotkeys_hint", { backspace: formatShortcut("Backspace") })}</p>
           {#each hotkeys as hk (hk.action)}
             <div class="row">
               <span>{t(`hotkey.${hk.action}` as MessageKey)}</span>
@@ -259,7 +260,7 @@
           {/if}
         {:else if tab === "saving"}
           <label class="row">
-            <span>{t("settings.save_format")}</span>
+            <span>{t("settings.save_format", { shortcut: formatShortcut("Primary+S") })}</span>
             <select
               value={settings.save_format ?? "png"}
               onchange={(e) => {
@@ -490,7 +491,7 @@
     margin-bottom: -1px;
   }
   nav button.on {
-    border-color: var(--accent);
+    border-color: var(--active);
     font-weight: 600;
   }
   .row {
@@ -500,8 +501,48 @@
     gap: var(--space-4);
     padding: 7px 0;
   }
+  /* Ein/Aus als Schalter rechts – wie im Tray und in den Systemeinstellungen. */
   .row.check {
-    justify-content: flex-start;
+    flex-direction: row-reverse;
+  }
+  .row.check input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: none;
+    position: relative;
+    width: 30px;
+    height: 18px;
+    margin: 0;
+    border-radius: 9px;
+    background: var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .row.check input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+    transition: transform 0.15s;
+  }
+  .row.check input[type="checkbox"]:checked {
+    background: var(--active);
+  }
+  .row.check input[type="checkbox"]:checked::after {
+    transform: translateX(12px);
+  }
+  .row.check input[type="checkbox"]:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .row.check input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--selection);
+    outline-offset: 2px;
   }
   select,
   input[type="text"] {

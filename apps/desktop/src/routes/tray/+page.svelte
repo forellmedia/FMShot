@@ -1,7 +1,9 @@
 <script lang="ts">
   // Tray-Fenster: öffnet sich beim Klick aufs Symbol in der Menüleiste
   // (Windows: Taskleiste). Tabs Bild, Bildschirm (Video), Webcam (Video nur
-  // mit der Kamera), Einstellungen.
+  // mit der Kamera), Einstellungen. Bei Video und Webcam steht der runde
+  // Auslöser gleich neben der Zielwahl, Schalter sind Chips darunter – so
+  // passt alles ohne Scrollen ins Fenster.
 
   import { onMount } from "svelte";
   import { api, on, type Camera, type HotkeyInfo, type Microphone, type Settings } from "$lib/api";
@@ -16,59 +18,39 @@
     WebcamShape,
   } from "$lib/bindings";
   import Icon from "$lib/editor/Icon.svelte";
+  import type { IconName } from "$lib/icons";
   import { t, type MessageKey } from "$lib/i18n";
 
   type Tab = "image" | "screen" | "webcam" | "settings";
   // Schlüssel aus der Zeit als FMShot – bleibt absichtlich gleich.
   const TAB_KEY = "fmshot.tray.tab";
 
-  const ICONS = {
-    region: "M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4",
-    window: "M3 5h18v14H3zM3 9h18",
-    screen: "M3 4h18v12H3zM8 20h8M12 16v4",
-    scroll: "M7 3h10v18H7zM12 7v6M9.5 10.5 12 13l2.5-2.5",
-    text: "M5 6V4h14v2M12 4v16M9 20h6",
-    gallery: "M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z",
-    // Stift
-    editor: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
-    folder: "M3 6h6l2 2h10v11H3z",
-    // Zahnrad
-    settings:
-      "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0",
-    quit: "M10 4H5v16h5M14 8l4 4-4 4M18 12H9",
-    // Reiter: Foto (Rahmen mit Berg und Sonne), Bildschirm mit Wiedergabe-Dreieck,
-    // Webcam (Linse auf Fuss).
-    image: "M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M14 8.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0",
-    record: "M3 4h18v12H3zM8 20h8M12 16v4M10.5 7.5v5l4-2.5z",
-    webcam: "M6 10a6 6 0 1 0 12 0 6 6 0 1 0-12 0M10 10a2 2 0 1 0 4 0 2 2 0 1 0-4 0M12 16v4M8 20h8",
-  };
-
-  const TABS: [Tab, MessageKey, string][] = [
-    ["image", "tray.tab_image", ICONS.image],
-    ["screen", "tray.tab_screen", ICONS.record],
-    ["webcam", "tray.tab_webcam", ICONS.webcam],
-    ["settings", "tray.tab_settings", ICONS.settings],
+  const TABS: [Tab, MessageKey, IconName][] = [
+    ["image", "tray.tab_image", "image"],
+    ["screen", "tray.tab_screen", "video"],
+    ["webcam", "tray.tab_webcam", "webcam"],
+    ["settings", "tray.tab_settings", "settings"],
   ];
 
-  const IMAGE_ACTIONS: { mode: CaptureMode; hotkey: string; label: MessageKey; icon: string }[] = [
-    { mode: "region", hotkey: "capture_region", label: "capture.region", icon: ICONS.region },
-    { mode: "window", hotkey: "capture_window", label: "capture.window", icon: ICONS.window },
-    { mode: "screen", hotkey: "capture_screen", label: "capture.screen", icon: ICONS.screen },
-    { mode: "scroll", hotkey: "capture_scroll", label: "capture.scroll", icon: ICONS.scroll },
-    { mode: "text", hotkey: "capture_text", label: "capture.text", icon: ICONS.text },
+  const IMAGE_ACTIONS: { mode: CaptureMode; hotkey: string; label: MessageKey; icon: IconName }[] = [
+    { mode: "region", hotkey: "capture_region", label: "capture.region", icon: "region" },
+    { mode: "window", hotkey: "capture_window", label: "capture.window", icon: "window" },
+    { mode: "screen", hotkey: "capture_screen", label: "capture.screen", icon: "screen" },
+    { mode: "scroll", hotkey: "capture_scroll", label: "capture.scroll", icon: "scroll" },
+    { mode: "text", hotkey: "capture_text", label: "capture.text", icon: "ocr" },
   ];
 
-  const TARGETS: { id: VideoTarget; label: MessageKey; icon: string }[] = [
-    { id: "region", label: "video.target_region", icon: ICONS.region },
-    { id: "window", label: "video.target_window", icon: ICONS.window },
-    { id: "screen", label: "video.target_screen", icon: ICONS.screen },
+  const TARGETS: { id: VideoTarget; label: MessageKey; icon: IconName }[] = [
+    { id: "region", label: "video.target_region", icon: "region" },
+    { id: "window", label: "video.target_window", icon: "window" },
+    { id: "screen", label: "video.target_screen", icon: "screen" },
   ];
 
-  // Seitenverhältnis als kleines Rechteck (Breite × Höhe im 24er-Feld).
-  const FORMATS: { id: CameraFormat; label: MessageKey; icon: string }[] = [
-    { id: "landscape", label: "camera.format_landscape", icon: "M3 7h18v10H3z" },
-    { id: "portrait", label: "camera.format_portrait", icon: "M7 3h10v18H7z" },
-    { id: "square", label: "camera.format_square", icon: "M5 5h14v14H5z" },
+  // Seitenverhältnis als kleines Rechteck.
+  const FORMATS: { id: CameraFormat; label: MessageKey; icon: IconName }[] = [
+    { id: "landscape", label: "camera.format_landscape", icon: "formatLandscape" },
+    { id: "portrait", label: "camera.format_portrait", icon: "formatPortrait" },
+    { id: "square", label: "camera.format_square", icon: "formatSquare" },
   ];
 
   const SHAPES: { id: WebcamShape; label: MessageKey }[] = [
@@ -185,11 +167,27 @@
   }
 </script>
 
+
+{#snippet chip(label: string, icon: IconName, on: boolean, toggle: () => void, disabled = false)}
+  <button class="chip" class:on aria-pressed={on} {disabled} onclick={toggle}>
+    <Icon name={icon} size={15} />
+    {label}
+  </button>
+{/snippet}
+
+{#snippet shutter(mode: CaptureMode, hotkey: string)}
+  {@const title = t("tray.shutter", { shortcut: shortcut(hotkey) })}
+  <button class="shutter" {title} aria-label={title} onclick={() => api.startCapture(mode)}>
+    <span class="disc"></span>
+    <kbd>{shortcut(hotkey)}</kbd>
+  </button>
+{/snippet}
+
 <div class="tray">
   <div class="tabs" role="tablist">
     {#each TABS as [id, label, icon] (id)}
       <button role="tab" aria-selected={tab === id} class:on={tab === id} onclick={() => (tab = id)}>
-        <Icon d={icon} size={20} />
+        <Icon name={icon} size={20} />
         <span>{t(label)}</span>
       </button>
     {/each}
@@ -201,7 +199,7 @@
         {#each IMAGE_ACTIONS as a (a.mode)}
           <li>
             <button class="action" onclick={() => api.startCapture(a.mode)}>
-              <Icon d={a.icon} />
+              <Icon name={a.icon} size={20} />
               <span class="label">{t(a.label)}</span>
               <kbd>{shortcut(a.hotkey)}</kbd>
             </button>
@@ -209,33 +207,48 @@
         {/each}
       </ul>
     {:else if tab === "screen" && video}
-      <div class="targets" role="radiogroup" aria-label={t("video.target")}>
-        {#each TARGETS as target (target.id)}
-          <button
-            role="radio"
-            aria-checked={video.target === target.id}
-            class:on={video.target === target.id}
-            onclick={() => setVideo({ target: target.id })}
-          >
-            <Icon d={target.icon} size={22} />
-            <span>{t(target.label)}</span>
-          </button>
-        {/each}
+      <div class="start">
+        <div class="targets" role="radiogroup" aria-label={t("video.target")}>
+          {#each TARGETS as target (target.id)}
+            <button
+              role="radio"
+              aria-checked={video.target === target.id}
+              class:on={video.target === target.id}
+              onclick={() => setVideo({ target: target.id })}
+            >
+              <Icon name={target.icon} size={22} />
+              <span>{t(target.label)}</span>
+            </button>
+          {/each}
+        </div>
+        {@render shutter("video", "capture_video")}
+      </div>
+
+      <div class="chips">
+        {@render chip(t("video.microphone"), "mic", video.microphone ?? true, () =>
+          setVideo({ microphone: !(video.microphone ?? true) }),
+        )}
+        {@render chip(t("tray.chip_sound"), "speaker", video.system_audio ?? true, () =>
+          setVideo({ system_audio: !(video.system_audio ?? true) }),
+        )}
+        {@render chip(
+          t("video.webcam"),
+          "webcam",
+          (video.webcam ?? false) && cameras.length > 0,
+          () => setVideo({ webcam: !(video.webcam ?? false) }),
+          cameras.length === 0,
+        )}
+        {@render chip(t("tray.chip_countdown"), "timer", video.countdown ?? true, () =>
+          setVideo({ countdown: !(video.countdown ?? true) }),
+        )}
+        {@render chip(t("tray.chip_fps60"), "play", (video.fps ?? 30) === 60, () =>
+          setVideo({ fps: (video.fps ?? 30) === 60 ? 30 : 60 }),
+        )}
       </div>
 
       <div class="rows">
-        <label class="row">
-          <span>{t("video.microphone")}</span>
-          <input
-            type="checkbox"
-            class="switch"
-            checked={video.microphone ?? true}
-            onchange={(e) => setVideo({ microphone: e.currentTarget.checked })}
-          />
-        </label>
         {#if video.microphone ?? true}
           <select
-            class="mic"
             aria-label={t("video.microphone")}
             value={video.microphone_id ?? ""}
             onchange={(e) => setVideo({ microphone_id: e.currentTarget.value || null })}
@@ -246,28 +259,8 @@
             {/each}
           </select>
         {/if}
-        <label class="row">
-          <span>{t("video.system_audio")}</span>
-          <input
-            type="checkbox"
-            class="switch"
-            checked={video.system_audio ?? true}
-            onchange={(e) => setVideo({ system_audio: e.currentTarget.checked })}
-          />
-        </label>
-        <label class="row">
-          <span>{t("video.webcam")}</span>
-          <input
-            type="checkbox"
-            class="switch"
-            disabled={cameras.length === 0}
-            checked={(video.webcam ?? false) && cameras.length > 0}
-            onchange={(e) => setVideo({ webcam: e.currentTarget.checked })}
-          />
-        </label>
         {#if (video.webcam ?? false) && cameras.length > 0}
           <select
-            class="mic"
             aria-label={t("video.webcam")}
             value={video.camera_id ?? ""}
             onchange={(e) => setVideo({ camera_id: e.currentTarget.value || null })}
@@ -277,7 +270,14 @@
               <option value={c.id}>{c.name}</option>
             {/each}
           </select>
-          <div class="webcam">
+          <details class="webcam">
+            <summary>
+              {t("tray.webcam_options")}
+              <span class="sum">
+                {t(SHAPES.find((s) => s.id === (layout.shape ?? "circle"))?.label ?? "video.shape_circle")} ·
+                {t(SIZES.find((s) => s.value === sizeValue)?.label ?? "video.size_medium")}
+              </span>
+            </summary>
             <label class="row">
               <span>{t("video.webcam_shape")}</span>
               <select
@@ -370,51 +370,43 @@
                 onchange={(e) => setLayout({ mirror: e.currentTarget.checked })}
               />
             </label>
-            <p class="hint left">{t("video.webcam_hint")}</p>
-          </div>
+            <p class="hint">{t("video.webcam_hint")}</p>
+          </details>
         {/if}
-        <label class="row">
-          <span>{t("video.countdown_setting")}</span>
-          <input
-            type="checkbox"
-            class="switch"
-            checked={video.countdown ?? true}
-            onchange={(e) => setVideo({ countdown: e.currentTarget.checked })}
-          />
-        </label>
-        <label class="row">
-          <span>{t("video.fps")}</span>
-          <select value={String(video.fps ?? 30)} onchange={(e) => setVideo({ fps: Number(e.currentTarget.value) })}>
-            <option value="30">30</option>
-            <option value="60">60</option>
-          </select>
-        </label>
       </div>
-
-      <button class="record" onclick={() => api.startCapture("video")}>
-        <span class="dot"></span>
-        {t("video.start")}
-        <kbd>{shortcut("capture_video")}</kbd>
-      </button>
       <p class="hint">{t("video.stop_hint", { shortcut: shortcut("capture_video") })}</p>
     {:else if tab === "webcam" && video}
-      <div class="targets" role="radiogroup" aria-label={t("camera.format")}>
-        {#each FORMATS as f (f.id)}
-          <button
-            role="radio"
-            aria-checked={camera.format === f.id}
-            class:on={camera.format === f.id}
-            onclick={() => setCamera({ format: f.id })}
-          >
-            <Icon d={f.icon} size={22} />
-            <span>{t(f.label)}</span>
-          </button>
-        {/each}
+      <div class="start">
+        <div class="targets" role="radiogroup" aria-label={t("camera.format")}>
+          {#each FORMATS as f (f.id)}
+            <button
+              role="radio"
+              aria-checked={camera.format === f.id}
+              class:on={camera.format === f.id}
+              onclick={() => setCamera({ format: f.id })}
+            >
+              <Icon name={f.icon} size={22} />
+              <span>{t(f.label)}</span>
+            </button>
+          {/each}
+        </div>
+        {#if cameras.length > 0}
+          {@render shutter("webcam", "capture_webcam")}
+        {/if}
       </div>
 
       {#if cameras.length === 0}
         <p class="hint">{t("video.no_camera")}</p>
       {:else}
+        <div class="chips">
+          {@render chip(t("video.microphone"), "mic", video.microphone ?? true, () =>
+            setVideo({ microphone: !(video.microphone ?? true) }),
+          )}
+          {@render chip(t("video.webcam_mirror"), "webcam", camera.mirror ?? true, () => setCamera({ mirror: !(camera.mirror ?? true) }))}
+          {@render chip(t("tray.chip_countdown"), "timer", video.countdown ?? true, () =>
+            setVideo({ countdown: !(video.countdown ?? true) }),
+          )}
+        </div>
         <div class="rows">
           <label class="row">
             <span>{t("camera.camera")}</span>
@@ -428,6 +420,20 @@
               {/each}
             </select>
           </label>
+          {#if video.microphone ?? true}
+            <label class="row">
+              <span>{t("video.microphone")}</span>
+              <select
+                value={video.microphone_id ?? ""}
+                onchange={(e) => setVideo({ microphone_id: e.currentTarget.value || null })}
+              >
+                <option value="">{t("video.microphone_default")}</option>
+                {#each microphones as m (m.id)}
+                  <option value={m.id}>{m.name}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <label class="row">
             <span>{t("video.webcam_framing")}</span>
             <select
@@ -461,53 +467,7 @@
               {/each}
             </select>
           </label>
-          <label class="row">
-            <span>{t("video.webcam_mirror")}</span>
-            <input
-              type="checkbox"
-              class="switch"
-              checked={camera.mirror}
-              onchange={(e) => setCamera({ mirror: e.currentTarget.checked })}
-            />
-          </label>
-          <label class="row">
-            <span>{t("video.microphone")}</span>
-            <input
-              type="checkbox"
-              class="switch"
-              checked={video.microphone ?? true}
-              onchange={(e) => setVideo({ microphone: e.currentTarget.checked })}
-            />
-          </label>
-          {#if video.microphone ?? true}
-            <select
-              class="mic"
-              aria-label={t("video.microphone")}
-              value={video.microphone_id ?? ""}
-              onchange={(e) => setVideo({ microphone_id: e.currentTarget.value || null })}
-            >
-              <option value="">{t("video.microphone_default")}</option>
-              {#each microphones as m (m.id)}
-                <option value={m.id}>{m.name}</option>
-              {/each}
-            </select>
-          {/if}
-          <label class="row">
-            <span>{t("video.countdown_setting")}</span>
-            <input
-              type="checkbox"
-              class="switch"
-              checked={video.countdown ?? true}
-              onchange={(e) => setVideo({ countdown: e.currentTarget.checked })}
-            />
-          </label>
         </div>
-
-        <button class="record" onclick={() => api.startCapture("webcam")}>
-          <span class="dot"></span>
-          {t("camera.start")}
-          <kbd>{shortcut("capture_webcam")}</kbd>
-        </button>
         <p class="hint">{t("camera.hint")}</p>
       {/if}
     {:else if tab === "settings"}
@@ -525,13 +485,13 @@
       <ul class="actions">
         <li>
           <button class="action" onclick={() => api.openMain("settings")}>
-            <Icon d={ICONS.settings} />
+            <Icon name="settings" size={20} />
             <span class="label">{t("tray.settings_open")}</span>
           </button>
         </li>
         <li>
           <button class="action" onclick={() => api.openMain("library")}>
-            <Icon d={ICONS.folder} />
+            <Icon name="folder" size={20} />
             <span class="label">{t("tray.open_library")}</span>
           </button>
         </li>
@@ -541,16 +501,16 @@
 
   <footer>
     <button class="link" onclick={() => api.openMain("editor")}>
-      <Icon d={ICONS.editor} size={16} />
+      <Icon name="editor" size={16} />
       {t("tray.open_editor")}
     </button>
     <button class="link" onclick={() => api.openMain("gallery")}>
-      <Icon d={ICONS.gallery} size={16} />
+      <Icon name="gallery" size={16} />
       {t("tray.open_gallery")}
       <kbd>{shortcut("open_gallery")}</kbd>
     </button>
     <button class="link quiet" onclick={() => api.quitApp()}>
-      <Icon d={ICONS.quit} size={16} />
+      <Icon name="quit" size={16} />
       {t("tray.quit")}
     </button>
   </footer>
@@ -602,6 +562,8 @@
     color: var(--text);
     font-weight: 600;
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+    --icon-tone: var(--accent);
+    --icon-tone-opacity: 0.3;
   }
 
   section {
@@ -622,6 +584,12 @@
     gap: 2px;
   }
 
+  /* Aufnahme-Symbole mit roter Fläche – Rot heisst hier „aufnehmen“. */
+  .action {
+    --icon-tone: var(--accent);
+    --icon-tone-opacity: 0.28;
+  }
+
   .action,
   .link {
     display: flex;
@@ -633,7 +601,7 @@
     color: var(--text);
     font: inherit;
     text-align: left;
-    padding: 9px var(--space-2);
+    padding: 8px var(--space-2);
     border-radius: 6px;
     cursor: pointer;
   }
@@ -652,41 +620,148 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Zielwahl und Auslöser in einer Zeile. */
+  .start {
+    display: flex;
+    gap: var(--space-2);
+    align-items: stretch;
+    padding-top: 2px;
   }
 
   .targets {
+    flex: 1;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: var(--space-2);
+    gap: 6px;
   }
 
   .targets button {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    padding: var(--space-3) var(--space-1);
+    gap: 4px;
+    padding: 9px 2px 7px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .targets button:hover {
+    color: var(--text);
+  }
+
+  /* Innen statt aussen verstärkt: Der Rand bleibt innerhalb des Knopfs und
+     wird vom scrollenden Bereich nicht abgeschnitten. */
+  .targets button.on {
+    border-color: var(--active);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--active);
+    --icon-tone: var(--accent);
+    --icon-tone-opacity: 0.3;
+  }
+
+  /* Runder Auslöser wie an einer Kamera: roter Kern im Ring. */
+  .shutter {
+    flex: none;
+    width: 68px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  .disc {
+    width: 40px;
+    height: 40px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 3px solid var(--surface);
+    box-shadow: 0 0 0 2px var(--accent);
+    transition: transform 0.12s ease;
+  }
+
+  .shutter:hover .disc {
+    transform: scale(1.06);
+  }
+
+  .shutter:active .disc {
+    transform: scale(0.94);
+  }
+
+  .shutter:focus-visible {
+    outline: none;
+  }
+
+  .shutter:focus-visible .disc {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .shutter kbd {
+    margin: 0;
+    font-size: 11px;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
     color: var(--text-muted);
     font: inherit;
     font-size: 12px;
     cursor: pointer;
   }
 
-  /* Innen statt aussen verstärkt: Der Rand bleibt innerhalb des Knopfs und
-     wird vom scrollenden Bereich nicht abgeschnitten. */
-  .targets button.on {
-    border-color: var(--accent);
+  .chip:hover:not(:disabled, .on) {
     color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--hover);
+  }
+
+  .chip.on:hover {
+    filter: brightness(1.15);
+  }
+
+  .chip.on {
+    border-color: var(--active);
+    background: var(--active);
+    color: var(--on-active);
+    --icon-tone: var(--accent);
+    --icon-tone-opacity: 0.6;
+  }
+
+  .chip:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .rows {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: 6px;
   }
 
   .row {
@@ -694,7 +769,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    min-height: 28px;
+    min-height: 26px;
+    font-size: 13px;
   }
 
   select {
@@ -707,9 +783,58 @@
     padding: 3px 6px;
   }
 
-  .mic {
+  .rows > select {
     width: 100%;
-    margin-top: -2px;
+  }
+
+  /* Webcam-Darstellung: zugeklappt nur eine Zeile mit dem Wichtigsten. */
+  .webcam {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0 var(--space-2);
+  }
+
+  .webcam[open] {
+    padding-bottom: var(--space-2);
+  }
+
+  .webcam summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 7px 0;
+    font-size: 13px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .webcam summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .webcam summary::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    margin-left: 2px;
+    border-right: 1.5px solid var(--text-muted);
+    border-bottom: 1.5px solid var(--text-muted);
+    transform: rotate(-45deg);
+    transition: transform 0.12s ease;
+  }
+
+  .webcam[open] summary::after {
+    transform: rotate(45deg);
+  }
+
+  .sum {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .webcam .row + .row {
+    margin-top: 4px;
   }
 
   /* Schalter statt Häkchen – wie in den Systemeinstellungen. */
@@ -717,10 +842,10 @@
     appearance: none;
     -webkit-appearance: none;
     flex: none;
-    width: 34px;
-    height: 20px;
+    width: 30px;
+    height: 18px;
     margin: 0;
-    border-radius: 10px;
+    border-radius: 9px;
     background: var(--border);
     position: relative;
     cursor: pointer;
@@ -732,8 +857,8 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: #fff;
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
@@ -741,84 +866,40 @@
   }
 
   .switch:checked {
-    background: var(--accent);
+    background: var(--active);
   }
 
   .switch:checked::after {
-    transform: translateX(14px);
-  }
-
-  .record {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    margin-top: auto;
-    border: 0;
-    border-radius: var(--radius);
-    background: var(--accent);
-    color: #fff;
-    font: inherit;
-    font-weight: 600;
-    padding: 11px;
-    cursor: pointer;
-  }
-
-  .record:hover {
-    filter: brightness(1.08);
-  }
-
-  .record kbd {
-    color: rgb(255 255 255 / 0.75);
-    margin-left: var(--space-2);
-  }
-
-  .dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #fff;
+    transform: translateX(12px);
   }
 
   .hint {
     margin: 0;
     font-size: 12px;
     color: var(--text-muted);
-    text-align: center;
-  }
-
-  .hint.left {
-    text-align: left;
-  }
-
-  /* Einstellungen der Webcam, eingerückt unter dem Schalter. */
-  .webcam {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding-left: var(--space-3);
-    border-left: 2px solid var(--border);
-  }
-
-  .switch:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 
   footer {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     border-top: 1px solid var(--border);
     padding-top: var(--space-2);
   }
 
   .link {
     font-size: 13px;
-    padding: 7px var(--space-2);
+    padding: 6px var(--space-2);
   }
 
   .quiet {
     color: var(--text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .disc,
+    .webcam summary::after {
+      transition: none;
+    }
   }
 </style>

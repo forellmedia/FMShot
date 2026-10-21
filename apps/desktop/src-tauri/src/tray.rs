@@ -220,7 +220,11 @@ fn build_popover(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .build()?;
     let app = app.clone();
     window.on_window_event(move |event| {
-        if let WindowEvent::Focused(false) = event {
+        // Das Overlay einer Aufnahme per Tastenkürzel nimmt den Fokus – das
+        // Tray-Fenster bleibt dann offen und kommt mit aufs Bild.
+        if let WindowEvent::Focused(false) = event
+            && !crate::capture::shows_own_windows(&app)
+        {
             hide_popover(&app);
         }
     });
@@ -266,6 +270,15 @@ fn show_popover(window: &WebviewWindow, icon: Rect) {
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.emit("tray-opened", ());
+}
+
+/// Tray-Fenster nach einer Aufnahme wieder in den Vordergrund, falls offen.
+pub fn refocus_popover(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POPOVER)
+        && window.is_visible().unwrap_or(false)
+    {
+        let _ = window.set_focus();
+    }
 }
 
 pub fn hide_popover(app: &AppHandle) {

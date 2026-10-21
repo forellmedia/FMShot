@@ -3,6 +3,7 @@
   // werden als Stil für neue Ebenen gemerkt.
 
   import { t } from "$lib/i18n";
+  import { formatShortcut } from "$lib/shortcuts";
   import { editor } from "./state.svelte";
   import {
     BACKGROUNDS,
@@ -557,10 +558,10 @@
     {/if}
 
     {#if editor.canGroup}
-      <button class="toggle" title="⌘G" onclick={() => editor.groupSelection()}>{t("props.group")}</button>
+      <button class="toggle" title={formatShortcut("Primary+G")} onclick={() => editor.groupSelection()}>{t("props.group")}</button>
     {/if}
     {#if editor.canUngroup}
-      <button class="toggle" title="⇧⌘G" onclick={() => editor.ungroupSelection()}>{t("props.ungroup")}</button>
+      <button class="toggle" title={formatShortcut("Primary+Shift+G")} onclick={() => editor.ungroupSelection()}>{t("props.ungroup")}</button>
     {/if}
 
     {#if multi}
@@ -624,8 +625,8 @@
     background: var(--hover);
   }
   .seg button.on {
-    background: var(--accent);
-    color: #fff;
+    background: var(--active);
+    color: var(--on-active);
   }
   .swatch.big {
     width: 26px;
@@ -646,9 +647,9 @@
     white-space: nowrap;
   }
   .toggle.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--active);
+    border-color: var(--active);
+    color: var(--on-active);
   }
   .size {
     min-width: 12px;
@@ -678,8 +679,8 @@
     background: var(--hover);
   }
   .align-grid button.on {
-    background: var(--accent);
-    color: #fff;
+    background: var(--active);
+    color: var(--on-active);
   }
   .hint {
     color: var(--text-muted);

@@ -101,7 +101,7 @@ pub fn get_hotkeys(app: AppHandle) -> Vec<HotkeyInfo> {
             HotkeyInfo {
                 action: action_key(action).into(),
                 shortcut: sc.map(|s| s.to_string()).unwrap_or_default(),
-                label: sc.map(|s| s.label(platform)).unwrap_or_default(),
+                label: sc.map(crate::i18n::shortcut_label).unwrap_or_default(),
                 conflict: conflicts.iter().any(|(a, b)| *a == action || *b == action),
             }
         })
@@ -115,7 +115,7 @@ pub fn shortcut_label(shortcut: String) -> Result<String, String> {
     let sc: Shortcut = shortcut
         .parse()
         .map_err(|e: grabmark_hotkeys::ParseError| e.to_string())?;
-    Ok(sc.label(Platform::current()))
+    Ok(crate::i18n::shortcut_label(&sc))
 }
 
 /// Während ein neues Kürzel aufgenommen wird, dürfen die alten nicht auslösen.

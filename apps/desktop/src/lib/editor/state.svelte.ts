@@ -128,6 +128,10 @@ export class Editor {
   query = $state("");
   /** Galerie im Vollbild offen. */
   galleryOpen = $state(false);
+  /** Anzeige der globalen Kürzel je Aktion (vom Backend, je Plattform). */
+  hotkeyLabels = $state<Record<string, string>>({});
+  /** Offenes Kontextmenü einer Aufnahme (Leiste unten oder Leinwand). */
+  captureMenu = $state<{ x: number; y: number; id: string } | null>(null);
   /** Auswahl des Formats für „Speichern als …“ (⇧⌘S) offen. */
   saveAsOpen = $state(false);
   /** Kopierte Ebenen für ⌘V. */
@@ -236,6 +240,23 @@ export class Editor {
     });
     await on("open-gallery", () => (this.galleryOpen = true));
     await on("open-editor", () => (this.galleryOpen = false));
+    // Kürzel können in den Einstellungen geändert worden sein.
+    void this.loadHotkeys();
+    window.addEventListener("focus", () => void this.loadHotkeys());
+  }
+
+  async loadHotkeys() {
+    try {
+      const list = await api.getHotkeys();
+      this.hotkeyLabels = Object.fromEntries(list.map((h) => [h.action, h.label]));
+    } catch {
+      // Ohne Kürzel: Anzeige bleibt leer.
+    }
+  }
+
+  /** Anzeige des globalen Kürzels einer Aktion, z. B. `capture_region`. */
+  hotkey(action: string): string {
+    return this.hotkeyLabels[action] ?? "";
   }
 
   async refreshCaptures() {
@@ -790,15 +811,27 @@ export class Editor {
     }
   }
 
+  /** Löscht eine Aufnahme. War sie offen, kommt die nächste in der Leiste
+   * (sonst die vorige); ohne weitere Aufnahmen bleibt der Editor leer. */
   async deleteCapture(id: string) {
+    const index = this.captures.findIndex((c) => c.id === id);
     await api.deleteCapture(id);
     const wasCurrent = this.current?.id === id;
     await this.refreshCaptures();
     if (wasCurrent) {
       this.current = null;
       this.doc = null;
-      if (this.captures.length) await this.open(this.captures[0].id);
+      this.selectedIds = [];
+      const next = this.captures[Math.min(Math.max(index, 0), this.captures.length - 1)];
+      if (next) await this.open(next.id);
     }
+  }
+
+  /** Kontextmenü der Aufnahme am Mauszeiger statt des Menüs des WebViews. */
+  openCaptureMenu(e: MouseEvent, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    this.captureMenu = { x: e.clientX, y: e.clientY, id };
   }
 
   async toggleStar(c: CaptureInfo) {

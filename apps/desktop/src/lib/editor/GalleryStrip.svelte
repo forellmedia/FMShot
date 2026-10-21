@@ -1,10 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { fileUrl, type CaptureInfo } from "$lib/api";
+  import { fileUrl } from "$lib/api";
   import { t } from "$lib/i18n";
   import { editor } from "./state.svelte";
 
-  let menu = $state<{ x: number; y: number; capture: CaptureInfo } | null>(null);
   let urls = $state<Record<string, string>>({});
 
   // Vorschaubilder laden (neu bei geänderter Version).
@@ -30,28 +29,6 @@
     });
   });
 
-  function contextMenu(e: MouseEvent, capture: CaptureInfo) {
-    e.preventDefault();
-    menu = { x: e.clientX, y: e.clientY, capture };
-  }
-
-  // Menü ganz im Fenster halten – am rechten Rand sonst abgeschnitten.
-  let menuEl = $state<HTMLElement>();
-  $effect(() => {
-    if (!menu || !menuEl) return;
-    const r = menuEl.getBoundingClientRect();
-    const maxX = window.innerWidth - r.width - 8;
-    if (menu.x > maxX) menu.x = Math.max(8, maxX);
-    // Öffnet nach oben (translateY(-100%)): oben nicht hinausragen.
-    if (menu.y - r.height < 8) menu.y = r.height + 8;
-  });
-
-  async function act(fn: (c: CaptureInfo) => Promise<unknown>) {
-    const c = menu?.capture;
-    menu = null;
-    if (c) await fn(c);
-  }
-
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   function onSearch(e: Event) {
     editor.query = (e.currentTarget as HTMLInputElement).value;
@@ -64,8 +41,6 @@
   }
 </script>
 
-<svelte:window onclick={() => (menu = null)} />
-
 <section class="strip" bind:this={strip} aria-label={t("gallery.title")}>
   <input class="search" type="search" placeholder={t("gallery.search")} value={editor.query} oninput={onSearch} />
   {#each editor.captures as c (c.id)}
@@ -75,7 +50,7 @@
       class:current={editor.current?.id === c.id}
       title={time(c.createdAt)}
       onclick={() => editor.open(c.id)}
-      oncontextmenu={(e) => contextMenu(e, c)}
+      oncontextmenu={(e) => editor.openCaptureMenu(e, c.id)}
       draggable="true"
       ondragstart={(e) => e.dataTransfer?.setData("text/x-grabmark-capture", c.id)}
     >
@@ -86,22 +61,9 @@
       {#if c.videoPath}<span class="play" aria-label={t("gallery.mode.video")}>▶</span>{/if}
     </button>
   {:else}
-    <p class="empty">{t("gallery.empty")}</p>
+    <p class="empty">{t("gallery.empty", { shortcut: editor.hotkey("capture_region") })}</p>
   {/each}
 </section>
-
-{#if menu}
-  <ul class="menu" bind:this={menuEl} style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
-    <li><button onclick={() => act((c) => editor.open(c.id))}>{t("gallery.open")}</button></li>
-    <li>
-      <button onclick={() => act((c) => editor.toggleStar(c))}>
-        {menu.capture.starred ? t("gallery.unstar") : t("gallery.star")}
-      </button>
-    </li>
-    <li><button onclick={() => act(async (c) => (await import("$lib/api")).api.revealCapture(c.id))}>{t("gallery.reveal")}</button></li>
-    <li class="danger"><button onclick={() => act((c) => editor.deleteCapture(c.id))}>{t("gallery.delete")}</button></li>
-  </ul>
-{/if}
 
 <style>
   .strip {
@@ -139,7 +101,7 @@
     cursor: pointer;
   }
   .thumb.current {
-    border-color: var(--accent);
+    border-color: var(--active);
   }
   .thumb img {
     height: 100%;
@@ -166,36 +128,5 @@
   .empty {
     color: var(--text-muted);
     margin: 0 auto;
-  }
-  .menu {
-    position: fixed;
-    z-index: 20;
-    width: max-content;
-    list-style: none;
-    margin: 0;
-    padding: 4px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 6px 24px rgb(0 0 0 / 0.2);
-    transform: translateY(-100%);
-  }
-  .menu button {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 6px 12px;
-    border: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    border-radius: 5px;
-    cursor: pointer;
-  }
-  .menu button:hover {
-    background: var(--hover);
-  }
-  .danger button {
-    color: var(--accent);
   }
 </style>

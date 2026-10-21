@@ -7,6 +7,7 @@
   import { onMount, untrack } from "svelte";
   import type { WasmRenderer } from "$lib/wasm/grabmark_render";
   import { fileBytes, isTauri } from "$lib/api";
+  import { isTextField } from "$lib/textField";
   import { editor } from "./state.svelte";
   import {
     bounds,
@@ -982,6 +983,12 @@
     if (file) editor.addImageBytes(new Uint8Array(await file.arrayBuffer()));
   }
 
+  /** Rechtsklick: Menü der Aufnahme – in Textfeldern bleibt das zum Bearbeiten. */
+  function onContextMenu(e: MouseEvent) {
+    if (isTextField(e.target)) return;
+    if (editor.current) editor.openCaptureMenu(e, editor.current.id);
+  }
+
   function onDoubleClick(e: MouseEvent) {
     const hit = topLayerAt(toDoc(e));
     if (hit && (hit.kind.type === "text" || hit.kind.type === "callout")) startEditing(hit.id);
@@ -1241,6 +1248,7 @@
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
   ondblclick={onDoubleClick}
+  oncontextmenu={onContextMenu}
   onwheel={onWheel}
   ondragover={onDragOver}
   ondragleave={() => (dropActive = false)}

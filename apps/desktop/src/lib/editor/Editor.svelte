@@ -2,7 +2,9 @@
   import { onMount } from "svelte";
   import { api } from "$lib/api";
   import { t } from "$lib/i18n";
+  import { currentPlatform, formatShortcut, withShortcut } from "$lib/shortcuts";
   import Canvas from "./Canvas.svelte";
+  import CaptureMenu from "./CaptureMenu.svelte";
   import Dropdown from "./Dropdown.svelte";
   import ExportProgress from "./ExportProgress.svelte";
   import Gallery from "./Gallery.svelte";
@@ -30,9 +32,37 @@
     if (import.meta.env.DEV) (window as unknown as { __grabmark: typeof editor }).__grabmark = editor;
   });
 
+  /** Text mit globalem Kürzel, sofern belegt. */
+  function withHotkey(label: string, action: string) {
+    const key = editor.hotkey(action);
+    return key ? `${label} (${key})` : label;
+  }
+
   function isTyping(e: KeyboardEvent) {
     const el = e.target as HTMLElement | null;
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  }
+
+  /**
+   * Offene Aufnahme löschen wie im Finder: ⌘⌫ auf macOS, Entf sonst. Entf
+   * löscht zuerst gewählte Ebenen; die Zeitleiste kann es auch für sich
+   * beanspruchen (Klick löschen) – darum erst nach allen Tasten-Handlern
+   * entscheiden. Gibt zurück, ob die Taste damit erledigt ist.
+   */
+  function deleteCaptureKey(e: KeyboardEvent, key: string): boolean {
+    const id = editor.current?.id;
+    if (!id || editor.editingTextId != null || e.altKey || e.shiftKey) return false;
+    if (currentPlatform() === "mac") {
+      if (!(e.metaKey && key === "backspace")) return false;
+      e.preventDefault();
+      void editor.deleteCapture(id);
+      return true;
+    }
+    if (key !== "delete" || e.ctrlKey || e.metaKey || editor.editableSelection.length) return false;
+    setTimeout(() => {
+      if (!e.defaultPrevented && editor.current?.id === id) void editor.deleteCapture(id);
+    });
+    return true;
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -46,6 +76,7 @@
     if (!editor.doc) return;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
+    if (deleteCaptureKey(e, key)) return;
     if (mod) {
       const actions: Record<string, () => void> = {
         z: () => (e.shiftKey ? editor.redo() : editor.undo()),
@@ -116,38 +147,38 @@
 <div class="editor">
   <header class:two-rows={twoRows} bind:clientWidth={headerWidth}>
     <div class="capture" bind:clientWidth={captureWidth}>
-      <button title="{t('gallery.title')} (⌥⌘G)" aria-label={t("gallery.title")} onclick={() => (editor.galleryOpen = true)}>
-        <Icon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
+      <button title={withHotkey(t("gallery.title"), "open_gallery")} aria-label={t("gallery.title")} onclick={() => (editor.galleryOpen = true)}>
+        <Icon name="gallery" />
       </button>
       <span class="sep"></span>
       <button title={t("capture.region")} onclick={() => api.startCapture("region")}>
-        <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
+        <Icon name="region" />
       </button>
       <button title={t("capture.window")} onclick={() => api.startCapture("window")}>
-        <Icon d="M3 5h18v14H3zM3 9h18" />
+        <Icon name="window" />
       </button>
       <button title={t("capture.screen")} onclick={() => api.startCapture("screen")}>
-        <Icon d="M3 4h18v12H3zM8 20h8M12 16v4" />
+        <Icon name="screen" />
       </button>
       <button title={t("capture.scroll")} onclick={() => api.startCapture("scroll")}>
-        <Icon d="M6 3h12v9H6zM12 15v6M9 18l3 3 3-3" />
+        <Icon name="scroll" />
       </button>
       <button title={t("capture.text")} onclick={() => api.startCapture("text")}>
-        <Icon d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M9 9h6M12 9v6" />
+        <Icon name="ocr" />
       </button>
     </div>
     <PropertiesBar bind:contentWidth={propsWidth} />
     <div class="actions" bind:clientWidth={actionsWidth}>
-      <button title="{t('editor.undo')} (⌘Z)" disabled={!editor.canUndo} onclick={() => editor.undo()}>
-        <Icon d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3" />
+      <button title={withShortcut(t("editor.undo"), "Primary+Z")} disabled={!editor.canUndo} onclick={() => editor.undo()}>
+        <Icon name="undo" />
       </button>
-      <button title="{t('editor.redo')} (⇧⌘Z)" disabled={!editor.canRedo} onclick={() => editor.redo()}>
-        <Icon d="M15 14l5-5-5-5M20 9H9a5 5 0 000 10h3" />
+      <button title={withShortcut(t("editor.redo"), "Primary+Shift+Z")} disabled={!editor.canRedo} onclick={() => editor.redo()}>
+        <Icon name="redo" />
       </button>
       <span class="sep"></span>
-      <button title={t("editor.zoom_out")} onclick={() => editor.zoomAt(0.8)}><Icon d="M5 12h14" /></button>
-      <button class="zoom" title={t("editor.zoom_fit")} onclick={() => editor.fit()}>{zoomPercent}%</button>
-      <button title={t("editor.zoom_in")} onclick={() => editor.zoomAt(1.25)}><Icon d="M5 12h14M12 5v14" /></button>
+      <button title={t("editor.zoom_out")} onclick={() => editor.zoomAt(0.8)}><Icon name="zoomOut" /></button>
+      <button class="zoom" title={withShortcut(t("editor.zoom_fit"), "Primary+0")} onclick={() => editor.fit()}>{zoomPercent}%</button>
+      <button title={t("editor.zoom_in")} onclick={() => editor.zoomAt(1.25)}><Icon name="zoomIn" /></button>
       <span class="sep"></span>
       {#if !compact}
         <button
@@ -156,22 +187,22 @@
           disabled={!editor.doc || editor.busy}
           onclick={() => editor.showText()}
         >
-          <Icon d="M4 7V5h16v2M12 5v14M9 19h6" />
+          <Icon name="ocr" />
         </button>
         <button title={t("editor.redact")} disabled={!editor.doc || editor.busy} onclick={() => editor.autoRedact()}>
-          <Icon d="M4 6h16M4 12h10M4 18h7M17 13l4 4m0-4l-4 4" />
+          <Icon name="redact" />
         </button>
         <span class="sep"></span>
       {/if}
-      <button title="{t('editor.copy')} (⌘C)" aria-label={t("editor.copy")} onclick={() => editor.copy()} disabled={!editor.doc}>
-        <Icon d="M9 9h10v10H9zM5 15V5h10" />
+      <button title={withShortcut(t("editor.copy"), "Primary+C")} aria-label={t("editor.copy")} onclick={() => editor.copy()} disabled={!editor.doc}>
+        <Icon name="copy" />
       </button>
-      <button title="{t('editor.save')} (⌘S)" aria-label={t("editor.save")} onclick={() => editor.save()} disabled={!editor.doc}>
-        <Icon d="M12 4v11M7 10l5 5 5-5M5 19h14" />
+      <button title={withShortcut(t("editor.save"), "Primary+S")} aria-label={t("editor.save")} onclick={() => editor.save()} disabled={!editor.doc}>
+        <Icon name="save" />
       </button>
       {#if compact}
         <Dropdown align="right" title={t("editor.more")}>
-          {#snippet label()}<Icon d="M5 12h.5M12 12h.5M19 12h.5" />{/snippet}
+          {#snippet label()}<Icon name="more" />{/snippet}
           {#snippet children(close)}
             <button
               class="item"
@@ -210,7 +241,7 @@
                 close();
               }}
             >
-              {t("editor.settings")} <kbd>⌘,</kbd>
+              {t("editor.settings")} <kbd>{formatShortcut("Primary+,")}</kbd>
             </button>
           {/snippet}
         </Dropdown>
@@ -220,10 +251,10 @@
           class:on={editor.layersPanel}
           onclick={() => (editor.layersPanel = !editor.layersPanel)}
         >
-          <Icon d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
+          <Icon name="layers" />
         </button>
         <button title={t("editor.settings")} onclick={() => api.openMain("settings")}>
-          <Icon d="M12 9a3 3 0 110 6 3 3 0 010-6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z" />
+          <Icon name="settings" />
         </button>
       {/if}
     </div>
@@ -238,10 +269,10 @@
           <h1>Grabmark</h1>
           <p>{t("start.hint")}</p>
           <div class="start-buttons">
-            <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>
-            <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>⌥⌘3</kbd></button>
-            <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>⇧⌘1</kbd></button>
-            <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>⌥⌘4</kbd></button>
+            <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>{editor.hotkey("capture_region")}</kbd></button>
+            <button onclick={() => api.startCapture("window")}>{t("capture.window")} <kbd>{editor.hotkey("capture_window")}</kbd></button>
+            <button onclick={() => api.startCapture("screen")}>{t("capture.screen")} <kbd>{editor.hotkey("capture_screen")}</kbd></button>
+            <button onclick={() => api.startCapture("scroll")}>{t("capture.scroll")} <kbd>{editor.hotkey("capture_scroll")}</kbd></button>
           </div>
         </div>
     {/if}
@@ -257,6 +288,7 @@
   {/if}
 
   <GalleryStrip />
+  <CaptureMenu />
 
   {#if editor.galleryOpen}
     <Gallery />
@@ -297,8 +329,16 @@
       "capture . actions"
       "props props props";
   }
+  /* Aufnahme-Knöpfe mit roter Fläche – Rot heisst „aufnehmen“. */
   .capture {
     grid-area: capture;
+    --icon-tone: var(--accent);
+    --icon-tone-opacity: 0.28;
+  }
+  /* Die Galerie ist keine Aufnahme. */
+  .capture > button:first-child {
+    --icon-tone: currentColor;
+    --icon-tone-opacity: 0.2;
   }
   .actions {
     grid-area: actions;

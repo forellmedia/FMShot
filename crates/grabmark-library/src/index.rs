@@ -59,7 +59,7 @@ pub(crate) fn open(path: &Path) -> rusqlite::Result<Connection> {
             model   TEXT NOT NULL,
             vector  BLOB NOT NULL
         );
-        -- Stichwörter aus dem Bildinhalt, je Aufnahme höchstens drei.
+        -- Stichwörter aus dem Bildinhalt, je Aufnahme nur wenige.
         CREATE TABLE IF NOT EXISTS capture_tags (
             id     TEXT NOT NULL,
             term   TEXT NOT NULL,

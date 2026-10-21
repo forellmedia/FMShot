@@ -18,7 +18,7 @@
       aria-label={t(tool.label)}
       onclick={() => editor.setTool(tool.id === "blur" ? editor.style.obscure : tool.id)}
     >
-      <Icon d={tool.icon} />
+      <Icon name={tool.icon} />
     </button>
   {/each}
 </nav>
@@ -48,7 +48,7 @@
     background: var(--hover);
   }
   button.active {
-    background: var(--accent);
-    color: #fff;
+    background: var(--active);
+    color: var(--on-active);
   }
 </style>

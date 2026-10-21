@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use grabmark_library::Library;
-use grabmark_vision::{Embedding, ImageEncoder, MODEL_ID, Tagger, TextEncoder, tags_version};
+use grabmark_vision::{
+    Embedding, ImageEncoder, ImageVectors, MODEL_ID, Tagger, TextEncoder, tags_version,
+};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -119,7 +121,7 @@ impl VisionState {
                 .embeddings(MODEL_ID)
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .filter_map(|(id, b)| Embedding::from_bytes(&b).ok().map(|e| (id, e)))
+                .filter_map(|(id, b)| ImageVectors::from_bytes(&b).ok().map(|v| (id, v.whole)))
                 .collect();
             *cache = (generation, Arc::new(all));
         }
@@ -282,8 +284,8 @@ fn tag_pending(app: &AppHandle, library: &Library, dir: &Path) {
             }
         };
         for (id, bytes) in pending {
-            let tags = Embedding::from_bytes(&bytes)
-                .map(|e| tagger.tags(&e))
+            let tags = ImageVectors::from_bytes(&bytes)
+                .map(|v| tagger.tags(&v))
                 .unwrap_or_default();
             if let Err(e) = library.set_tags(&id, &version, &tags) {
                 log::error!("Stichwörter {id}: {e}");
@@ -311,18 +313,21 @@ fn progress(app: &AppHandle, library: &Library) {
     }
 }
 
-/// Vorschaubild reicht (das Modell sieht 224×224); sonst das Original.
+/// Ganzes Bild und Ausschnitte. Die Ausschnitte brauchen das Original – im
+/// Vorschaubild (320 Pixel) wären sie zu klein; fehlt es, reicht dieses.
 fn embed(library: &Library, encoder: &ImageEncoder, id: &str) -> Result<Vec<u8>, String> {
     let rec = library.get(id).map_err(|e| e.to_string())?;
-    let image = std::fs::read(rec.thumbnail_path())
-        .ok()
-        .and_then(|b| grabmark_render::decode_image(&b).ok())
-        .map(Ok)
-        .unwrap_or_else(|| {
-            let bytes = library.read_original(id).map_err(|e| e.to_string())?;
-            grabmark_render::decode_png(&bytes).map_err(|e| e.to_string())
-        })?;
-    Ok(encoder.embed(&image).map_err(|e| e.to_string())?.to_bytes())
+    let image = [rec.original_path(), rec.thumbnail_path()]
+        .iter()
+        .find_map(|p| {
+            let bytes = std::fs::read(p).ok()?;
+            grabmark_render::decode_image(&bytes).ok()
+        })
+        .ok_or("Bild nicht lesbar")?;
+    Ok(encoder
+        .embed_all(&image)
+        .map_err(|e| e.to_string())?
+        .to_bytes())
 }
 
 /// Aufnahmen, deren Bildinhalt zum Suchtext passt (bester zuerst). Leer,

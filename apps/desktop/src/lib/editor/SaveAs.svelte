@@ -102,8 +102,8 @@
   }
   button:focus-visible,
   button:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
+    border-color: var(--active);
+    box-shadow: 0 0 0 1px var(--active);
     outline: none;
   }
   .label {

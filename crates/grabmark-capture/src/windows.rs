@@ -54,7 +54,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR};
 
-use crate::{CaptureError, Display, Frame, PixelRect, Result, ScreenCapturer, WindowInfo};
+use crate::{
+    CaptureError, Display, Frame, OwnWindows, PixelRect, Result, ScreenCapturer, WindowInfo,
+};
 
 /// Kleinere Fenster (Symbole, Ränder) sind keine sinnvollen Ziele.
 const MIN_WINDOW_SIZE: i32 = 40;
@@ -107,9 +109,9 @@ impl ScreenCapturer for WindowsCapturer {
         state < 0
     }
 
-    fn windows(&self) -> Result<Vec<WindowInfo>> {
+    fn windows(&self, own: OwnWindows) -> Result<Vec<WindowInfo>> {
         let _dpi = DpiGuard::new();
-        let own = unsafe { GetCurrentProcessId() };
+        let own = (own == OwnWindows::Hidden).then(|| unsafe { GetCurrentProcessId() });
         let mut result = Vec::new();
         for hwnd in top_level_windows() {
             if let Some(info) = window_info(hwnd, own) {
@@ -214,13 +216,13 @@ impl ScreenCapturer for WindowsCapturer {
         })
     }
 
-    fn capture_all(&self) -> Result<Vec<Frame>> {
+    fn capture_all(&self, own: OwnWindows) -> Result<Vec<Frame>> {
         let _dpi = DpiGuard::new();
         let monitors = monitors();
         if monitors.is_empty() {
             return Err(CaptureError::Backend("Keine Monitore gefunden".into()));
         }
-        let _hidden = HiddenOwnWindows::hide();
+        let _hidden = (own == OwnWindows::Hidden).then(HiddenOwnWindows::hide);
         monitors
             .iter()
             .map(|m| {
@@ -326,7 +328,8 @@ fn top_level_windows() -> Vec<HWND> {
     list
 }
 
-fn window_info(hwnd: HWND, own_pid: u32) -> Option<WindowInfo> {
+/// `own_pid`: Fenster dieses Prozesses weglassen.
+fn window_info(hwnd: HWND, own_pid: Option<u32>) -> Option<WindowInfo> {
     unsafe {
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || is_cloaked(hwnd) {
             return None;
@@ -338,7 +341,7 @@ fn window_info(hwnd: HWND, own_pid: u32) -> Option<WindowInfo> {
     }
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == own_pid {
+    if Some(pid) == own_pid {
         return None;
     }
     let class = class_name(hwnd);

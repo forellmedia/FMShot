@@ -8,13 +8,15 @@
 mod preprocess;
 mod tagger;
 pub mod terms;
+mod views;
 
 pub use preprocess::{SIZE, pixel_values};
 pub use tagger::{Tagger, tags_version};
+pub use views::parts;
 
 /// Kennung von Modell und Vorverarbeitung. Ändert sie sich, sind gespeicherte
 /// Vektoren ungültig und werden neu berechnet.
-pub const MODEL_ID: &str = "siglip2-base-p16-224/w8-q4/1";
+pub const MODEL_ID: &str = "siglip2-base-p16-224/w8-q4/2";
 
 /// Länge eines Vektors.
 pub const DIM: usize = 768;
@@ -95,6 +97,57 @@ impl Embedding {
     }
 }
 
+/// Vektoren einer Aufnahme: das ganze Bild (Suche) und die Ausschnitte aus
+/// [`parts`] (Stichwörter). Gespeichert wird das ganze Bild genau, die
+/// Ausschnitte auf 8 Bit gerundet – ein Viertel des Platzes, die Logits
+/// weichen dadurch um rund 0,1 ab.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageVectors {
+    pub whole: Embedding,
+    pub parts: Vec<Embedding>,
+}
+
+/// Bytes eines Ausschnitts: Massstab (f32) und 768 Werte (i8).
+const PART_BYTES: usize = 4 + DIM;
+
+impl ImageVectors {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.whole.to_bytes();
+        for part in &self.parts {
+            let max = part.0.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            let scale = (max / 127.0).max(f32::MIN_POSITIVE);
+            out.extend(scale.to_le_bytes());
+            out.extend(part.0.iter().map(|v| (v / scale).round() as i8 as u8));
+        }
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, VisionError> {
+        let whole_len = DIM * 4;
+        if bytes.len() < whole_len || !(bytes.len() - whole_len).is_multiple_of(PART_BYTES) {
+            return Err(VisionError::Bytes(bytes.len()));
+        }
+        let (whole, rest) = bytes.split_at(whole_len);
+        let parts = rest
+            .chunks(PART_BYTES)
+            .map(|c| {
+                let (scale, values) = c.split_at(4);
+                let scale = f32::from_le_bytes([scale[0], scale[1], scale[2], scale[3]]);
+                Embedding::normalized(values.iter().map(|&b| f32::from(b as i8) * scale).collect())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(ImageVectors {
+            whole: Embedding::from_bytes(whole)?,
+            parts,
+        })
+    }
+
+    /// Ganzes Bild und Ausschnitte.
+    pub fn all(&self) -> impl Iterator<Item = &Embedding> {
+        std::iter::once(&self.whole).chain(&self.parts)
+    }
+}
+
 #[cfg(feature = "onnx")]
 mod onnx;
 #[cfg(feature = "onnx")]
@@ -119,6 +172,29 @@ mod tests {
         assert!((e.similarity(&e) - 1.0).abs() < 1e-6);
         let back = Embedding::from_bytes(&e.to_bytes()).unwrap();
         assert_eq!(back, e);
+    }
+
+    #[test]
+    fn ausschnitte_gerundet_speichern() {
+        let unit = |seed: f32| {
+            let values = (0..DIM).map(|i| ((i as f32 + seed) * 0.37).sin()).collect();
+            Embedding::normalized(values).unwrap()
+        };
+        let v = ImageVectors {
+            whole: unit(1.0),
+            parts: vec![unit(2.0), unit(3.0)],
+        };
+        let bytes = v.to_bytes();
+        assert_eq!(bytes.len(), DIM * 4 + 2 * PART_BYTES);
+        let back = ImageVectors::from_bytes(&bytes).unwrap();
+        assert_eq!(back.whole, v.whole);
+        for (a, b) in back.parts.iter().zip(&v.parts) {
+            assert!(a.similarity(b) > 0.9999, "{}", a.similarity(b));
+        }
+        // Alte Vektoren ohne Ausschnitte bleiben lesbar.
+        let alt = ImageVectors::from_bytes(&v.whole.to_bytes()).unwrap();
+        assert!(alt.parts.is_empty());
+        assert!(ImageVectors::from_bytes(&bytes[..bytes.len() - 1]).is_err());
     }
 
     #[test]

@@ -351,7 +351,7 @@ fn select(
             });
         }
         VideoTarget::Window => {
-            let windows = match state.capturer.windows() {
+            let windows = match state.capturer.windows(grabmark_capture::OwnWindows::Hidden) {
                 Ok(w) => w,
                 Err(e) => {
                     done_starting(app);
@@ -1468,7 +1468,7 @@ fn draw_shortcut(app: &AppHandle) -> String {
         .effective_hotkeys(platform)
         .into_iter()
         .find(|(a, _)| *a == Action::RecordDraw)
-        .map(|(_, s)| s.label(platform))
+        .map(|(_, s)| crate::i18n::shortcut_label(&s))
         .unwrap_or_default()
 }
 

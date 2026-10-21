@@ -1,19 +1,27 @@
 //! Stichwörter vergeben und nach Bildinhalt suchen – auf fertigen Vektoren,
-//! ohne Modell testbar. Schwellen geeicht mit 32 Testbildern (ADR 0010).
+//! ohne Modell testbar. Schwellen geeicht mit 32 Testbildern und 64
+//! Aufnahmen aus dem Alltag (ADR 0010).
 
-use crate::terms::{NEUTRAL, TERMS};
-use crate::{DIM, Embedding, MODEL_ID, TextEncoder, VisionError};
+use crate::terms::{NEUTRAL, Scope, TERMS};
+use crate::{DIM, Embedding, ImageVectors, MODEL_ID, TextEncoder, VisionError};
 
 /// SigLIP rechnet Ähnlichkeit in „Logits“ um: `SCALE · cos + BIAS`
 /// (aus `google/siglip2-base-patch16-224`). 0 entspricht 50 % Treffer.
 const SCALE: f32 = 112.680_67;
 const BIAS: f32 = -16.771_725;
 
-/// Stichwort, wenn der Begriff mindestens so gut passt …
-const TAG_MIN: f32 = -6.5;
-/// … und nicht weiter als das hinter dem besten Begriff liegt.
-const TAG_SPREAD: f32 = 3.0;
-const TAG_MAX: usize = 3;
+/// Art des Bildes (nur ganzes Bild) als Stichwort, wenn sie mindestens so
+/// gut passt …
+const KIND_MIN: f32 = -6.5;
+/// … und nicht weiter als das hinter der besten Art liegt.
+const KIND_SPREAD: f32 = 2.0;
+const KIND_MAX: usize = 2;
+
+/// Dinge im Bild (bester Ausschnitt) als Stichwort: eigene Schwellen, damit
+/// „Webshop“ nicht „Mann“ und „Schuh“ verdrängt.
+const THING_MIN: f32 = -6.0;
+const THING_SPREAD: f32 = 4.0;
+const THING_MAX: usize = 6;
 
 /// Suchtreffer: mindestens so gut wie absolut …
 const SEARCH_MIN: f32 = -8.5;
@@ -38,8 +46,11 @@ pub fn tags_version() -> String {
     for term in TERMS {
         feed(term.key);
         feed(term.prompt);
+        feed(&format!("{:?}", term.scope()));
     }
-    feed(&format!("{TAG_MIN}/{TAG_SPREAD}/{TAG_MAX}"));
+    feed(&format!(
+        "{KIND_MIN}/{KIND_SPREAD}/{KIND_MAX}/{THING_MIN}/{THING_SPREAD}/{THING_MAX}"
+    ));
     format!("{MODEL_ID}/{hash:016x}")
 }
 
@@ -68,20 +79,46 @@ impl Tagger {
         })
     }
 
-    /// Bis zu drei Stichwörter (Schlüssel, Logit), bester zuerst.
-    pub fn tags(&self, image: &Embedding) -> Vec<(&'static str, f32)> {
-        let mut scored: Vec<(&'static str, f32)> = TERMS
-            .iter()
-            .zip(&self.terms)
-            .map(|(t, e)| (t.key, logit(image, e)))
+    /// Stichwörter (Schlüssel, Logit): erst Dinge im Bild, dann die Art des
+    /// Bildes, jeweils bester zuerst.
+    pub fn tags(&self, image: &ImageVectors) -> Vec<(&'static str, f32)> {
+        // Logits je Ansicht (ganzes Bild zuerst) und Begriff.
+        let logits: Vec<Vec<f32>> = image
+            .all()
+            .map(|v| self.terms.iter().map(|t| logit(v, t)).collect())
             .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let best = scored.first().map_or(f32::MIN, |s| s.1);
-        scored
-            .into_iter()
-            .take_while(|&(_, l)| l >= TAG_MIN && l >= best - TAG_SPREAD)
-            .take(TAG_MAX)
-            .collect()
+        let best_kind: Vec<f32> = logits
+            .iter()
+            .map(|row| {
+                TERMS
+                    .iter()
+                    .zip(row)
+                    .filter(|(t, _)| t.scope() == Scope::Kind)
+                    .fold(f32::MIN, |m, (_, &l)| m.max(l))
+            })
+            .collect();
+        let (mut kinds, mut things) = (Vec::new(), Vec::new());
+        for (i, term) in TERMS.iter().enumerate() {
+            let views = logits
+                .iter()
+                .zip(&best_kind)
+                .map(|(row, &kind)| (row[i], kind));
+            match term.scope() {
+                Scope::Kind => kinds.push((term.key, logits[0][i])),
+                Scope::Thing => {
+                    things.push((term.key, views.map(|v| v.0).fold(f32::MIN, f32::max)))
+                }
+                Scope::Device => things.push((
+                    term.key,
+                    views
+                        .filter(|&(l, kind)| l > kind)
+                        .fold(f32::MIN, |m, (l, _)| m.max(l)),
+                )),
+            }
+        }
+        let mut tags = pick(things, THING_MIN, THING_SPREAD, THING_MAX);
+        tags.extend(pick(kinds, KIND_MIN, KIND_SPREAD, KIND_MAX));
+        tags
     }
 
     /// Bilder, die zum Suchtext passen (ID, Wert), bester zuerst.
@@ -128,6 +165,23 @@ impl Tagger {
     }
 }
 
+/// Die besten Begriffe: mindestens `min`, höchstens `spread` hinter dem
+/// besten, höchstens `max` Stück.
+fn pick(
+    mut scored: Vec<(&'static str, f32)>,
+    min: f32,
+    spread: f32,
+    max: usize,
+) -> Vec<(&'static str, f32)> {
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let best = scored.first().map_or(f32::MIN, |s| s.1);
+    scored
+        .into_iter()
+        .take_while(|&(_, l)| l >= min && l >= best - spread)
+        .take(max)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,18 +213,62 @@ mod tests {
         Embedding::normalized(v).unwrap()
     }
 
+    fn whole(parts: &[(usize, f32)]) -> ImageVectors {
+        ImageVectors {
+            whole: image_for(parts),
+            parts: Vec::new(),
+        }
+    }
+
+    fn keys(tg: &Tagger, image: &ImageVectors) -> Vec<&'static str> {
+        tg.tags(image).into_iter().map(|t| t.0).collect()
+    }
+
+    /// Achse des Begriffs `key`.
+    fn axis(key: &str) -> usize {
+        10 + TERMS.iter().position(|t| t.key == key).unwrap()
+    }
+
     #[test]
-    fn stichwoerter_nur_nahe_am_besten_und_hoechstens_drei() {
+    fn dinge_nur_nahe_am_besten_und_hoechstens_sechs() {
         let tg = tagger();
-        let img = image_for(&[(10, -2.0), (11, -4.0), (12, -5.5), (13, -6.0), (14, -9.0)]);
-        let keys: Vec<_> = tg.tags(&img).into_iter().map(|t| t.0).collect();
-        assert_eq!(keys, vec![TERMS[0].key, TERMS[1].key]);
+        let (man, dog, tree, car) = (axis("man"), axis("dog"), axis("tree"), axis("car"));
+        let img = whole(&[(man, -2.0), (dog, -4.0), (tree, -5.5), (car, -6.5)]);
+        assert_eq!(keys(&tg, &img), vec!["man", "dog", "tree"]);
 
-        let viele = image_for(&[(10, -1.0), (11, -1.1), (12, -1.2), (13, -1.3)]);
-        assert_eq!(tg.tags(&viele).len(), 3);
+        let weit = whole(&[(man, 1.0), (dog, -2.5), (tree, -5.0)]);
+        assert_eq!(keys(&tg, &weit), vec!["man", "dog"]);
 
-        let nichts = image_for(&[(10, -7.0)]);
-        assert!(tg.tags(&nichts).is_empty());
+        let viele: Vec<_> = ["man", "dog", "tree", "car", "cat", "bird", "boat", "pizza"]
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (axis(k), -1.0 - i as f32 * 0.1))
+            .collect();
+        assert_eq!(tg.tags(&whole(&viele)).len(), 6);
+
+        assert!(tg.tags(&whole(&[(man, -7.0)])).is_empty());
+    }
+
+    #[test]
+    fn dinge_auch_im_ausschnitt_die_art_nur_im_ganzen_bild() {
+        let tg = tagger();
+        let (shop, code, man) = (axis("shop"), axis("code"), axis("man"));
+        // Ganzes Bild: Webshop. Im Ausschnitt: ein Mann, daneben Quellcode.
+        let img = ImageVectors {
+            whole: image_for(&[(shop, 0.0), (man, -7.5)]),
+            parts: vec![image_for(&[(man, -3.0), (code, -1.0)])],
+        };
+        assert_eq!(keys(&tg, &img), vec!["man", "shop"]);
+    }
+
+    #[test]
+    fn geraet_nur_wo_es_besser_passt_als_jede_bildart() {
+        let tg = tagger();
+        let (computer, desktop) = (axis("computer"), axis("desktop"));
+        let bildschirmfoto = whole(&[(desktop, -1.0), (computer, -3.0)]);
+        assert_eq!(keys(&tg, &bildschirmfoto), vec!["desktop"]);
+        let foto = whole(&[(desktop, -8.0), (computer, -3.0)]);
+        assert_eq!(keys(&tg, &foto), vec!["computer"]);
     }
 
     #[test]

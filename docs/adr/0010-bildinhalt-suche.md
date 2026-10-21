@@ -107,3 +107,42 @@ und Linux fehlt etwas Vergleichbares. Darum braucht es ein eigenes Modell, das
   Originale. Die liegen danach im Cache `models/.cache/`.
 - Später möglich: das Textmodell auf Deutsch und Englisch kürzen. Der
   Wortschatz mit 256’000 Einträgen macht rund 200 der 250 MB aus.
+
+## Nachtrag Oktober 2026: Stichwörter aus Ausschnitten
+Bei Bildschirmfotos mit mehreren Inhalten fehlten Stichwörter. Beispiel: links
+ein Foto mit drei Männern, rechts ein Webshop mit Kinderkleid und Schuhen –
+erkannt wurde nur „Webshop“. Gründe:
+- Das Modell sah das ganze Bild (aus dem 320-Pixel-Vorschaubild) auf
+  224×224 gestaucht. „Mann“ lag dort bei Logit −7,3, in einem Ausschnitt bei
+  −3,4.
+- Alle Begriffe konkurrierten miteinander: „Webshop“ (0,0) verdrängte über
+  „höchstens 3 hinter dem besten“ alles andere.
+- „Schuh“ und „Kleid“ fehlten in der Begriffsliste.
+
+Neu:
+- **Ausschnitte:** Ausser dem ganzen Bild werden quadratische Ausschnitte aus
+  dem Original berechnet: eine Reihe mit der kurzen Seite als Kante (höchstens
+  4) und ein Raster mit halber Kante (höchstens 10 Felder, Kante mindestens
+  200 Pixel). Bei 16:9 sind das 10 Ausschnitte. Gespeichert werden sie mit dem
+  Vektor des ganzen Bildes im selben BLOB, auf 8 Bit gerundet (772 Bytes je
+  Ausschnitt). Die Suche nutzt weiter nur das ganze Bild.
+- **Drei Arten von Begriffen** (`Scope`):
+  - *Bildart* (Dokumente, Code, Diagramme, Apps, Logo, Zeichnung, Selfie): nur
+    im ganzen Bild; mindestens Logit −6,5, höchstens 2 hinter der besten Art,
+    höchstens 2 Stichwörter.
+  - *Dinge* (Personen, Tiere, Natur, Kleidung …): bester Wert über alle
+    Ausschnitte; mindestens −6,0, höchstens 4 hinter dem besten Ding,
+    höchstens 6 Stichwörter.
+  - *Geräte* (Computer, Tastatur, Handy): jedes Bildschirmfoto sieht für das
+    Modell ein wenig nach Computer aus. Sie zählen darum nur in Ausschnitten,
+    in denen sie besser passen als jede Bildart.
+- **Begriffe:** neue Gruppe „Kleidung & Accessoires“ (Hemd, Kleid, Schuhe,
+  Jacke, Tasche, Hut, Brille, Armbanduhr, Schmuck). Einzahl-Beschreibungen
+  treffen besser („a photo of a flower“ −3,5 statt „flowers“ −6,3); „Ball“
+  wird als Fussball gesucht, sonst hielt das Modell jeden schwarzen Kreis
+  (Webcam-Blase) dafür.
+- **Aufwand:** bis zu 15 Durchläufe statt einem, rund 1 s je Aufnahme im
+  Hintergrund (M4, 2 Kerne). Die Kennung des Modells ist neu `…/2`; ältere
+  Aufnahmen werden nach und nach neu berechnet.
+- Eichen mit dem echten Modell:
+  `cargo run -p grabmark-vision --release --features onnx --example tags -- BILD …`

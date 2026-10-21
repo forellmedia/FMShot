@@ -237,7 +237,7 @@
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
     if (editor.galleryOpen || editor.editingTextId) return;
-    if (clickAt != null && (e.key === "Delete" || e.key === "Backspace")) {
+    if (clickAt != null && !e.metaKey && !e.ctrlKey && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
       deleteClick();
     } else if (clickAt != null && e.key === "Escape") {
@@ -264,7 +264,7 @@
 <section class="timeline" aria-label={t("video.timeline")}>
   <div class="bar">
     <button class="play" title={t(player.playing ? "video.pause" : "video.play")} onclick={() => player.toggle()}>
-      <Icon d={player.playing ? "M8 5v14M16 5v14" : "M7 4l13 8-13 8z"} />
+      <Icon name={player.playing ? "pause" : "play"} />
     </button>
     <span class="time">{formatTime(player.outputMs, true)} / {formatTime(player.durationMs)}</span>
 
@@ -293,11 +293,11 @@
 
     <span class="grow"></span>
     <button class="icon" class:on={panel === "audio"} title={t("video.audio")} onclick={() => (panel = panel === "audio" ? null : "audio")}>
-      <Icon d="M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11" />
+      <Icon name="speaker" />
     </button>
     {#if player.hasInput}
       <button class="icon" class:on={panel === "cursor"} title={t("video.cursor")} onclick={() => (panel = panel === "cursor" ? null : "cursor")}>
-        <Icon d="M5 3l13 8-6 1.5L9 19z" />
+        <Icon name="select" />
       </button>
     {/if}
     <button onclick={() => player.snapshot()}>{t("video.snapshot")}</button>
@@ -554,7 +554,7 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  button:hover:not(:disabled) {
+  button:hover:not(:disabled, .on) {
     background: var(--hover);
   }
   button:disabled {
@@ -568,9 +568,9 @@
     padding: 3px 6px;
   }
   button.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--active);
+    border-color: var(--active);
+    color: var(--on-active);
   }
   button.link {
     border: none;

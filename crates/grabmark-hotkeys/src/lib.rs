@@ -212,14 +212,40 @@ impl FromStr for Shortcut {
     }
 }
 
+/// Tastennamen für die Anzeige ausserhalb von macOS – die App übersetzt sie
+/// („Strg“, „Umschalt“). macOS zeigt immer die Symbole ⌘⌥⇧⌃.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyNames<'a> {
+    pub ctrl: &'a str,
+    pub win: &'a str,
+    pub alt: &'a str,
+    pub shift: &'a str,
+    pub print_screen: &'a str,
+}
+
+impl KeyNames<'static> {
+    pub const ENGLISH: Self = KeyNames {
+        ctrl: "Ctrl",
+        win: "Win",
+        alt: "Alt",
+        shift: "Shift",
+        print_screen: "Print Screen",
+    };
+}
+
 impl Shortcut {
-    /// Anzeige für Menschen: `⌘⇧2` auf macOS, `Ctrl+Shift+2` sonst.
+    /// Anzeige für Menschen: `⇧⌘2` auf macOS, `Ctrl+Shift+2` sonst.
     pub fn label(&self, platform: Platform) -> String {
+        self.label_with(platform, &KeyNames::ENGLISH)
+    }
+
+    /// Wie [`Shortcut::label`], mit übersetzten Tastennamen (nicht macOS).
+    pub fn label_with(&self, platform: Platform, names: &KeyNames) -> String {
         let m = self.modifiers;
         let key = match self.key {
             Key::Digit(d) => d.to_string(),
             Key::Letter(c) => c.to_string(),
-            Key::PrintScreen => "PrintScreen".into(),
+            Key::PrintScreen => names.print_screen.into(),
         };
         if platform == Platform::MacOs {
             let mut s = String::new();
@@ -237,10 +263,10 @@ impl Shortcut {
         } else {
             let mut parts = Vec::new();
             for (on, name) in [
-                (m.primary, "Ctrl"),
-                (m.secondary, "Win"),
-                (m.alt, "Alt"),
-                (m.shift, "Shift"),
+                (m.primary, names.ctrl),
+                (m.secondary, names.win),
+                (m.alt, names.alt),
+                (m.shift, names.shift),
             ] {
                 if on {
                     parts.push(name.to_string());
@@ -329,7 +355,7 @@ mod tests {
             .filter(|(a, _)| *a == Action::CaptureRegion)
             .map(|(_, s)| s.label(Platform::Windows))
             .collect();
-        assert_eq!(region, ["Ctrl+Shift+2", "PrintScreen"]);
+        assert_eq!(region, ["Ctrl+Shift+2", "Print Screen"]);
     }
 
     #[test]
@@ -352,6 +378,25 @@ mod tests {
         );
         assert!("Hyper+1".parse::<Shortcut>().is_err());
         assert_eq!("".parse::<Shortcut>(), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn anzeige_ausserhalb_von_macos_ohne_mac_symbole() {
+        let s: Shortcut = "Primary+Alt+Shift+G".parse().unwrap();
+        let de = KeyNames {
+            ctrl: "Strg",
+            win: "Win",
+            alt: "Alt",
+            shift: "Umschalt",
+            print_screen: "Druck",
+        };
+        assert_eq!(s.label_with(Platform::Windows, &de), "Strg+Alt+Umschalt+G");
+        assert_eq!(s.label(Platform::Linux), "Ctrl+Alt+Shift+G");
+        assert_eq!(s.label_with(Platform::MacOs, &de), "⌥⇧⌘G");
+        for platform in [Platform::Windows, Platform::Linux] {
+            let label = s.label_with(platform, &de);
+            assert!(!label.contains(['⌘', '⌥', '⇧', '⌃']), "{label}");
+        }
     }
 
     #[test]

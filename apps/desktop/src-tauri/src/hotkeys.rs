@@ -1,5 +1,6 @@
 //! Registriert die globalen Tastenkürzel beim System.
 
+use grabmark_capture::OwnWindows;
 use grabmark_hotkeys::{Action, Platform};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -34,20 +35,23 @@ pub fn register(app: &AppHandle) {
     }
 }
 
+/// Führt ein Tastenkürzel aus. Offene Fenster von Grabmark bleiben dabei im
+/// Bild – so lässt sich Grabmark selbst fotografieren.
 pub fn run(app: &AppHandle, action: Action) {
+    let start = |mode| capture::start_with(app, mode, OwnWindows::Shown);
     match action {
-        Action::CaptureRegion => capture::start(app, capture::Mode::Region),
-        Action::CaptureWindow => capture::start(app, capture::Mode::Window),
-        Action::CaptureScreen => capture::start(app, capture::Mode::Screen),
-        Action::CaptureText => capture::start(app, capture::Mode::Text),
-        Action::CaptureVideo => capture::start(app, capture::Mode::Video),
-        Action::CaptureWebcam => capture::start(app, capture::Mode::Webcam),
+        Action::CaptureRegion => start(capture::Mode::Region),
+        Action::CaptureWindow => start(capture::Mode::Window),
+        Action::CaptureScreen => start(capture::Mode::Screen),
+        Action::CaptureText => start(capture::Mode::Text),
+        Action::CaptureVideo => start(capture::Mode::Video),
+        Action::CaptureWebcam => start(capture::Mode::Webcam),
         Action::RecordDraw => crate::video::toggle(app, crate::video::Toggle::Draw),
         Action::RecordPause => crate::video::toggle(app, crate::video::Toggle::Pause),
         Action::OpenGallery => {
             show_main_window(app);
             let _ = app.emit("open-gallery", ());
         }
-        Action::CaptureScroll => capture::start(app, capture::Mode::scroll(app)),
+        Action::CaptureScroll => start(capture::Mode::scroll(app)),
     }
 }

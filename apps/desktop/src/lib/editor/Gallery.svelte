@@ -9,10 +9,10 @@
   import { editor } from "./state.svelte";
   import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
   import Icon from "./Icon.svelte";
+  import Popover from "./Popover.svelte";
 
   /** Höchstens so viele auf einmal – sonst Filter eingrenzen. */
   const LIMIT = 1000;
-  const TAG_ICON = "M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01";
   const MODES = ["region", "window", "screen", "scroll", "video"] as const;
 
   let text = $state(editor.query);
@@ -31,8 +31,9 @@
   let results = $state<GalleryItem[]>([]);
   let loading = $state(true);
   let urls = $state<Record<string, string>>({});
-  /** Aufnahme, deren Stichwörter per Klick aufgeklappt sind. */
-  let tagsOpen = $state<string | null>(null);
+  /** Offene Stichwörter: beim Darüberfahren, per Klick festgehalten. */
+  let tagPop = $state<{ item: GalleryItem; anchor: HTMLElement; pinned: boolean } | null>(null);
+  let tagTimer: ReturnType<typeof setTimeout> | undefined;
   let searchInput: HTMLInputElement;
 
   const groups = $derived(
@@ -103,6 +104,26 @@
     return t(`tag.${key}` as MessageKey);
   }
 
+  function showTags(item: GalleryItem, anchor: HTMLElement, pinned: boolean) {
+    clearTimeout(tagTimer);
+    if (tagPop?.item.capture.id === item.capture.id && (tagPop.pinned || !pinned)) {
+      // Erneuter Klick auf festgehaltene Stichwörter schliesst sie.
+      if (pinned) tagPop = null;
+      return;
+    }
+    tagPop = { item, anchor, pinned };
+  }
+
+  /** Maus verlässt Knopf oder Popover: kurz warten, ob sie hinüberwechselt. */
+  function leaveTags() {
+    if (tagPop && !tagPop.pinned) tagTimer = setTimeout(() => (tagPop = null), 200);
+  }
+
+  function searchTag(tag: string) {
+    tagPop = null;
+    text = tagLabel(tag);
+  }
+
   /** Warum eine Aufnahme zur Suche passt – nur bei Suchtext. */
   function reason(item: GalleryItem): string | null {
     if (!text.trim() || item.matched.length === 0) return null;
@@ -149,7 +170,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} onclick={() => (tagsOpen = null)} />
+<svelte:window onkeydown={onKey} />
 
 <div class="gallery" role="dialog" aria-label={t("gallery.title")}>
   <header>
@@ -241,35 +262,22 @@
                 {c.starred ? "★" : "☆"}
               </button>
               {#if item.tags.length}
-                <div class="tagbox" class:open={tagsOpen === c.id}>
-                  <button
-                    class="tagbtn"
-                    title={t("gallery.tags")}
-                    aria-label={t("gallery.tags")}
-                    aria-expanded={tagsOpen === c.id}
-                    onclick={(e) => {
-                      e.stopPropagation();
-                      tagsOpen = tagsOpen === c.id ? null : c.id;
-                    }}
-                    onkeydown={(e) => e.stopPropagation()}
-                  >
-                    <Icon d={TAG_ICON} size={15} />
-                  </button>
-                  <div class="tags">
-                    {#each item.tags as tag (tag)}
-                      <button
-                        class="tag"
-                        title={t("gallery.search_tag")}
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          tagsOpen = null;
-                          text = tagLabel(tag);
-                        }}
-                        onkeydown={(e) => e.stopPropagation()}>{tagLabel(tag)}</button
-                      >
-                    {/each}
-                  </div>
-                </div>
+                <button
+                  class="tagbtn"
+                  class:open={tagPop?.item.capture.id === c.id}
+                  aria-label={t("gallery.tags")}
+                  aria-haspopup="dialog"
+                  aria-expanded={tagPop?.item.capture.id === c.id}
+                  onpointerenter={(e) => showTags(item, e.currentTarget, false)}
+                  onpointerleave={leaveTags}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    showTags(item, e.currentTarget, true);
+                  }}
+                  onkeydown={(e) => e.stopPropagation()}
+                >
+                  <Icon name="tag" size={15} />
+                </button>
               {/if}
             </div>
           {/each}
@@ -280,6 +288,23 @@
     {/each}
   </div>
 </div>
+
+{#if tagPop}
+  <Popover
+    anchor={tagPop.anchor}
+    label={t("gallery.tags")}
+    onclose={() => (tagPop = null)}
+    onpointerenter={() => clearTimeout(tagTimer)}
+    onpointerleave={leaveTags}
+  >
+    <div class="pop-title">{t("gallery.tags")}</div>
+    <div class="tags">
+      {#each tagPop.item.tags as tag (tag)}
+        <button class="tag" title={t("gallery.search_tag")} onclick={() => searchTag(tag)}>{tagLabel(tag)}</button>
+      {/each}
+    </div>
+  </Popover>
+{/if}
 
 <style>
   .gallery {
@@ -335,9 +360,9 @@
     white-space: nowrap;
   }
   .toggle.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--active);
+    border-color: var(--active);
+    color: var(--on-active);
   }
   .count,
   .indexing {
@@ -377,9 +402,9 @@
     font-variant-numeric: tabular-nums;
   }
   .chip.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--active);
+    border-color: var(--active);
+    color: var(--on-active);
   }
   /* Grund des Treffers (immer). */
   .why {
@@ -408,21 +433,11 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Stichwörter: Symbol neben dem Stern, Liste beim Darüberfahren oder Klick. */
-  .tagbox {
+  /* Stichwörter: Symbol neben dem Stern, Liste als Popover daran. */
+  .tagbtn {
     position: absolute;
     top: 6px;
-    left: 6px;
     right: 40px;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    pointer-events: none;
-  }
-  .tagbox > * {
-    pointer-events: auto;
-  }
-  .tagbtn {
     display: grid;
     place-items: center;
     width: 28px;
@@ -437,41 +452,47 @@
   }
   .tile:hover .tagbtn,
   .tile:focus-visible .tagbtn,
-  .tagbox.open .tagbtn {
+  .tagbtn:focus-visible,
+  .tagbtn.open {
     opacity: 1;
   }
-  .tagbox.open .tagbtn {
-    background: var(--accent);
+  .tagbtn.open {
+    background: var(--active);
+    color: var(--on-active);
   }
-  /* Abstand als Innenrand – so bleibt die Liste offen auf dem Weg dorthin. */
+  .pop-title {
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
   .tags {
-    display: none;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 4px;
-    max-width: 100%;
-    padding-top: 4px;
-  }
-  .tagbox:hover .tags,
-  .tagbox.open .tags {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .tag {
     max-width: 100%;
-    padding: 2px 8px;
-    border: none;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
     border-radius: 999px;
-    background: rgb(0 0 0 / 0.7);
-    color: #fff;
+    background: transparent;
+    color: var(--text);
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: pointer;
   }
-  .tag:hover {
-    background: var(--accent);
+  .tag:hover,
+  .tag:focus-visible {
+    background: var(--active);
+    border-color: var(--active);
+    color: var(--on-active);
+    outline: none;
   }
   .close {
     margin-left: auto;
@@ -510,8 +531,8 @@
     outline: none;
   }
   .tile.current {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
+    border-color: var(--active);
+    box-shadow: 0 0 0 1px var(--active);
   }
   .image {
     position: relative;

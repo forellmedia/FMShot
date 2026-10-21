@@ -10,7 +10,8 @@ use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
 use crate::{
-    Embedding, SIZE, TEXT_FILE, TEXT_TOKENS, TOKENIZER_FILE, VISION_FILE, VisionError, pixel_values,
+    Embedding, ImageVectors, SIZE, TEXT_FILE, TEXT_TOKENS, TOKENIZER_FILE, VISION_FILE,
+    VisionError, pixel_values,
 };
 
 fn session(path: &Path, threads: usize) -> Result<Session, VisionError> {
@@ -44,6 +45,17 @@ impl ImageEncoder {
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let outputs = session.run(ort::inputs!["pixel_values" => input])?;
         pooled(&outputs)
+    }
+
+    /// Ganzes Bild und Ausschnitte ([`crate::parts`]) – für die Stichwörter.
+    pub fn embed_all(&self, image: &RgbaImage) -> Result<ImageVectors, VisionError> {
+        Ok(ImageVectors {
+            whole: self.embed(image)?,
+            parts: crate::parts(image)
+                .iter()
+                .map(|p| self.embed(p))
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 

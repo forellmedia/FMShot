@@ -23,7 +23,11 @@
   --surface: #ffffff;
   --text: #1d1d1f;
   --text-muted: #6e6e73;
+  /* Signalrot: aufnehmen, löschen – sonst nichts. */
   --accent: #e53935;
+  /* Graphit: Gewähltes (Werkzeug, Umschalter, Filter). */
+  --active: #2c2c2e;
+  --on-active: #ffffff;
   --border: #d9d9de;
   --hover: rgb(0 0 0 / 0.07);
   --canvas-bg: #e4e4e8;
@@ -41,6 +45,8 @@
     --hover: rgb(255 255 255 / 0.09);
     --canvas-bg: #141416;
     --outside: rgb(0 0 0 / 0.5);
+    --active: #e5e5ea;
+    --on-active: #1c1c1e;
   }
 }
 
