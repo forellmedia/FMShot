@@ -10,7 +10,7 @@ Linux baut in der CI, nimmt aber noch nicht auf (siehe „Noch offen“).
 ## Vorbereitung
 
 ```bash
-cd ~/04_Software/FMShot/apps/desktop
+cd ~/04_Software/Grabmark/apps/desktop
 npm install
 npm run tauri build -- --bundles app
 open ../../target/release/bundle/macos/Grabmark.app
