@@ -311,10 +311,24 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
     );
     let mut progress = progress_reporter(app, id, cancel);
     let encoding = crate::settings::get(app).video.encoding;
-    if let Err(e) = compose(&files, &video, extras, &encoding, &temp, &mut progress) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(e);
-    }
+    let started = std::time::Instant::now();
+    let stats = match compose(&files, &video, extras, &encoding, &temp, &mut progress) {
+        Ok(stats) => stats,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            return Err(e);
+        }
+    };
+    crate::services::timing(
+        app,
+        format!(
+            "Video {:.1} s: zusammengesetzt ({} Bilder, {}) in {:.0} ms",
+            video.duration_ms as f64 / 1000.0,
+            stats.frames,
+            stats.adapter,
+            started.elapsed().as_secs_f64() * 1000.0
+        ),
+    );
     std::fs::rename(&temp, &target).map_err(err)?;
     let poster = fmshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
     lib.refresh_video(id, &poster, output_duration(&video) as i64)

@@ -4,7 +4,6 @@
 //! `fmshot-media`, Layout und Export `fmshot-video`; hier wird nur verdrahtet.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -28,12 +27,12 @@ use fmshot_overlay::{
 use fmshot_settings::{DrawMode, VideoSettings, VideoTarget};
 use fmshot_video::SectionLog;
 use fmshot_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
 };
 
-use crate::capture::{self, CaptureState, Mode};
+use crate::capture::{self, CaptureState};
 use crate::i18n::t;
 
 /// Wie oft die Leiste (Zeit, Pegel) nachgeführt wird.
@@ -1639,43 +1638,12 @@ fn finish(
         });
     }
     doc.video = Some(video_doc);
-    let video = slot.video_path();
-    let started = std::time::Instant::now();
-    let composed = compose(app, files, &doc, scale, &video);
-    let up_to_date = composed.is_ok();
-    let how = match composed {
-        Ok(stats) => format!(
-            "zusammengesetzt ({} Bilder, {})",
-            stats.frames, stats.adapter
-        ),
-        Err(e) => {
-            log::error!("Video zusammensetzen: {e}");
-            // Ohne Webcam ist besser als gar nichts.
-            if let Err(e) = fmshot_media::export_mp4(files, &video) {
-                log::error!("Video zusammenführen: {e}");
-                let main = files.screen.as_ref().or(files.webcam.as_ref());
-                if let Some(Err(e)) = main.map(|p| std::fs::copy(p, &video)) {
-                    log::error!("Video kopieren: {e}");
-                }
-            }
-            "ohne Webcam zusammengeführt".to_string()
-        }
+    // Das fertige Video entsteht erst auf Wunsch (Kopieren, Sichern …) – der
+    // Editor spielt die Spuren direkt ab. Standbild aus der Hauptspur.
+    let Some(main) = files.screen.as_ref().or(files.webcam.as_ref()) else {
+        return false;
     };
-    crate::services::timing(
-        app,
-        format!(
-            "Video {}×{}, {:.1} s: {how} in {:.0} ms",
-            summary.width,
-            summary.height,
-            summary.duration.as_secs_f64(),
-            started.elapsed().as_secs_f64() * 1000.0
-        ),
-    );
-    let main = files.screen.as_ref().or(files.webcam.as_ref());
-    let poster = match fmshot_media::frame_at(&video, Duration::ZERO).or_else(|e| match main {
-        Some(p) => fmshot_media::frame_at(p, Duration::ZERO),
-        None => Err(e),
-    }) {
+    let poster = match fmshot_media::frame_at(main, Duration::ZERO) {
         Ok(p) => p,
         Err(e) => {
             capture::show_error(app, &e.to_string());
@@ -1690,28 +1658,27 @@ fn finish(
             return false;
         }
     };
-    // Das fertige Video passt zum Dokument – erst nach Änderungen neu.
-    if up_to_date
-        && let Err(e) = library
-            .load_document(&rec.id)
-            .and_then(|d| library.mark_video_current(&rec.id, &d))
-    {
-        log::warn!("Video-Merker: {e}");
-    }
     // Gesichert: Zwischenstände werden nicht mehr gebraucht.
     let _ = std::fs::remove_file(slot.checkpoint_path());
     let _ = std::fs::remove_file(slot.input_log_path());
-    if origin == Origin::Recovered {
-        crate::services::index_capture(app, &rec);
-        return true;
+    crate::services::index_capture(app, &rec);
+    if origin == Origin::Live {
+        open_in_editor(app, &rec.id, crate::settings::get(app).copy_to_clipboard);
     }
-    if crate::settings::get(app).copy_to_clipboard
-        && let Err(e) = fmshot_clipboard::copy_file(&video)
-    {
-        log::warn!("Video in die Zwischenablage: {e}");
-    }
-    crate::services::after_capture(app, &rec, &poster, Mode::Video);
     true
+}
+
+/// Gerade aufgenommenes Video im Editor öffnen. `copy` = danach das fertige
+/// Video in die Zwischenablage (der Editor zeigt dabei den Fortschritt).
+fn open_in_editor(app: &AppHandle, id: &str, copy: bool) {
+    #[derive(Clone, serde::Serialize)]
+    struct OpenVideo<'a> {
+        id: &'a str,
+        copy: bool,
+    }
+    let _ = app.emit("open-video", OpenVideo { id, copy });
+    let a = app.clone();
+    let _ = app.run_on_main_thread(move || crate::tray::show_main_window(&a));
 }
 
 /// Nach dem Start: Aufnahmen, die nie fertig wurden (Absturz), anbieten
@@ -1867,32 +1834,6 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
         drawings,
         Origin::Recovered,
     )
-}
-
-/// Setzt zusammen; der Fortschritt steht in der Leiste. Ebenen gibt es
-/// direkt nach der Aufnahme nur, wenn live gezeichnet wurde.
-fn compose(
-    app: &AppHandle,
-    files: &RecordFiles,
-    doc: &Document,
-    scale: f32,
-    out: &Path,
-) -> Result<fmshot_video::ExportStats, String> {
-    let mut shown = 0;
-    let video = doc.video.clone().unwrap_or_default();
-    let extras = crate::video_edit::extras(files, &video, scale, Some((doc, HashMap::new())));
-    let encoding = crate::settings::get(app).video.encoding;
-    crate::video_edit::compose(files, &video, extras, &encoding, out, &mut |p| {
-        let percent = (p * 100.0) as u32;
-        if percent >= shown + 5 {
-            shown = percent;
-            set_status(
-                app,
-                t("video.exporting", &[("percent", &percent.to_string())]),
-            );
-        }
-        true
-    })
 }
 
 fn now_ms() -> i64 {

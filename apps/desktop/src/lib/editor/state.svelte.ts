@@ -224,6 +224,16 @@ export class Editor {
       await this.refreshCaptures();
       await this.open(id);
     });
+    // Video gerade aufgenommen: sofort im Editor (spielt die Spuren direkt
+    // ab), auf Wunsch danach fertig zusammensetzen und kopieren.
+    await on<{ id: string; copy: boolean }>("open-video", async ({ id, copy }) => {
+      this.galleryOpen = false;
+      await this.refreshCaptures();
+      await this.open(id);
+      if (!copy || this.current?.id !== id) return;
+      await player.load(this.current);
+      await player.copy();
+    });
     await on("open-gallery", () => (this.galleryOpen = true));
     await on("open-editor", () => (this.galleryOpen = false));
   }
