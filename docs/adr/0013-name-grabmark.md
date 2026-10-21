@@ -26,16 +26,22 @@ Oberflächentexte, Dokumentation, GitHub-Repo `forellmedia/Grabmark`
 Signatur-Zertifikat „Grabmark Local Signing“ (`~/.grabmark-signing/`).
 
 Bewusst **nicht** umbenannt:
-- App-ID `ch.forellmedia.fmshot` – macOS knüpft Berechtigungen daran, und die
-  Datenordner (Bibliothek, Einstellungen, Logs) hängen von ihr ab.
+- App-ID `ch.forellmedia.fmshot` – macOS knüpft Berechtigungen daran.
 - Speicherschlüssel im Frontend (`fmshot.presets`, `fmshot.tray.tab`) – sonst
   gingen Stil-Vorlagen verloren.
 
-Übernahme beim ersten Start:
-- Ein LaunchAgent `FMShot.plist` („mit der Anmeldung starten“) wird durch einen
-  für Grabmark ersetzt.
-- Das alte Standardmuster für Auto-Export-Dateinamen „FMShot {date} {time}“
-  wird zu „Grabmark {date} {time}“; eigene Muster bleiben.
+Datenordner: Tauri leitet seine Ordner aus der App-ID ab. Grabmark nutzt
+stattdessen eigene unter seinem Namen (`apps/desktop/src-tauri/src/paths.rs`):
+
+| Ordner | macOS |
+|---|---|
+| Bibliothek, Einstellungen | `~/Library/Application Support/Grabmark` |
+| Cache (Bildinhalt) | `~/Library/Caches/Grabmark` |
+| Logs | `~/Library/Logs/Grabmark` |
+
+Unter Windows `%APPDATA%\Grabmark`, unter Linux `~/.local/share/Grabmark` und
+`~/.config/Grabmark`. Es gibt keinen automatischen Umzug aus den alten Ordnern –
+ausser dem Entwickler hatte niemand das Programm installiert.
 
 ## Folgen
 - Das neue Zertifikat ist eine neue Identität: macOS verlangt die Freigaben

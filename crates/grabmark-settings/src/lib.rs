@@ -268,19 +268,10 @@ impl Settings {
     /// Lädt die Einstellungen; fehlt die Datei, gelten die Standardwerte.
     pub fn load(path: &Path) -> Result<Self, SettingsError> {
         match fs::read(path) {
-            Ok(bytes) => Ok(Self::from_json(&bytes)?),
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }
-    }
-
-    fn from_json(bytes: &[u8]) -> Result<Self, serde_json::Error> {
-        let mut settings: Self = serde_json::from_slice(bytes)?;
-        // Altes Standardmuster aus der Zeit als FMShot → neuer Name.
-        if settings.auto_export.pattern == "FMShot {date} {time}" {
-            settings.auto_export.pattern = AutoExport::default().pattern;
-        }
-        Ok(settings)
     }
 
     pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
@@ -406,15 +397,6 @@ mod tests {
             s.hotkey_conflicts(Platform::MacOs),
             vec![(Action::CaptureRegion, Action::CaptureText)]
         );
-    }
-
-    #[test]
-    fn altes_standardmuster_bekommt_neuen_namen() {
-        let s =
-            Settings::from_json(br#"{"auto_export":{"pattern":"FMShot {date} {time}"}}"#).unwrap();
-        assert_eq!(s.auto_export.pattern, "Grabmark {date} {time}");
-        let eigenes = Settings::from_json(br#"{"auto_export":{"pattern":"FMShot {id}"}}"#).unwrap();
-        assert_eq!(eigenes.auto_export.pattern, "FMShot {id}");
     }
 
     #[test]

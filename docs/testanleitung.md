@@ -282,7 +282,7 @@ Einstellungen), Rechtsklick das klassische Menü.
       zeigen, Löschen
 - [ ] **Suche** findet Aufnahmen nach Text darin (z. B. ein Wort aus einer
       Fehlermeldung)
-- [ ] Ablage: `~/Library/Application Support/ch.forellmedia.fmshot/Library/2026/10/`
+- [ ] Ablage: `~/Library/Application Support/Grabmark/Library/2026/10/`
       – alles flach im Monatsordner
 
 ### 7. Einstellungen (⌘, oder Menüleiste → Einstellungen …)
@@ -399,7 +399,7 @@ Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
 
 ### W7. Rest
 - [ ] Editor, Galerie und Einstellungen öffnen und zeigen die Aufnahmen
-- [ ] Ablage: `%APPDATA%\ch.forellmedia.fmshot\Library\2026\10\`
+- [ ] Ablage: `%APPDATA%\Grabmark\Library\2026\10\`
 - [ ] Info → Messwerte: „Taste → Overlay sichtbar“ unter 50 ms,
       „Taste → Bildschirm eingefroren“ notieren
 

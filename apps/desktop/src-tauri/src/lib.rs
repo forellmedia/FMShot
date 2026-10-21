@@ -7,6 +7,7 @@ mod editor;
 mod hotkeys;
 mod i18n;
 mod menu;
+mod paths;
 mod scroll;
 mod services;
 mod settings;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 use grabmark_library::Library;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_log::{Target, TargetKind};
 use tauri_specta::{Builder, collect_commands};
 
 /// Alle Commands, die das Frontend aufrufen darf. Die TypeScript-Typen dazu
@@ -102,6 +104,13 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::Folder {
+                        path: paths::get().log.clone(),
+                        file_name: None,
+                    }),
+                ])
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -121,12 +130,14 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let config = app.path().app_config_dir()?.join("settings.json");
+            let config = paths::get().config.join("settings.json");
             app.manage(settings::SettingsState::load(config));
             i18n::set_language(settings::get(app.handle()).language.as_deref());
 
-            let root = app.path().app_data_dir()?.join("Library");
+            let root = paths::get().data.join("Library");
             let library = Arc::new(Library::open(&root)?);
+            // Vorschaubilder und Videos lädt das Frontend über `asset:`.
+            app.asset_protocol_scope().allow_directory(&root, true)?;
             log::info!("Bibliothek: {}", root.display());
             app.manage(capture::CaptureState::new(
                 grabmark_capture::platform_capturer(),
@@ -141,8 +152,6 @@ pub fn run() {
             app.manage(services::Services::new());
             app.manage(vision::VisionState::new(app.handle()));
             app.state::<capture::CaptureState>().capturer.warm_up();
-            #[cfg(target_os = "macos")]
-            tray::migrate_launch_agent(app.handle());
             tray::create(app.handle())?;
             menu::create(app.handle())?;
             hotkeys::register(app.handle());

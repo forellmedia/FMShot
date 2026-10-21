@@ -28,6 +28,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+dirs = "6"
 grabmark-capture.workspace = true
 grabmark-clipboard.workspace = true
 grabmark-core = { workspace = true, features = ["specta"] }

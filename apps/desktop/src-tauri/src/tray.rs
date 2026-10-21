@@ -406,23 +406,3 @@ pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> 
     }
     .map_err(|e| e.to_string())
 }
-
-/// Aus der Zeit als FMShot: Der alte LaunchAgent zeigt auf die nicht mehr
-/// vorhandene FMShot.app. War er eingeschaltet, ersetzt ihn ein neuer.
-#[cfg(target_os = "macos")]
-pub fn migrate_launch_agent(app: &AppHandle) {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let old = std::path::Path::new(&home).join("Library/LaunchAgents/FMShot.plist");
-    if !old.exists() {
-        return;
-    }
-    if let Err(e) = std::fs::remove_file(&old) {
-        log::error!("Alter LaunchAgent: {e}");
-        return;
-    }
-    if let Err(e) = app.autolaunch().enable() {
-        log::error!("Mit der Anmeldung starten: {e}");
-    }
-}

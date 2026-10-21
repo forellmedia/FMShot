@@ -572,9 +572,8 @@ pub fn search_captures(
 }
 
 fn log_file(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_log_dir().ok()?;
     let name = format!("{}.log", app.package_info().name);
-    Some(dir.join(name))
+    Some(crate::paths::get().log.join(name))
 }
 
 /// „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.

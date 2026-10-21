@@ -51,7 +51,7 @@ impl VisionState {
         }
         Self {
             model_dir,
-            cache_dir: app.path().app_cache_dir().ok().map(|d| d.join("vision")),
+            cache_dir: Some(crate::paths::get().cache.join("vision")),
             wakeup: Mutex::new(None),
             tagger: Mutex::new(None),
             text: Mutex::new(None),

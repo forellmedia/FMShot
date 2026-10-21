@@ -120,7 +120,7 @@ pub fn start(app: &AppHandle, mode: Mode) {
         release(app);
         // Beim ersten Mal fragt macOS mit eigenem Fenster (mit Knopf zu den
         // Einstellungen). Danach fragt es nicht mehr – dann direkt dorthin.
-        if first_permission_request(app, "screen") {
+        if first_permission_request("screen") {
             state.capturer.request_permission();
         } else {
             open_privacy_settings(app, PrivacyPane::ScreenCapture);
@@ -131,7 +131,7 @@ pub fn start(app: &AppHandle, mode: Mode) {
         release(app);
         // Trägt Grabmark in die Liste „Bedienungshilfen“ ein (beim ersten Mal
         // mit Systemfenster); die Einstellungen öffnen wir direkt.
-        let first = first_permission_request(app, "input");
+        let first = first_permission_request("input");
         state.capturer.request_input_permission();
         if !first {
             open_privacy_settings(app, PrivacyPane::Accessibility);
@@ -471,15 +471,13 @@ fn now_ms() -> i64 {
 
 /// Erste Anfrage nach einer Freigabe (`screen`, `input`, …)? Merkt sie sich
 /// in einer Markierungsdatei im Konfigurationsordner.
-pub fn first_permission_request(app: &AppHandle, kind: &str) -> bool {
-    let Ok(dir) = app.path().app_config_dir() else {
-        return true;
-    };
+pub fn first_permission_request(kind: &str) -> bool {
+    let dir = &crate::paths::get().config;
     let marker = dir.join(format!("{kind}-permission-requested"));
     if marker.exists() {
         return false;
     }
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, b"")) {
+    if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&marker, b"")) {
         log::warn!("Freigabe-Markierung: {e}");
     }
     true
