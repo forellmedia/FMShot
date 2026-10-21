@@ -131,7 +131,9 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
     let settings = settings::get(app);
     let library = app.state::<CaptureState>().library.clone();
 
+    // Videos nicht: Sie sind gross und werden nur auf Wunsch zusammengesetzt.
     if settings.auto_export.enabled
+        && !rec.is_video()
         && let Err(e) = export(app, &library, rec, Some(image))
     {
         log::error!("Auto-Export: {e}");
@@ -289,6 +291,7 @@ fn copy_flattened(app: &AppHandle, id: &str) -> Result<(), String> {
     let library = app.state::<CaptureState>().library.clone();
     let rec = library.get(id).map_err(|e| e.to_string())?;
     if rec.is_video() {
+        crate::video_edit::ensure_current(app, id)?;
         return fmshot_clipboard::copy_file(&rec.video_path()).map_err(|e| e.to_string());
     }
     let doc = library.load_document(id).map_err(|e| e.to_string())?;
@@ -296,8 +299,8 @@ fn copy_flattened(app: &AppHandle, id: &str) -> Result<(), String> {
     fmshot_clipboard::copy_image(&img, doc.pixel_ratio).map_err(|e| e.to_string())
 }
 
-/// Schreibt die Aufnahme in den Export-Ordner. Bei wiederholtem Export
-/// (z. B. nach Änderungen im Editor) wird dieselbe Datei überschrieben.
+/// Schreibt ein Bild in den Export-Ordner (Videos nicht). Bei wiederholtem
+/// Export (z. B. nach Änderungen im Editor) wird dieselbe Datei überschrieben.
 pub fn export(
     app: &AppHandle,
     library: &Library,
@@ -313,28 +316,9 @@ pub fn export(
                 None => app.path().desktop_dir().map_err(|e| e.to_string())?,
             };
             let name = export_file_name(&settings.pattern, &rec.id, &rec.mode, settings.format);
-            let name = if rec.is_video() {
-                Path::new(&name)
-                    .with_extension("mp4")
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                name
-            };
             unique(&folder.join(name))
         }
     };
-    // Videos werden nicht bearbeitet – die Datei wird nur kopiert.
-    if rec.is_video() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::copy(rec.video_path(), &path).map_err(|e| e.to_string())?;
-        library
-            .set_export_path(&rec.id, &path)
-            .map_err(|e| e.to_string())?;
-        return Ok(path);
-    }
     let owned;
     let img = match image {
         Some(i) => i,
@@ -386,6 +370,7 @@ pub fn refresh_export(app: &AppHandle, id: &str) {
     }
     if let Ok(Some(_)) = library.export_path(id)
         && let Ok(rec) = library.get(id)
+        && !rec.is_video()
         && let Err(e) = export(app, &library, &rec, None)
     {
         log::error!("Auto-Export aktualisieren: {e}");

@@ -134,6 +134,11 @@ pub fn video_file(id: &str) -> String {
     format!("{id}_video.mp4")
 }
 
+/// Video: Fingerabdruck des Dokuments, aus dem das fertige Video entstand.
+pub fn video_stamp_file(id: &str) -> String {
+    format!("{id}_video.stamp")
+}
+
 impl CaptureRecord {
     pub fn document_path(&self) -> PathBuf {
         self.dir.join(document_file(&self.id))
@@ -158,6 +163,10 @@ impl CaptureRecord {
     /// Das abspielbare Video (nur bei Videos).
     pub fn video_path(&self) -> PathBuf {
         self.dir.join(video_file(&self.id))
+    }
+
+    pub fn video_stamp_path(&self) -> PathBuf {
+        self.dir.join(video_stamp_file(&self.id))
     }
 
     /// Spuren eines Videos (zum erneuten Zusammensetzen).

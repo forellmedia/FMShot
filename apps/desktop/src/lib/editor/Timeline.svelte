@@ -292,11 +292,6 @@
     {/if}
 
     <span class="grow"></span>
-    {#if player.exporting != null}
-      <span class="status">{t("video.updating", { percent: String(Math.round(player.exporting * 100)) })}</span>
-    {:else if player.dirty}
-      <span class="status">{t("video.pending")}</span>
-    {/if}
     <button class="icon" class:on={panel === "audio"} title={t("video.audio")} onclick={() => (panel = panel === "audio" ? null : "audio")}>
       <Icon d="M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11" />
     </button>
@@ -588,8 +583,7 @@
     min-width: 92px;
   }
   .label,
-  .muted,
-  .status {
+  .muted {
     color: var(--text-muted);
   }
   .sep {

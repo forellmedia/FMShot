@@ -231,6 +231,23 @@ impl Library {
         Ok(serde_json::from_slice(&fs::read(rec.document_path())?)?)
     }
 
+    /// Merkt sich, aus welchem Dokument das fertige Video entstand.
+    pub fn mark_video_current(&self, id: &str, doc: &Document) -> Result<()> {
+        let rec = self.get(id)?;
+        fs::write(rec.video_stamp_path(), document_stamp(doc)?)?;
+        Ok(())
+    }
+
+    /// Passt das fertige Video noch zum gespeicherten Dokument? Sonst muss
+    /// es vor dem Kopieren oder Sichern neu zusammengesetzt werden.
+    pub fn video_is_current(&self, id: &str) -> Result<bool> {
+        let rec = self.get(id)?;
+        let Ok(stamp) = fs::read_to_string(rec.video_stamp_path()) else {
+            return Ok(false);
+        };
+        Ok(stamp == document_stamp(&self.load_document(id)?)?)
+    }
+
     /// Bytes der Originalaufnahme (PNG).
     pub fn read_original(&self, id: &str) -> Result<Vec<u8>> {
         Ok(fs::read(self.get(id)?.original_path())?)
@@ -443,6 +460,16 @@ fn migrate(conn: &Connection, root: &Path) -> Result<()> {
 }
 
 /// Gehört die Datei zur Aufnahme `id`?
+/// Fingerabdruck eines Dokuments (FNV-1a über das JSON) – stabil über
+/// Programmversionen, anders als `DefaultHasher`.
+fn document_stamp(doc: &Document) -> Result<String> {
+    let json = serde_json::to_vec(doc)?;
+    let hash = json.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    Ok(format!("{hash:016x}"))
+}
+
 fn belongs_to(name: &str, id: &str) -> bool {
     name == document_file(id) || name.starts_with(&format!("{id}_"))
 }
@@ -554,6 +581,32 @@ mod tests {
         assert_eq!(rec.webcam_path(), slot.webcam_path());
         assert_eq!(lib.get(&rec.id).unwrap().duration_ms, Some(12_345));
         assert_eq!(lib.load_document(&rec.id).unwrap().video, Some(video));
+
+        lib.delete(&rec.id).unwrap();
+        assert!(files(&slot.dir).is_empty());
+    }
+
+    #[test]
+    fn fertiges_video_ist_nach_aenderung_veraltet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let slot = lib.reserve_video(1_792_172_712_083).unwrap();
+        fs::write(slot.video_path(), b"mp4").unwrap();
+        let mut doc = Document::from_capture_scaled(640, 400, 2.0);
+        doc.video = Some(VideoDoc::default());
+        let poster = RgbaImage::filled(320, 200, [0, 0, 0, 255]);
+        let rec = lib.save_video(&slot, &poster, 2.0, doc).unwrap();
+
+        // Ohne Merker weiss niemand, woraus das Video entstand.
+        assert!(!lib.video_is_current(&rec.id).unwrap());
+        let doc = lib.load_document(&rec.id).unwrap();
+        lib.mark_video_current(&rec.id, &doc).unwrap();
+        assert!(lib.video_is_current(&rec.id).unwrap());
+
+        let mut changed = doc.clone();
+        changed.video.as_mut().unwrap().fps = 60;
+        lib.save_document(&rec.id, &changed, None).unwrap();
+        assert!(!lib.video_is_current(&rec.id).unwrap());
 
         lib.delete(&rec.id).unwrap();
         assert!(files(&slot.dir).is_empty());

@@ -1,5 +1,5 @@
 //! Video-Editor (ADR 0011, Etappe 4–6): Spuren für die Vorschau nennen,
-//! nach Änderungen neu zusammensetzen, GIF und Einzelbild. Die Logik liegt
+//! auf Wunsch neu zusammensetzen, GIF und Einzelbild. Die Logik liegt
 //! in `fmshot-video` und `fmshot-media`; hier wird nur verdrahtet.
 
 use std::collections::HashMap;
@@ -292,44 +292,80 @@ fn end_export(app: &AppHandle, id: &str, cancel: &Arc<AtomicBool>) {
     }
 }
 
-/// Nach Änderungen im Editor: Video neu zusammensetzen. Ersetzt
-/// `<id>_video.mp4` erst, wenn alles fertig ist. Ein neuer Aufruf bricht
-/// einen laufenden ab (dieser meldet dann `abgebrochen`).
+/// Video aus dem gespeicherten Dokument neu zusammensetzen. Ersetzt
+/// `<id>_video.mp4` erst, wenn alles fertig ist, und merkt sich, aus
+/// welchem Dokument es entstand. Bricht ab, sobald `cancel` gesetzt ist.
+fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<(), String> {
+    let lib = library(app);
+    let rec = lib.get(id).map_err(err)?;
+    let doc = lib.load_document(id).map_err(err)?;
+    let video = doc.video.clone().ok_or("kein Video")?;
+    let files = record_files(&rec);
+    let target = rec.video_path();
+    let temp = target.with_file_name(format!("{id}_render.mp4"));
+    let extras = extras(
+        &files,
+        &video,
+        rec.scale_factor,
+        Some((&doc, layer_assets(&rec, &doc))),
+    );
+    let mut progress = progress_reporter(app, id, cancel);
+    let encoding = crate::settings::get(app).video.encoding;
+    if let Err(e) = compose(&files, &video, extras, &encoding, &temp, &mut progress) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    std::fs::rename(&temp, &target).map_err(err)?;
+    let poster = fmshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
+    lib.refresh_video(id, &poster, output_duration(&video) as i64)
+        .map_err(err)?;
+    lib.mark_video_current(id, &doc).map_err(err)?;
+    let _ = app.emit("library-changed", ());
+    Ok(())
+}
+
+/// Vor Kopieren, Sichern usw.: das fertige Video zusammensetzen, falls es
+/// nicht mehr zum Dokument passt. Läuft schon ein Auftrag, wird er ersetzt.
+pub fn ensure_current(app: &AppHandle, id: &str) -> Result<(), String> {
+    if library(app).video_is_current(id).unwrap_or(false) {
+        return Ok(());
+    }
+    let cancel = begin_export(app, id);
+    let result = render_video(app, id, cancel.clone());
+    end_export(app, id, &cancel);
+    result
+}
+
+/// Erst auf Wunsch (Kopieren, Sichern, Einzelbild): Video aus dem
+/// Dokument zusammensetzen. `cancel_video_export` bricht ab (meldet dann
+/// `abgebrochen`).
 #[tauri::command]
 #[specta::specta]
 pub async fn export_video(app: AppHandle, id: String) -> Result<CaptureInfo, String> {
-    let cancel = begin_export(&app, &id);
-    let task = {
-        let (app, id, cancel) = (app.clone(), id.clone(), cancel.clone());
-        tauri::async_runtime::spawn_blocking(move || {
-            let lib = library(&app);
-            let rec = lib.get(&id).map_err(err)?;
-            let doc = lib.load_document(&id).map_err(err)?;
-            let video = doc.video.clone().ok_or("kein Video")?;
-            let files = record_files(&rec);
-            let target = rec.video_path();
-            let temp = target.with_file_name(format!("{id}_render.mp4"));
-            let extras = extras(
-                &files,
-                &video,
-                rec.scale_factor,
-                Some((&doc, layer_assets(&rec, &doc))),
-            );
-            let mut progress = progress_reporter(&app, &id, cancel);
-            let encoding = crate::settings::get(&app).video.encoding;
-            compose(&files, &video, extras, &encoding, &temp, &mut progress)?;
-            std::fs::rename(&temp, &target).map_err(err)?;
-            let poster = fmshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
-            lib.refresh_video(&id, &poster, output_duration(&video) as i64)
-                .map_err(err)?;
-            crate::services::refresh_export(&app, &id);
-            let _ = app.emit("library-changed", ());
-            Ok(CaptureInfo::from(&lib.get(&id).map_err(err)?))
-        })
-    };
-    let result = task.await.map_err(err)?;
-    end_export(&app, &id, &cancel);
-    result
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_current(&app, &id)?;
+        Ok(CaptureInfo::from(&library(&app).get(&id).map_err(err)?))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Passt das fertige Video zum gespeicherten Dokument?
+#[tauri::command]
+#[specta::specta]
+pub fn video_is_current(app: AppHandle, id: String) -> bool {
+    library(&app).video_is_current(&id).unwrap_or(false)
+}
+
+/// Laufendes Zusammensetzen (Video oder GIF) abbrechen.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_video_export(app: AppHandle, id: String) {
+    let state = app.state::<VideoEditState>();
+    let running = state.running.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cancel) = running.get(&id) {
+        cancel.store(true, Ordering::Release);
+    }
 }
 
 /// Fragt nach dem Ziel und schreibt ein GIF (`None` = abgebrochen).
@@ -359,8 +395,15 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
             rec.scale_factor,
             Some((&doc, layer_assets(&rec, &doc))),
         );
-        let mut progress = progress_reporter(&app, &id, Arc::new(AtomicBool::new(false)));
-        compose_into(&files, &video, extras, &mut sink, &mut progress)?;
+        let cancel = begin_export(&app, &id);
+        let mut progress = progress_reporter(&app, &id, cancel.clone());
+        let result = compose_into(&files, &video, extras, &mut sink, &mut progress);
+        end_export(&app, &id, &cancel);
+        if let Err(e) = result {
+            drop(sink);
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
         Ok(Some(path.to_string_lossy().into_owned()))
     })
     .await
@@ -377,6 +420,7 @@ pub async fn video_snapshot(
     output_ms: f64,
 ) -> Result<CaptureInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        ensure_current(&app, &id)?;
         let lib = library(&app);
         let rec = lib.get(&id).map_err(err)?;
         let at = Duration::from_secs_f64(output_ms.max(0.0) / 1000.0);

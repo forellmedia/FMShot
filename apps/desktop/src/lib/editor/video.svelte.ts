@@ -13,8 +13,6 @@ import { wasmModule } from "./renderer";
 import { editor } from "./state.svelte";
 import { staleLayerTimes } from "./videoLayers";
 
-/** Nach der letzten Änderung so lange warten, dann neu zusammensetzen. */
-const EXPORT_DELAY_MS = 1500;
 /** Weicht eine Spur weiter ab, wird sie nachgezogen (Sekunden). */
 const MAX_DRIFT_S = 0.15;
 /** Normale Zeigerhöhe in Bildschirmpunkten (wie `CURSOR_POINTS` in Rust). */
@@ -61,10 +59,13 @@ export class VideoPlayer {
   scene = $state<Scene>({ sourceMs: 0, layers: [] });
   /** Ausgewählter Bereich auf der Zeitleiste (Ausgabe-Zeit). */
   selection = $state<{ start: number; end: number } | null>(null);
-  /** Fortschritt beim Neu-Zusammensetzen (0–1) oder `null`. */
+  /**
+   * Fortschritt beim Zusammensetzen (0–1) oder `null`. GIF: -1, solange der
+   * Speichern-Dialog offen ist (erst dann beginnt die Arbeit).
+   */
   exporting = $state<number | null>(null);
-  /** Das fertige Video ist älter als das Dokument. */
-  dirty = $state(false);
+  /** Was gerade zusammengesetzt wird (Anzeige über dem Video). */
+  exportKind = $state<"video" | "gif">("video");
   /** Sichtbare Klicks in Ausgabe-Zeit (Zeitleiste). */
   clicks = $state<number[]>([]);
   /** Dieselben Klicks in Zeit der Aufnahme (zum Löschen). */
@@ -77,7 +78,6 @@ export class VideoPlayer {
   private preview: VideoPreview | null = null;
   private media: { screen?: HTMLVideoElement; webcam?: HTMLVideoElement; system?: HTMLAudioElement; mic?: HTMLAudioElement } = {};
   private frame = 0;
-  private exportTimer: ReturnType<typeof setTimeout> | null = null;
   private docJson = "";
   /** Zählt die Exporte; nur der neueste darf den Zustand setzen. */
   private exportToken = 0;
@@ -102,7 +102,6 @@ export class VideoPlayer {
     this.urls = null;
     this.outputMs = 0;
     this.selection = null;
-    this.dirty = false;
     this.exporting = null;
     this.screenSize = null;
     this.cameraSize = null;
@@ -220,7 +219,6 @@ export class VideoPlayer {
     this.clickSources = Array.from(this.preview.clickSources());
     this.outputMs = Math.min(this.outputMs, this.durationMs);
     this.updateScene();
-    if (!first) this.scheduleExport();
   }
 
   attach(kind: "screen" | "webcam" | "system" | "mic", el: HTMLMediaElement | null) {
@@ -351,47 +349,45 @@ export class VideoPlayer {
     });
   }
 
-  /** Nach Änderungen das fertige Video im Hintergrund neu zusammensetzen. */
-  scheduleExport() {
-    this.dirty = true;
-    if (this.exportTimer) clearTimeout(this.exportTimer);
-    this.exportTimer = setTimeout(() => void this.exportNow(), EXPORT_DELAY_MS);
-  }
-
-  async exportNow() {
-    if (this.exportTimer) clearTimeout(this.exportTimer);
-    this.exportTimer = null;
+  /**
+   * Das fertige Video entsteht erst auf Wunsch (Kopieren, Sichern, GIF,
+   * Einzelbild) – nicht nach jeder Änderung. `true`, wenn es zum Dokument
+   * passt; `false` bei Abbruch oder Fehler.
+   */
+  async ready(): Promise<boolean> {
     const id = this.id;
-    if (!id) return;
+    if (!id) return false;
+    await editor.flushSave();
+    if (await api.videoIsCurrent(id)) return true;
     const token = ++this.exportToken;
     const latest = () => this.id === id && token === this.exportToken;
+    this.exportKind = "video";
     this.exporting = 0;
     try {
-      await editor.flushSave();
       const info = await api.exportVideo(id);
       if (latest()) {
-        this.dirty = false;
         editor.current = info;
         editor.thumbVersion++;
       }
+      return latest();
     } catch (e) {
-      // Abgebrochen, weil inzwischen neu bearbeitet wurde: kein Fehler.
+      // Abgebrochen (Knopf oder neuer Auftrag): kein Fehler.
       if (latest() && !String(e).toLowerCase().includes("abgebrochen")) editor.flash(String(e));
+      return false;
     } finally {
       if (latest()) this.exporting = null;
     }
   }
 
-  /** Bis das fertige Video aktuell ist (vor Kopieren, Sichern, Einzelbild). */
-  async ready(): Promise<boolean> {
-    if (this.dirty || this.exporting != null) await this.exportNow();
-    return !this.dirty;
+  /** Laufendes Zusammensetzen abbrechen. */
+  cancelExport() {
+    if (this.id) void api.cancelVideoExport(this.id);
   }
 
   // --- Aktionen ---------------------------------------------------------------
 
   async copy() {
-    if (!this.id || !(await this.ready())) return;
+    if (!(await this.ready()) || !this.id) return;
     try {
       await api.copyVideo(this.id);
       editor.flash(t("video.copied"));
@@ -401,7 +397,7 @@ export class VideoPlayer {
   }
 
   async saveAs() {
-    if (!this.id || !(await this.ready())) return;
+    if (!(await this.ready()) || !this.id) return;
     try {
       const path = await api.saveVideoAs(this.id);
       if (path) editor.flash(t("video.saved", { path }));
@@ -413,19 +409,20 @@ export class VideoPlayer {
   async gif() {
     if (!this.id) return;
     await editor.flushSave();
-    this.exporting = 0;
+    this.exportKind = "gif";
+    this.exporting = -1;
     try {
       const path = await api.exportGif(this.id);
       if (path) editor.flash(t("video.saved", { path }));
     } catch (e) {
-      editor.flash(String(e));
+      if (!String(e).toLowerCase().includes("abgebrochen")) editor.flash(String(e));
     } finally {
       this.exporting = null;
     }
   }
 
   async snapshot() {
-    if (!this.id || !(await this.ready())) return;
+    if (!(await this.ready()) || !this.id) return;
     try {
       await api.videoSnapshot(this.id, this.outputMs);
       editor.flash(t("video.snapshot_saved"));

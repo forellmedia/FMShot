@@ -46,6 +46,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         editor::copy_video,
         video_edit::video_tracks,
         video_edit::export_video,
+        video_edit::video_is_current,
+        video_edit::cancel_video_export,
         video_edit::export_gif,
         video_edit::video_snapshot,
         editor::save_video_as,

@@ -4,6 +4,7 @@
   import { t } from "$lib/i18n";
   import Canvas from "./Canvas.svelte";
   import Dropdown from "./Dropdown.svelte";
+  import ExportProgress from "./ExportProgress.svelte";
   import Gallery from "./Gallery.svelte";
   import { editor } from "./state.svelte";
   import GalleryStrip from "./GalleryStrip.svelte";
@@ -35,7 +36,7 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (isTyping(e) || editor.galleryOpen || editor.saveAsOpen) return;
+    if (isTyping(e) || editor.galleryOpen || editor.saveAsOpen || player.exporting != null) return;
     const modKey = e.metaKey || e.ctrlKey;
     if (modKey && e.key === ",") {
       e.preventDefault();
@@ -247,6 +248,9 @@
     {#if editor.layersPanel && editor.doc}
       <LayersPanel />
     {/if}
+    {#if player.exporting != null && player.exporting >= 0}
+      <ExportProgress />
+    {/if}
   </main>
   {#if editor.current?.videoPath && editor.doc}
     <Timeline />
@@ -341,6 +345,7 @@
     margin: 0 6px;
   }
   main {
+    position: relative;
     display: flex;
     min-height: 0;
   }

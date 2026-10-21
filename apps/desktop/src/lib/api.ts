@@ -115,6 +115,8 @@ export const api = {
       : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: null, input: null, faces: null }),
   exportVideo: (id: string): Promise<CaptureInfo> =>
     isTauri ? unwrap(commands.exportVideo(id)) : mock.getCapture(id),
+  videoIsCurrent: (id: string): Promise<boolean> => (isTauri ? commands.videoIsCurrent(id) : Promise.resolve(true)),
+  cancelVideoExport: (id: string): Promise<void> => (isTauri ? commands.cancelVideoExport(id) : Promise.resolve()),
   exportGif: (id: string): Promise<string | null> =>
     isTauri ? unwrap(commands.exportGif(id)) : Promise.resolve(null),
   videoSnapshot: (id: string, outputMs: number): Promise<CaptureInfo> =>

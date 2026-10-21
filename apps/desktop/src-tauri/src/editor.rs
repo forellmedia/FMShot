@@ -205,12 +205,18 @@ pub async fn export_document(
     .map_err(err)?
 }
 
-/// Legt das Video als Datei in die Zwischenablage.
+/// Legt das Video als Datei in die Zwischenablage (vorher, falls nötig,
+/// neu zusammengesetzt).
 #[tauri::command]
 #[specta::specta]
-pub fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
-    let rec = library(&app).get(&id).map_err(err)?;
-    fmshot_clipboard::copy_file(&rec.video_path()).map_err(err)
+pub async fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::video_edit::ensure_current(&app, &id)?;
+        let rec = library(&app).get(&id).map_err(err)?;
+        fmshot_clipboard::copy_file(&rec.video_path()).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Fragt nach dem Ziel und kopiert das Video dorthin (`None` = abgebrochen).
@@ -218,6 +224,7 @@ pub fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
 #[specta::specta]
 pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        crate::video_edit::ensure_current(&app, &id)?;
         let rec = library(&app).get(&id).map_err(err)?;
         let Some(path) = app
             .dialog()

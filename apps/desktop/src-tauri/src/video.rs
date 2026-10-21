@@ -1331,7 +1331,9 @@ fn finish(
     doc.video = Some(video_doc);
     let video = slot.video_path();
     let started = std::time::Instant::now();
-    let how = match compose(app, files, &doc, scale, &video) {
+    let composed = compose(app, files, &doc, scale, &video);
+    let up_to_date = composed.is_ok();
+    let how = match composed {
         Ok(stats) => format!(
             "zusammengesetzt ({} Bilder, {})",
             stats.frames, stats.adapter
@@ -1378,6 +1380,14 @@ fn finish(
             return;
         }
     };
+    // Das fertige Video passt zum Dokument – erst nach Änderungen neu.
+    if up_to_date
+        && let Err(e) = library
+            .load_document(&rec.id)
+            .and_then(|d| library.mark_video_current(&rec.id, &d))
+    {
+        log::warn!("Video-Merker: {e}");
+    }
     if crate::settings::get(app).copy_to_clipboard
         && let Err(e) = fmshot_clipboard::copy_file(&video)
     {

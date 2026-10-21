@@ -41,15 +41,22 @@ export const commands = {
 	revealCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("reveal_capture", { id })),
 	/**  Aufnahme aus der Oberfläche starten (z. B. Knopf im Editor). */
 	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),
-	/**  Legt das Video als Datei in die Zwischenablage. */
+	/**
+	 *  Legt das Video als Datei in die Zwischenablage (vorher, falls nötig,
+	 *  neu zusammengesetzt).
+	 */
 	copyVideo: (id: string) => typedError<null, string>(__TAURI_INVOKE("copy_video", { id })),
 	videoTracks: (id: string) => typedError<VideoTracks, string>(__TAURI_INVOKE("video_tracks", { id })),
 	/**
-	 *  Nach Änderungen im Editor: Video neu zusammensetzen. Ersetzt
-	 *  `<id>_video.mp4` erst, wenn alles fertig ist. Ein neuer Aufruf bricht
-	 *  einen laufenden ab (dieser meldet dann `abgebrochen`).
+	 *  Erst auf Wunsch (Kopieren, Sichern, Einzelbild): Video aus dem
+	 *  Dokument zusammensetzen. `cancel_video_export` bricht ab (meldet dann
+	 *  `abgebrochen`).
 	 */
 	exportVideo: (id: string) => typedError<CaptureInfo, string>(__TAURI_INVOKE("export_video", { id })),
+	/**  Passt das fertige Video zum gespeicherten Dokument? */
+	videoIsCurrent: (id: string) => __TAURI_INVOKE<boolean>("video_is_current", { id }),
+	/**  Laufendes Zusammensetzen (Video oder GIF) abbrechen. */
+	cancelVideoExport: (id: string) => __TAURI_INVOKE<void>("cancel_video_export", { id }),
 	/**  Fragt nach dem Ziel und schreibt ein GIF (`None` = abgebrochen). */
 	exportGif: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("export_gif", { id })),
 	/**
