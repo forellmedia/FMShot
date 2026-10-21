@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use fmshot_hotkeys::{Action, Platform, Shortcut};
-use fmshot_settings::{Settings, action_key};
+use grabmark_hotkeys::{Action, Platform, Shortcut};
+use grabmark_settings::{Settings, action_key};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -114,7 +114,7 @@ pub fn get_hotkeys(app: AppHandle) -> Vec<HotkeyInfo> {
 pub fn shortcut_label(shortcut: String) -> Result<String, String> {
     let sc: Shortcut = shortcut
         .parse()
-        .map_err(|e: fmshot_hotkeys::ParseError| e.to_string())?;
+        .map_err(|e: grabmark_hotkeys::ParseError| e.to_string())?;
     Ok(sc.label(Platform::current()))
 }
 
@@ -134,7 +134,7 @@ pub fn pause_hotkeys(app: AppHandle, paused: bool) {
 #[tauri::command]
 #[specta::specta]
 pub fn system_shortcuts_active() -> Option<bool> {
-    fmshot_hotkeys::system::screenshot_shortcuts_active()
+    grabmark_hotkeys::system::screenshot_shortcuts_active()
 }
 
 /// Öffnet die Systemeinstellungen, in denen man diese Kürzel ausschaltet.
@@ -142,7 +142,7 @@ pub fn system_shortcuts_active() -> Option<bool> {
 #[specta::specta]
 pub fn open_shortcut_settings(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let url = fmshot_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
+    let url = grabmark_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())

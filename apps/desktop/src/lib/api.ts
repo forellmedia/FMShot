@@ -231,7 +231,7 @@ const mock = (() => {
       scroll_mode: "manual",
       hotkeys: {},
       replace_mac_system_shortcuts: false,
-      auto_export: { enabled: false, folder: null, pattern: "FMShot {date} {time}", format: "png" },
+      auto_export: { enabled: false, folder: null, pattern: "Grabmark {date} {time}", format: "png" },
       retention_days: null,
       save_format: "png",
       content_search: true,

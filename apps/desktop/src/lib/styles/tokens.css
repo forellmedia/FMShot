@@ -1,12 +1,12 @@
 @font-face {
   font-family: "Inter";
   font-weight: 400;
-  src: url("../../../../../crates/fmshot-render/fonts/Inter-Regular.ttf") format("truetype");
+  src: url("../../../../../crates/grabmark-render/fonts/Inter-Regular.ttf") format("truetype");
 }
 @font-face {
   font-family: "Inter";
   font-weight: 700;
-  src: url("../../../../../crates/fmshot-render/fonts/Inter-Bold.ttf") format("truetype");
+  src: url("../../../../../crates/grabmark-render/fonts/Inter-Bold.ttf") format("truetype");
 }
 
 /* Design-Tokens – alle Farben, Abstände und Schriften kommen von hier. */

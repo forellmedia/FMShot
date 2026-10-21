@@ -1,6 +1,6 @@
 //! Video-Editor (ADR 0011, Etappe 4–6): Spuren für die Vorschau nennen,
 //! auf Wunsch neu zusammensetzen, GIF und Einzelbild. Die Logik liegt
-//! in `fmshot-video` und `fmshot-media`; hier wird nur verdrahtet.
+//! in `grabmark-video` und `grabmark-media`; hier wird nur verdrahtet.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,16 +8,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fmshot_core::{
+use grabmark_core::{
     AssetRef, Document, FaceTrack, InputTrack, LayerKind, RgbaImage, VideoDoc, VideoEncoding,
     WebcamBackground, WebcamFraming,
 };
-use fmshot_library::{CaptureRecord, Library, NewCapture};
-use fmshot_media::{AudioInput, RecordFiles};
-use fmshot_video::cursor::CURSOR_POINTS;
-use fmshot_video::overlay::LayerOverlay;
-use fmshot_video::timeline::{kept, output_duration};
-use fmshot_video::{CursorTrack, ExportExtras, FrameSink, HeadPath};
+use grabmark_library::{CaptureRecord, Library, NewCapture};
+use grabmark_media::{AudioInput, RecordFiles};
+use grabmark_video::cursor::CURSOR_POINTS;
+use grabmark_video::overlay::LayerOverlay;
+use grabmark_video::timeline::{kept, output_duration};
+use grabmark_video::{CursorTrack, ExportExtras, FrameSink, HeadPath};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -81,7 +81,7 @@ fn layer_assets(rec: &CaptureRecord, doc: &Document) -> HashMap<AssetRef, RgbaIm
         {
             match std::fs::read(rec.asset_path(hash))
                 .map_err(err)
-                .and_then(|b| fmshot_render::decode_png(&b).map_err(err))
+                .and_then(|b| grabmark_render::decode_png(&b).map_err(err))
             {
                 Ok(img) => {
                     assets.insert(AssetRef::Asset(hash.clone()), img);
@@ -113,14 +113,14 @@ pub fn extras(
         .webcam
         .as_ref()
         .filter(|w| w.layout.background != WebcamBackground::Original)
-        .and_then(|_| fmshot_media::segmenter());
+        .and_then(|_| grabmark_media::segmenter());
     let cursor = sidecar(files, "_input.json")
         .and_then(|p| read_json::<InputTrack>(&p))
         .map(|t| CursorTrack::new(&t))
         .filter(|t| !t.is_empty());
     let overlay = layers
         .and_then(|(doc, assets)| LayerOverlay::new(doc, assets))
-        .map(|o| Box::new(o) as Box<dyn fmshot_video::OverlaySource>);
+        .map(|o| Box::new(o) as Box<dyn grabmark_video::OverlaySource>);
     ExportExtras {
         head,
         segmenter,
@@ -139,14 +139,14 @@ fn compose_into(
     extras: ExportExtras,
     sink: &mut dyn FrameSink,
     progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<fmshot_video::ExportStats, String> {
-    let screen: Box<dyn fmshot_video::FrameSource> = match &files.screen {
-        Some(path) => fmshot_media::open_video(path).map_err(err)?,
+) -> Result<grabmark_video::ExportStats, String> {
+    let screen: Box<dyn grabmark_video::FrameSource> = match &files.screen {
+        Some(path) => grabmark_media::open_video(path).map_err(err)?,
         // Nur Webcam: eine leere Spur gibt die Grösse vor.
-        None => Box::new(fmshot_video::BlankSource::new(frame_size(files, video)?)),
+        None => Box::new(grabmark_video::BlankSource::new(frame_size(files, video)?)),
     };
     let webcam = match (&video.webcam, &files.webcam) {
-        (Some(_), Some(path)) => match fmshot_media::open_video(path) {
+        (Some(_), Some(path)) => match grabmark_media::open_video(path) {
             Ok(w) => Some(w),
             Err(e) => {
                 log::warn!("Webcam lesen: {e}");
@@ -155,19 +155,19 @@ fn compose_into(
         },
         _ => None,
     };
-    fmshot_video::export_with(video, screen, webcam, extras, sink, progress).map_err(err)
+    grabmark_video::export_with(video, screen, webcam, extras, sink, progress).map_err(err)
 }
 
 /// Grösse des fertigen Videos: wie der Bildschirm bzw. bei „nur Webcam“
 /// aus Format und Kamerabild.
 pub fn frame_size(files: &RecordFiles, video: &VideoDoc) -> Result<(u32, u32), String> {
     match (video.camera_only, &files.screen, &files.webcam) {
-        (None, Some(screen), _) => Ok(fmshot_video::output_size(
-            fmshot_media::open_video(screen).map_err(err)?.size(),
+        (None, Some(screen), _) => Ok(grabmark_video::output_size(
+            grabmark_media::open_video(screen).map_err(err)?.size(),
         )),
-        (Some(format), _, Some(webcam)) => Ok(fmshot_video::camera_frame_size(
+        (Some(format), _, Some(webcam)) => Ok(grabmark_video::camera_frame_size(
             format,
-            fmshot_media::open_video(webcam).map_err(err)?.size(),
+            grabmark_media::open_video(webcam).map_err(err)?.size(),
         )),
         _ => Err("Spur fehlt".into()),
     }
@@ -183,8 +183,8 @@ pub fn compose(
     encoding: &VideoEncoding,
     out: &Path,
     progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<fmshot_video::ExportStats, String> {
-    let size = fmshot_video::export_size(frame_size(files, video)?, encoding.resolution);
+) -> Result<grabmark_video::ExportStats, String> {
+    let size = grabmark_video::export_size(frame_size(files, video)?, encoding.resolution);
     extras.size = Some(size);
     let mut audio = Vec::new();
     if let Some(p) = &files.system_audio {
@@ -199,7 +199,7 @@ pub fn compose(
             volume: video.audio.microphone,
         });
     }
-    let mut sink = fmshot_media::create_mp4(
+    let mut sink = grabmark_media::create_mp4(
         out,
         size,
         video.fps,
@@ -330,7 +330,7 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
         ),
     );
     std::fs::rename(&temp, &target).map_err(err)?;
-    let poster = fmshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
+    let poster = grabmark_media::frame_at(&target, Duration::ZERO).map_err(err)?;
     lib.refresh_video(id, &poster, output_duration(&video) as i64)
         .map_err(err)?;
     lib.mark_video_current(id, &doc).map_err(err)?;
@@ -390,7 +390,7 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("FMShot {id}.gif"))
+            .set_file_name(format!("Grabmark {id}.gif"))
             .add_filter("GIF", &["gif"])
             .blocking_save_file()
         else {
@@ -402,7 +402,7 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
         let doc = lib.load_document(&id).map_err(err)?;
         let video = doc.video.clone().ok_or("kein Video")?;
         let files = record_files(&rec);
-        let mut sink = fmshot_video::GifSink::create(&path, frame_size(&files, &video)?)?;
+        let mut sink = grabmark_video::GifSink::create(&path, frame_size(&files, &video)?)?;
         let extras = extras(
             &files,
             &video,
@@ -438,7 +438,7 @@ pub async fn video_snapshot(
         let lib = library(&app);
         let rec = lib.get(&id).map_err(err)?;
         let at = Duration::from_secs_f64(output_ms.max(0.0) / 1000.0);
-        let image = fmshot_media::frame_at(&rec.video_path(), at).map_err(err)?;
+        let image = grabmark_media::frame_at(&rec.video_path(), at).map_err(err)?;
         let capture = NewCapture {
             image,
             scale_factor: rec.scale_factor,

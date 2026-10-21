@@ -5,7 +5,7 @@
 #
 #   ./scripts/make-updater-key.sh
 #
-# Ergebnis in ~/.fmshot-signing/ (nur für dich lesbar):
+# Ergebnis in ~/.grabmark-signing/ (nur für dich lesbar):
 #   updater.key           privater Schlüssel  → GitHub-Secret TAURI_SIGNING_PRIVATE_KEY
 #   updater.key.pub       öffentlicher Schlüssel → tauri.conf.json
 #   updater-password.txt  Passwort            → GitHub-Secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD
@@ -14,7 +14,7 @@
 # Updates mehr annehmen – gut aufbewahren (Passwort-Manager).
 set -euo pipefail
 
-OUT="$HOME/.fmshot-signing"
+OUT="$HOME/.grabmark-signing"
 KEY="$OUT/updater.key"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -40,6 +40,6 @@ $(cat "$KEY.pub")
 
 GitHub-Secrets setzen:
 
-  gh secret set TAURI_SIGNING_PRIVATE_KEY -R forellmedia/FMShot < "$KEY"
-  gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R forellmedia/FMShot < "$OUT/updater-password.txt"
+  gh secret set TAURI_SIGNING_PRIVATE_KEY -R forellmedia/Grabmark < "$KEY"
+  gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R forellmedia/Grabmark < "$OUT/updater-password.txt"
 MSG

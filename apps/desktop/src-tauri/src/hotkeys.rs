@@ -1,6 +1,6 @@
 //! Registriert die globalen Tastenkürzel beim System.
 
-use fmshot_hotkeys::{Action, Platform};
+use grabmark_hotkeys::{Action, Platform};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 

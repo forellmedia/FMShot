@@ -1,6 +1,6 @@
 #!/bin/bash
 # Legt einmalig ein selbstsigniertes Code-Signing-Zertifikat
-# »FMShot Local Signing« an – lokal im Anmelde-Schlüsselbund und als Datei für
+# »Grabmark Local Signing« an – lokal im Anmelde-Schlüsselbund und als Datei für
 # die CI (ADR 0008, gleiches Verfahren wie bei Faster2Bed).
 #
 # Wozu: Ad-hoc signiert ändert sich die Signatur bei jedem Build, und macOS
@@ -16,17 +16,17 @@
 #   2. `security import` legt beides als Identität in den Anmelde-Schlüsselbund.
 #   3. `security add-trusted-cert` vertraut dem Zertifikat für Code-Signing
 #      (macOS fragt nach dem Anmeldepasswort).
-#   4. Die PKCS#12-Datei und ihr Passwort bleiben in ~/.fmshot-signing/
+#   4. Die PKCS#12-Datei und ihr Passwort bleiben in ~/.grabmark-signing/
 #      (nur für dich lesbar) – daraus werden die GitHub-Secrets gesetzt.
 #
 # Rückgängig: In der Schlüsselbundverwaltung unter „Anmeldung → Meine
-# Zertifikate“ den Eintrag »FMShot Local Signing« löschen und
-# ~/.fmshot-signing/ entfernen.
+# Zertifikate“ den Eintrag »Grabmark Local Signing« löschen und
+# ~/.grabmark-signing/ entfernen.
 set -euo pipefail
 
-NAME="FMShot Local Signing"
+NAME="Grabmark Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-OUT="$HOME/.fmshot-signing"
+OUT="$HOME/.grabmark-signing"
 # Bewusst das openssl des Systems (LibreSSL): Dessen PKCS#12 versteht
 # `security import`. Ein OpenSSL 3 aus Homebrew bräuchte dafür `-legacy`.
 OPENSSL=/usr/bin/openssl
@@ -84,14 +84,14 @@ cat <<MSG
 
 Fertig. Jetzt die GitHub-Secrets für die CI setzen:
 
-  base64 -i "$OUT/identity.p12" | gh secret set MACOS_CERT_P12_BASE64 -R forellmedia/FMShot
-  gh secret set MACOS_CERT_PASSWORD -R forellmedia/FMShot < "$OUT/password.txt"
+  base64 -i "$OUT/identity.p12" | gh secret set MACOS_CERT_P12_BASE64 -R forellmedia/Grabmark
+  gh secret set MACOS_CERT_PASSWORD -R forellmedia/Grabmark < "$OUT/password.txt"
 
 Lokal signiert 'npm run tauri build' damit, wenn APPLE_SIGNING_IDENTITY gesetzt ist:
 
   APPLE_SIGNING_IDENTITY="$NAME" npm run tauri build
 
-~/.fmshot-signing/ gut aufbewahren (z. B. Passwort-Manager) – ohne diese Datei
+~/.grabmark-signing/ gut aufbewahren (z. B. Passwort-Manager) – ohne diese Datei
 bekommen künftige Builds eine neue Identität und alle müssen die
 Bildschirmaufnahme-Freigabe neu erteilen.
 MSG

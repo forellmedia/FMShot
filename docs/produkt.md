@@ -1,4 +1,4 @@
-# FMShot – Produktbeschreibung
+# Grabmark – Produktbeschreibung
 
 Schnelles, plattformübergreifendes Screenshot-Tool mit Editor und Galerie im Stil
 von Snagit. Zuerst für den Eigengebrauch und Freunde, später kommerziell –
@@ -10,9 +10,9 @@ Schwerpunkt macOS, wo gute, günstige Screenshot-Tools fehlen.
 - **Bereich**, **Vollbild**, **Fenster** – mehrere Monitore, HiDPI, Bildschirm wird
   beim Auslösen eingefroren.
 - **Scroll-Aufnahme**, in den Einstellungen umschaltbar:
-  - *Manuell* (Standard): Nutzer scrollt selbst, FMShot setzt den Bildstrom live
+  - *Manuell* (Standard): Nutzer scrollt selbst, Grabmark setzt den Bildstrom live
     zusammen. Funktioniert überall, auch unter Wayland.
-  - *Automatisch*: FMShot scrollt per simulierter Eingabe. Unter Wayland
+  - *Automatisch*: Grabmark scrollt per simulierter Eingabe. Unter Wayland
     ausgegraut; macOS fragt die Bedienungshilfen-Berechtigung erst beim Einschalten.
 - **Text erfassen (OCR)**: Bereich wählen → Text direkt in die Zwischenablage.
 
@@ -47,7 +47,7 @@ Einstellbar (global, pro Aufnahmemodus überschreibbar):
 
 ### Sonstiges
 - Tray-App, globale Tastenkombinationen (alle konfigurierbar, Konflikterkennung).
-- Kommandozeile `fmshot capture region|screen|window|scroll|text`.
+- Kommandozeile `grabmark capture region|screen|window|scroll|text`.
 - Oberfläche Deutsch + Englisch (folgt System, umschaltbar).
 - Eingebauter Updater (GitHub Releases).
 - **Keine Telemetrie.** Logs lokal; „Fehler melden“ öffnet vorausgefülltes
@@ -93,12 +93,12 @@ Windows-Signatur, Flatpak.
 | Video-Export 1080p30 mit Webcam (ADR 0011) | ≥ 2× Echtzeit |
 
 Unter Wayland gilt „so schnell wie das Portal erlaubt“.
-Die App misst diese Werte selbst (Info → Messwerte). `crates/fmshot-bench`
+Die App misst diese Werte selbst (Info → Messwerte). `crates/grabmark-bench`
 misst die Pfade ohne Bildschirm (Speichern + Vorschaubild, Editor öffnen,
 Zeichnen, Export, Scroll-Zusammensetzen, Suche, Video-Bild zusammensetzen);
 die CI schlägt fehl, wenn ein Wert sein Budget überschreitet. Den ganzen
 Video-Export (Dekodieren, GPU, Kodieren) misst
-`cargo test -p fmshot-media --release --test export -- --ignored`.
+`cargo test -p grabmark-media --release --test export -- --ignored`.
 
 ## Plattformen
 

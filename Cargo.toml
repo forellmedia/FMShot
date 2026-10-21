@@ -9,23 +9,23 @@ rust-version = "1.95"
 authors = ["forellmedia.ch"]
 license = "LicenseRef-Proprietary"
 publish = false
-repository = "https://github.com/forellmedia/FMShot"
+repository = "https://github.com/forellmedia/Grabmark"
 
 [workspace.dependencies]
-fmshot-core = { path = "crates/fmshot-core" }
-fmshot-render = { path = "crates/fmshot-render" }
-fmshot-render-wasm = { path = "crates/fmshot-render-wasm" }
-fmshot-capture = { path = "crates/fmshot-capture" }
-fmshot-clipboard = { path = "crates/fmshot-clipboard" }
-fmshot-settings = { path = "crates/fmshot-settings" }
-fmshot-stitch = { path = "crates/fmshot-stitch" }
-fmshot-ocr = { path = "crates/fmshot-ocr" }
-fmshot-library = { path = "crates/fmshot-library" }
-fmshot-hotkeys = { path = "crates/fmshot-hotkeys" }
-fmshot-overlay = { path = "crates/fmshot-overlay" }
-fmshot-vision = { path = "crates/fmshot-vision" }
-fmshot-media = { path = "crates/fmshot-media" }
-fmshot-video = { path = "crates/fmshot-video", default-features = false }
+grabmark-core = { path = "crates/grabmark-core" }
+grabmark-render = { path = "crates/grabmark-render" }
+grabmark-render-wasm = { path = "crates/grabmark-render-wasm" }
+grabmark-capture = { path = "crates/grabmark-capture" }
+grabmark-clipboard = { path = "crates/grabmark-clipboard" }
+grabmark-settings = { path = "crates/grabmark-settings" }
+grabmark-stitch = { path = "crates/grabmark-stitch" }
+grabmark-ocr = { path = "crates/grabmark-ocr" }
+grabmark-library = { path = "crates/grabmark-library" }
+grabmark-hotkeys = { path = "crates/grabmark-hotkeys" }
+grabmark-overlay = { path = "crates/grabmark-overlay" }
+grabmark-vision = { path = "crates/grabmark-vision" }
+grabmark-media = { path = "crates/grabmark-media" }
+grabmark-video = { path = "crates/grabmark-video", default-features = false }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

@@ -3,7 +3,7 @@
   // wählen, Schneiden, Webcam je Abschnitt, Vergrössern (Zoom), Klicks, Ton
   // und Mauszeiger. Pfeile, Rahmen usw. stehen je Werkzeug in einer eigenen
   // Zeile; jede Zeichnung ist ein Block, der sich wählen, verschieben und in
-  // der Länge ziehen lässt. Gerechnet wird in `fmshot-video` (WASM).
+  // der Länge ziehen lässt. Gerechnet wird in `grabmark-video` (WASM).
 
   import type { WebcamMode } from "$lib/bindings";
   import { t } from "$lib/i18n";

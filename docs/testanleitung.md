@@ -13,12 +13,12 @@ Linux baut in der CI, nimmt aber noch nicht auf (siehe „Noch offen“).
 cd ~/04_Software/FMShot/apps/desktop
 npm install
 npm run tauri build -- --bundles app
-open ../../target/release/bundle/macos/FMShot.app
+open ../../target/release/bundle/macos/Grabmark.app
 ```
 
-FMShot erscheint als Symbol in der Menüleiste (kein Dock-Symbol, solange der
+Grabmark erscheint als Symbol in der Menüleiste (kein Dock-Symbol, solange der
 Editor zu ist). Beim ersten Aufnehmen fragt macOS nach **Bildschirmaufnahme** –
-erlauben und FMShot über das Menüleisten-Symbol → *FMShot beenden* schliessen
+erlauben und Grabmark über das Menüleisten-Symbol → *Grabmark beenden* schliessen
 und neu öffnen.
 
 > Solange das eigene Zertifikat nicht eingerichtet ist
@@ -66,10 +66,10 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] Bereich wählen (z. B. Inhalt einer Webseite), dann langsam scrollen
 - [ ] Leiste zeigt die Höhe; „Fertig“ oder erneut ⌥⌘4 beendet
 - [ ] Ergebnis öffnet im Editor, ohne doppelte Zeilen
-- [ ] Einstellungen → Allgemein → Scroll-Aufnahme „FMShot scrollt
+- [ ] Einstellungen → Allgemein → Scroll-Aufnahme „Grabmark scrollt
       automatisch“: fragt einmal nach **Bedienungshilfen**, scrollt dann selbst
 - [ ] Bedienungshilfen ausgeschaltet → erneuter Versuch öffnet **direkt**
-      Systemeinstellungen → Bedienungshilfen (kein eigenes FMShot-Fenster)
+      Systemeinstellungen → Bedienungshilfen (kein eigenes Grabmark-Fenster)
 
 ### 4a. Tray-Fenster
 - [ ] Klick aufs Menüleisten-Symbol: Fenster erscheint direkt darunter
@@ -77,7 +77,7 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] Rechtsklick aufs Symbol: klassisches Menü (inkl. „Video aufnehmen“)
 - [ ] Tab **Bild**: jede Aufnahmeart startet, das Fenster ist dabei weg
 - [ ] Tab **Einstellungen**: „Beim Anmelden starten“ an → abmelden/anmelden
-      → FMShot läuft; „Alle Einstellungen öffnen …“ zeigt die Einstellungen
+      → Grabmark läuft; „Alle Einstellungen öffnen …“ zeigt die Einstellungen
 
 ### 4b. Video (⇧⌘6, ADR 0011 Etappe 1)
 - [ ] Tab **Bildschirm**: Bereich wählen, Mikrofon an → beim ersten Mal fragt
@@ -98,15 +98,15 @@ Einstellungen), Rechtsklick das klassische Menü.
 - [ ] „Abbrechen“ → kein Eintrag in der Galerie
 
 ### 4c. Absturzsicher (ADR 0012)
-- [ ] Aufnahme 20 s mit Ton und Webcam, dann `kill -9 $(pgrep -x fmshot-desktop)`
-      → FMShot starten → Frage „Abgebrochene Aufnahme gefunden“ →
+- [ ] Aufnahme 20 s mit Ton und Webcam, dann `kill -9 $(pgrep -x grabmark-desktop)`
+      → Grabmark starten → Frage „Abgebrochene Aufnahme gefunden“ →
       „Wiederherstellen“ → Hinweis, Video in der Galerie, mit Ton, ~18–20 s
 - [ ] Dasselbe, aber „Später“ → beim nächsten Start wird wieder gefragt;
       „Verwerfen“ → weg, keine Reste im Bibliotheksordner
 - [ ] Fenster aufnehmen und das Fenster schliessen → Rahmen und Text orange
       („Unterbrochen – gesichert bis …“), Video ist gesichert, danach Hinweis
-- [ ] Während der Aufnahme über Menü/Tray „FMShot beenden“ → Video wird
-      gesichert, danach beendet sich FMShot
+- [ ] Während der Aufnahme über Menü/Tray „Grabmark beenden“ → Video wird
+      gesichert, danach beendet sich Grabmark
 - [ ] Mikrofon in den Systemeinstellungen verbieten → Start öffnet direkt
       Systemeinstellungen → Mikrofon
 
@@ -214,7 +214,7 @@ Einstellungen), Rechtsklick das klassische Menü.
 ### 4d. Video-Editor, Zeiger, Ebenen (ADR 0011 Etappe 4–6)
 - [ ] Video in der Galerie öffnen: Leinwand zeigt das Video, darunter die
       Zeitleiste; Leertaste spielt ab und hält an (mit Ton)
-- [ ] Mauszeiger ist im Video zu sehen (FMShot zeichnet ihn), Klicks als
+- [ ] Mauszeiger ist im Video zu sehen (Grabmark zeichnet ihn), Klicks als
       roter Kreis; Zeitleiste → Zeiger-Symbol: Grösse, Klicks aus
 - [ ] Auf der Zeitleiste einen Bereich ziehen → **Ausschneiden**: Länge wird
       kürzer, roter Strich zeigt den Schnitt; Abspielen springt darüber
@@ -315,20 +315,20 @@ Unit-Tests geprüft – **noch nie auf einem echten Desktop gelaufen.**
 4. Repository in der VM klonen (nicht im geteilten Ordner bauen – zu langsam).
 
 ```bash
-cd ~/FMShot/apps/desktop
+cd ~/Grabmark/apps/desktop
 npm install
 npm run tauri build -- --bundles nsis
 ```
 
-Installer: `target/release/bundle/nsis/FMShot_0.1.0_arm64-setup.exe`.
+Installer: `target/release/bundle/nsis/Grabmark_0.1.0_arm64-setup.exe`.
 Schneller zum Ausprobieren: `npm run tauri dev`.
 
-FMShot erscheint im Infobereich der Taskleiste (ggf. unter dem Pfeil ^).
+Grabmark erscheint im Infobereich der Taskleiste (ggf. unter dem Pfeil ^).
 Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
 
-> **Druck-Taste:** Windows 11 öffnet damit das Snipping Tool. Für FMShot
+> **Druck-Taste:** Windows 11 öffnet damit das Snipping Tool. Für Grabmark
 > unter *Einstellungen → Barrierefreiheit → Tastatur* „Mit der Druck-Taste
-> Bildschirmausschnitt öffnen“ ausschalten (danach FMShot neu starten).
+> Bildschirmausschnitt öffnen“ ausschalten (danach Grabmark neu starten).
 
 ## Tastenkürzel
 
@@ -374,7 +374,7 @@ Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
       verdeckt; runde Ecken (Windows 11) durchsichtig; kein Schatten/Rand
 - [ ] Browser-Fenster (Edge) ist nicht schwarz
 - [ ] Vollbild nimmt den Monitor auf, auf dem die Maus ist
-- [ ] Ein offener FMShot-Editor ist **nicht** in der Aufnahme zu sehen
+- [ ] Ein offener Grabmark-Editor ist **nicht** in der Aufnahme zu sehen
 
 ### W4. Text erfassen (Strg+Umschalt+5)
 - [ ] Bereich mit Text → Hinweis „Text kopiert (n Zeichen)“ unten in der Mitte
@@ -388,7 +388,7 @@ Windows fragt nicht nach einer Freigabe für Bildschirmaufnahme.
       durch den Rahmen an die Seite
 - [ ] Langsam scrollen → Leiste zeigt die Höhe; „Fertig“ oder erneut
       Strg+Umschalt+4 beendet; Ergebnis ohne doppelte Zeilen, ohne roten Rahmen
-- [ ] Einstellung „FMShot scrollt automatisch“: scrollt ohne Rückfrage selbst
+- [ ] Einstellung „Grabmark scrollt automatisch“: scrollt ohne Rückfrage selbst
       (Edge, Explorer, Einstellungen-App)
 
 ### W6. Skalierung und Monitore

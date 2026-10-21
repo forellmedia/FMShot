@@ -5,7 +5,7 @@
   // nur die aktive Ebene neu gezeichnet (ADR 0002).
 
   import { onMount, untrack } from "svelte";
-  import type { WasmRenderer } from "$lib/wasm/fmshot_render";
+  import type { WasmRenderer } from "$lib/wasm/grabmark_render";
   import { fileBytes, isTauri } from "$lib/api";
   import { editor } from "./state.svelte";
   import {
@@ -928,7 +928,7 @@
   let dropActive = $state(false);
 
   function onDragOver(e: DragEvent) {
-    if (e.dataTransfer?.types.includes("text/x-fmshot-capture")) {
+    if (e.dataTransfer?.types.includes("text/x-grabmark-capture")) {
       e.preventDefault();
       dropActive = true;
     }
@@ -936,7 +936,7 @@
 
   function onDrop(e: DragEvent) {
     dropActive = false;
-    const id = e.dataTransfer?.getData("text/x-fmshot-capture");
+    const id = e.dataTransfer?.getData("text/x-grabmark-capture");
     if (id) {
       e.preventDefault();
       editor.addCaptureAsImage(id, toDoc(e));

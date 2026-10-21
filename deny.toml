@@ -1,5 +1,5 @@
 # Lizenz- und Sicherheitsprüfung der Abhängigkeiten (ADR 0008).
-# Copyleft-Lizenzen (GPL/AGPL/LGPL) sind bewusst NICHT erlaubt, damit FMShot
+# Copyleft-Lizenzen (GPL/AGPL/LGPL) sind bewusst NICHT erlaubt, damit Grabmark
 # später proprietär verkauft werden kann.
 
 [graph]

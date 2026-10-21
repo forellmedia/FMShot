@@ -1,12 +1,12 @@
-//! Commands für Editor und Galerie. Die Logik liegt in `fmshot-library` und
-//! `fmshot-render`; hier wird nur verdrahtet.
+//! Commands für Editor und Galerie. Die Logik liegt in `grabmark-library` und
+//! `grabmark-render`; hier wird nur verdrahtet.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use fmshot_core::{AssetRef, Document, RgbaImage};
-use fmshot_library::{CaptureRecord, Library};
-use fmshot_render::{RenderOptions, Renderer};
+use grabmark_core::{AssetRef, Document, RgbaImage};
+use grabmark_library::{CaptureRecord, Library};
+use grabmark_render::{RenderOptions, Renderer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State};
@@ -135,7 +135,7 @@ pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(
             &state,
             &id,
             &document,
-            Some(fmshot_library::THUMBNAIL_MAX * 2),
+            Some(grabmark_library::THUMBNAIL_MAX * 2),
         );
         match preview {
             Ok(img) => {
@@ -158,7 +158,7 @@ pub async fn copy_document(app: AppHandle, id: String, document: Document) -> Re
         let lib = library(&app);
         let state = app.state::<EditorState>();
         let img = render(&lib, &state, &id, &document, None)?;
-        fmshot_clipboard::copy_image(&img, document.pixel_ratio).map_err(err)
+        grabmark_clipboard::copy_image(&img, document.pixel_ratio).map_err(err)
     })
     .await
     .map_err(err)?
@@ -182,7 +182,7 @@ pub async fn export_document(
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("FMShot {id}.{ext}"))
+            .set_file_name(format!("Grabmark {id}.{ext}"))
             .add_filter(label, &[ext])
             .blocking_save_file()
         else {
@@ -194,9 +194,9 @@ pub async fn export_document(
         let img = render(&lib, &state, &id, &document, None)?;
         let bytes = match format {
             ExportFormat::Png => {
-                fmshot_library::encode_png(&img, document.pixel_ratio).map_err(err)?
+                grabmark_library::encode_png(&img, document.pixel_ratio).map_err(err)?
             }
-            ExportFormat::Jpg => fmshot_library::encode_jpeg(&img, 90)?,
+            ExportFormat::Jpg => grabmark_library::encode_jpeg(&img, 90)?,
         };
         std::fs::write(&path, bytes).map_err(err)?;
         Ok(Some(path.to_string_lossy().into_owned()))
@@ -213,7 +213,7 @@ pub async fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::video_edit::ensure_current(&app, &id)?;
         let rec = library(&app).get(&id).map_err(err)?;
-        fmshot_clipboard::copy_file(&rec.video_path()).map_err(err)
+        grabmark_clipboard::copy_file(&rec.video_path()).map_err(err)
     })
     .await
     .map_err(err)?
@@ -229,7 +229,7 @@ pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>,
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("FMShot {id}.mp4"))
+            .set_file_name(format!("Grabmark {id}.mp4"))
             .add_filter("MP4", &["mp4"])
             .blocking_save_file()
         else {
@@ -253,11 +253,11 @@ pub struct AssetInfo {
 
 /// Legt ein Bild (PNG, JPEG oder WebP) bei der Aufnahme ab – als PNG.
 fn store_asset(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, String> {
-    let img = fmshot_render::decode_image(bytes).map_err(err)?;
+    let img = grabmark_render::decode_image(bytes).map_err(err)?;
     let png = if bytes.starts_with(b"\x89PNG") {
         bytes.to_vec()
     } else {
-        fmshot_library::encode_png(&img, 1.0).map_err(err)?
+        grabmark_library::encode_png(&img, 1.0).map_err(err)?
     };
     let hash = library(app).add_asset(id, &png).map_err(err)?;
     Ok(AssetInfo {
@@ -301,7 +301,7 @@ pub async fn add_asset_from_capture(
         let doc = lib.load_document(&source_id).map_err(err)?;
         let state = app.state::<EditorState>();
         let img = render(&lib, &state, &source_id, &doc, None)?;
-        let png = fmshot_library::encode_png(&img, 1.0).map_err(err)?;
+        let png = grabmark_library::encode_png(&img, 1.0).map_err(err)?;
         store_asset(&app, &id, &png)
     })
     .await
@@ -329,7 +329,7 @@ pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>,
             .as_ref()
             .ok_or_else(|| crate::i18n::t("ocr.unavailable", &[]))?;
         let bytes = state.library.read_original(&id).map_err(err)?;
-        let img = fmshot_render::decode_png(&bytes).map_err(err)?;
+        let img = grabmark_render::decode_png(&bytes).map_err(err)?;
         Ok(ocr
             .recognize(&img)
             .map_err(err)?
@@ -350,14 +350,14 @@ pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>,
 #[tauri::command]
 #[specta::specta]
 pub fn copy_text(text: String) -> Result<(), String> {
-    fmshot_clipboard::copy_text(&text).map_err(err)
+    grabmark_clipboard::copy_text(&text).map_err(err)
 }
 
 /// Änderungszähler der Zwischenablage (`None` = gibt es hier nicht).
 #[tauri::command]
 #[specta::specta]
 pub fn clipboard_change_count() -> Option<u32> {
-    fmshot_clipboard::change_count()
+    grabmark_clipboard::change_count()
 }
 
 #[tauri::command]
@@ -436,7 +436,7 @@ fn render(
         .map_err(err)?;
         assets.insert(
             asset.clone(),
-            fmshot_render::decode_png(&bytes).map_err(err)?,
+            grabmark_render::decode_png(&bytes).map_err(err)?,
         );
     }
     let opts = match max {

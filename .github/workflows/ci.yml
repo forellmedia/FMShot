@@ -50,13 +50,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: TypeScript-Bindings aktuell?
         run: |
-          cargo test -p fmshot-desktop typescript_bindings
+          cargo test -p grabmark-desktop typescript_bindings
           git diff --exit-code apps/desktop/src/lib/bindings.ts || {
-            echo "::error::bindings.ts ist veraltet – 'cargo test -p fmshot-desktop' ausführen und committen."
+            echo "::error::bindings.ts ist veraltet – 'cargo test -p grabmark-desktop' ausführen und committen."
             exit 1
           }
       - name: Renderer als WASM bauen
-        run: cargo build -p fmshot-core -p fmshot-render --target wasm32-unknown-unknown
+        run: cargo build -p grabmark-core -p grabmark-render --target wasm32-unknown-unknown
       - run: cargo deny check
 
   # Tests auf allen Zielplattformen und Architekturen.
@@ -103,10 +103,10 @@ jobs:
       - name: cargo test (Windows)
         if: runner.os == 'Windows'
         run: |
-          cargo test --workspace --exclude fmshot-desktop
-          cargo build -p fmshot-desktop
+          cargo test --workspace --exclude grabmark-desktop
+          cargo build -p grabmark-desktop
 
-  # Geschwindigkeit der zeitkritischen Pfade (crates/fmshot-bench). Schlägt
+  # Geschwindigkeit der zeitkritischen Pfade (crates/grabmark-bench). Schlägt
   # fehl, wenn ein Messwert sein Budget überschreitet; die Tabelle steht in
   # der Zusammenfassung des Laufs.
   bench:
@@ -125,4 +125,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: bench
-      - run: cargo run --profile bench -p fmshot-bench
+      - run: cargo run --profile bench -p grabmark-bench

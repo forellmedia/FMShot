@@ -427,7 +427,7 @@
             })}
           </p>
         {:else}
-          <p><b>FMShot {version}</b> · © forellmedia.ch</p>
+          <p><b>Grabmark {version}</b> · © forellmedia.ch</p>
           <div class="buttons">
             <button onclick={() => api.reportBug()}>{t("settings.report_bug")}</button>
           </div>

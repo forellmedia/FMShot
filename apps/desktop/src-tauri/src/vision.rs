@@ -8,8 +8,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fmshot_library::Library;
-use fmshot_vision::{Embedding, ImageEncoder, MODEL_ID, Tagger, TextEncoder, tags_version};
+use grabmark_library::Library;
+use grabmark_vision::{Embedding, ImageEncoder, MODEL_ID, Tagger, TextEncoder, tags_version};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -157,7 +157,7 @@ fn find_model_dir(app: &AppHandle) -> Option<PathBuf> {
     [bundled, dev]
         .into_iter()
         .flatten()
-        .find(|d| d.join(fmshot_vision::VISION_FILE).is_file())
+        .find(|d| d.join(grabmark_vision::VISION_FILE).is_file())
 }
 
 /// Hintergrund-Thread starten.
@@ -316,11 +316,11 @@ fn embed(library: &Library, encoder: &ImageEncoder, id: &str) -> Result<Vec<u8>,
     let rec = library.get(id).map_err(|e| e.to_string())?;
     let image = std::fs::read(rec.thumbnail_path())
         .ok()
-        .and_then(|b| fmshot_render::decode_image(&b).ok())
+        .and_then(|b| grabmark_render::decode_image(&b).ok())
         .map(Ok)
         .unwrap_or_else(|| {
             let bytes = library.read_original(id).map_err(|e| e.to_string())?;
-            fmshot_render::decode_png(&bytes).map_err(|e| e.to_string())
+            grabmark_render::decode_png(&bytes).map_err(|e| e.to_string())
         })?;
     Ok(encoder.embed(&image).map_err(|e| e.to_string())?.to_bytes())
 }
@@ -383,7 +383,7 @@ pub fn tags_for_text(text: &str) -> Vec<String> {
                     })
             })
     };
-    fmshot_vision::terms::TERMS
+    grabmark_vision::terms::TERMS
         .iter()
         .filter(|term| {
             matches(&format!("tag.{}", term.key)) || matches(&format!("group.{}", term.group))
@@ -396,7 +396,7 @@ pub fn tags_for_text(text: &str) -> Vec<String> {
 /// Treffern, in der festen Reihenfolge.
 pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
     use std::collections::{HashMap, HashSet};
-    let group_of: HashMap<&str, &str> = fmshot_vision::terms::TERMS
+    let group_of: HashMap<&str, &str> = grabmark_vision::terms::TERMS
         .iter()
         .map(|t| (t.key, t.group))
         .collect();
@@ -406,7 +406,7 @@ pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
             ids.entry(group).or_default().insert(id);
         }
     }
-    fmshot_vision::terms::GROUPS
+    grabmark_vision::terms::GROUPS
         .iter()
         .filter_map(|g| ids.get(g).map(|s| (g.to_string(), s.len() as u32)))
         .collect()
@@ -414,7 +414,7 @@ pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
 
 /// Stichwörter einer Gruppe (Schnellfilter).
 pub fn group_tags(group: &str) -> Vec<String> {
-    fmshot_vision::terms::in_group(group)
+    grabmark_vision::terms::in_group(group)
         .map(|t| t.key.to_string())
         .collect()
 }

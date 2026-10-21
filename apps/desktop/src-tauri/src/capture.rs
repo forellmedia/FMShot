@@ -14,10 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fmshot_capture::{Frame, PrivacyPane, ScreenCapturer, display_at};
-use fmshot_core::RgbaImage;
-use fmshot_library::{CaptureRecord, Library, NewCapture};
-use fmshot_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
+use grabmark_capture::{Frame, PrivacyPane, ScreenCapturer, display_at};
+use grabmark_core::RgbaImage;
+use grabmark_library::{CaptureRecord, Library, NewCapture};
+use grabmark_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -27,7 +27,7 @@ use crate::i18n::t;
 pub struct CaptureState {
     pub capturer: Box<dyn ScreenCapturer>,
     pub library: Arc<Library>,
-    pub ocr: Option<Box<dyn fmshot_ocr::OcrEngine>>,
+    pub ocr: Option<Box<dyn grabmark_ocr::OcrEngine>>,
     /// Verhindert zwei Aufnahmen gleichzeitig (Taste doppelt gedrückt).
     busy: AtomicBool,
 }
@@ -37,7 +37,7 @@ impl CaptureState {
         Self {
             capturer,
             library,
-            ocr: fmshot_ocr::platform_engine(),
+            ocr: grabmark_ocr::platform_engine(),
             busy: AtomicBool::new(false),
         }
     }
@@ -52,7 +52,7 @@ pub enum Mode {
     Text,
     /// Bereich wählen, dann von Hand scrollen.
     Scroll,
-    /// Bereich wählen, FMShot scrollt selbst.
+    /// Bereich wählen, Grabmark scrollt selbst.
     ScrollAuto,
     /// Video (ADR 0011) – Ziel aus den Einstellungen.
     Video,
@@ -64,8 +64,8 @@ impl Mode {
     /// Scroll-Aufnahme so, wie in den Einstellungen gewählt (von Hand/automatisch).
     pub fn scroll(app: &AppHandle) -> Mode {
         match crate::settings::get(app).scroll_mode {
-            fmshot_settings::ScrollMode::Manual => Mode::Scroll,
-            fmshot_settings::ScrollMode::Auto => Mode::ScrollAuto,
+            grabmark_settings::ScrollMode::Manual => Mode::Scroll,
+            grabmark_settings::ScrollMode::Auto => Mode::ScrollAuto,
         }
     }
 
@@ -129,7 +129,7 @@ pub fn start(app: &AppHandle, mode: Mode) {
     }
     if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
         release(app);
-        // Trägt FMShot in die Liste „Bedienungshilfen“ ein (beim ersten Mal
+        // Trägt Grabmark in die Liste „Bedienungshilfen“ ein (beim ersten Mal
         // mit Systemfenster); die Einstellungen öffnen wir direkt.
         let first = first_permission_request(app, "input");
         state.capturer.request_input_permission();
@@ -166,7 +166,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode) {
     let (app_main, pending_main) = (app.clone(), pending.clone());
     let opened = app.run_on_main_thread(move || {
         let (app_done, pending_done) = (app_main.clone(), pending_main.clone());
-        let result = fmshot_overlay::open(
+        let result = grabmark_overlay::open(
             OverlayMode::Region,
             Vec::new(),
             Box::new(move |result| {
@@ -297,8 +297,8 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
         let started = Instant::now();
         let message = match ocr.recognize(&image) {
             Ok(blocks) if !blocks.is_empty() => {
-                let text = fmshot_ocr::join_text(&blocks);
-                match fmshot_clipboard::copy_text(&text) {
+                let text = grabmark_ocr::join_text(&blocks);
+                match grabmark_clipboard::copy_text(&text) {
                     Ok(()) => t(
                         "ocr.copied",
                         &[("count", &text.chars().count().to_string())],
@@ -313,7 +313,7 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
             "Texterkennung in {:.0} ms: {message}",
             started.elapsed().as_secs_f64() * 1000.0
         );
-        let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&message));
+        let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&message));
     });
 }
 
@@ -343,7 +343,7 @@ fn start_window(app: &AppHandle) {
         let app_main = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app_done = app_main.clone();
-            let result = fmshot_overlay::open(
+            let result = grabmark_overlay::open(
                 OverlayMode::Window,
                 windows,
                 Box::new(move |result| {
@@ -457,7 +457,7 @@ pub fn save_and_copy(
 }
 
 pub fn copy_to_clipboard(image: &RgbaImage, scale_factor: f32) {
-    if let Err(e) = fmshot_clipboard::copy_image(image, scale_factor) {
+    if let Err(e) = grabmark_clipboard::copy_image(image, scale_factor) {
         log::error!("Zwischenablage: {e}");
     }
 }
@@ -489,7 +489,7 @@ pub fn first_permission_request(app: &AppHandle, kind: &str) -> bool {
 /// Hinweis dazwischen.
 pub fn open_privacy_settings(app: &AppHandle, pane: PrivacyPane) {
     use tauri_plugin_opener::OpenerExt;
-    let Some(url) = fmshot_capture::privacy_settings_url(pane) else {
+    let Some(url) = grabmark_capture::privacy_settings_url(pane) else {
         return;
     };
     if let Err(e) = app.opener().open_url(url, None::<&str>) {

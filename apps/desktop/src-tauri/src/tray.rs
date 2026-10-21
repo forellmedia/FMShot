@@ -1,4 +1,4 @@
-//! Tray-Symbol – FMShot läuft im Hintergrund.
+//! Tray-Symbol – Grabmark läuft im Hintergrund.
 //!
 //! Linksklick öffnet ein kleines Fenster mit den Tabs Bild, Video und
 //! Einstellungen (Svelte-Seite `/tray`). Rechtsklick zeigt das klassische
@@ -158,7 +158,7 @@ pub fn open_settings(app: &AppHandle) {
 }
 
 /// Ohne sichtbares Fenster (Haupt- oder Einstellungsfenster) verschwindet
-/// FMShot aus Dock und ⌘⇥. `closing` = Fenster, das gerade zugeht.
+/// Grabmark aus Dock und ⌘⇥. `closing` = Fenster, das gerade zugeht.
 pub fn update_activation(app: &AppHandle, closing: &str) {
     #[cfg(target_os = "macos")]
     {
@@ -209,7 +209,7 @@ fn toggle_popover(app: &AppHandle, icon: Rect) {
 /// Speicher, solange niemand es öffnet, und ist danach sofort da.
 fn build_popover(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let window = WebviewWindowBuilder::new(app, POPOVER, WebviewUrl::App("tray".into()))
-        .title("FMShot")
+        .title("Grabmark")
         .inner_size(POPOVER_SIZE.0, POPOVER_SIZE.1)
         .resizable(false)
         .decorations(false)
@@ -299,7 +299,7 @@ fn open_editor(app: &AppHandle) {
     let _ = app.emit("open-editor", ());
 }
 
-/// Fenster verstecken – FMShot läuft im Tray weiter.
+/// Fenster verstecken – Grabmark läuft im Tray weiter.
 pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -353,7 +353,7 @@ pub struct Microphone {
 #[specta::specta]
 pub async fn list_microphones() -> Vec<Microphone> {
     tauri::async_runtime::spawn_blocking(|| {
-        fmshot_media::microphones()
+        grabmark_media::microphones()
             .into_iter()
             .map(|d| Microphone {
                 id: d.id,
@@ -376,7 +376,7 @@ pub struct Camera {
 #[specta::specta]
 pub async fn list_cameras() -> Vec<Camera> {
     tauri::async_runtime::spawn_blocking(|| {
-        fmshot_media::cameras()
+        grabmark_media::cameras()
             .into_iter()
             .map(|d| Camera {
                 id: d.id,
@@ -388,7 +388,7 @@ pub async fn list_cameras() -> Vec<Camera> {
     .unwrap_or_default()
 }
 
-/// Startet FMShot mit der Anmeldung am Computer?
+/// Startet Grabmark mit der Anmeldung am Computer?
 #[tauri::command]
 #[specta::specta]
 pub fn get_launch_at_login(app: AppHandle) -> bool {
@@ -405,4 +405,24 @@ pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> 
         autolaunch.disable()
     }
     .map_err(|e| e.to_string())
+}
+
+/// Aus der Zeit als FMShot: Der alte LaunchAgent zeigt auf die nicht mehr
+/// vorhandene FMShot.app. War er eingeschaltet, ersetzt ihn ein neuer.
+#[cfg(target_os = "macos")]
+pub fn migrate_launch_agent(app: &AppHandle) {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let old = std::path::Path::new(&home).join("Library/LaunchAgents/FMShot.plist");
+    if !old.exists() {
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(&old) {
+        log::error!("Alter LaunchAgent: {e}");
+        return;
+    }
+    if let Err(e) = app.autolaunch().enable() {
+        log::error!("Mit der Anmeldung starten: {e}");
+    }
 }

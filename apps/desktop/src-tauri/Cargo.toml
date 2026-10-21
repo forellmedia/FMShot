@@ -1,6 +1,6 @@
 [package]
-name = "fmshot-desktop"
-description = "FMShot Desktop-App (Tauri)"
+name = "grabmark-desktop"
+description = "Grabmark Desktop-App (Tauri)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ workspace = true
 [lib]
 # Eigener Name für die Bibliothek, sonst kollidiert sie unter Windows mit dem
 # Programm, siehe https://github.com/rust-lang/cargo/issues/8519
-name = "fmshot_desktop_lib"
+name = "grabmark_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -28,19 +28,19 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
-fmshot-capture.workspace = true
-fmshot-clipboard.workspace = true
-fmshot-core = { workspace = true, features = ["specta"] }
-fmshot-hotkeys.workspace = true
-fmshot-library.workspace = true
-fmshot-media.workspace = true
-fmshot-video = { workspace = true, features = ["gpu", "gif", "layers"] }
-fmshot-ocr.workspace = true
-fmshot-overlay.workspace = true
-fmshot-render.workspace = true
-fmshot-settings = { workspace = true, features = ["specta"] }
-fmshot-stitch.workspace = true
-fmshot-vision.workspace = true
+grabmark-capture.workspace = true
+grabmark-clipboard.workspace = true
+grabmark-core = { workspace = true, features = ["specta"] }
+grabmark-hotkeys.workspace = true
+grabmark-library.workspace = true
+grabmark-media.workspace = true
+grabmark-video = { workspace = true, features = ["gpu", "gif", "layers"] }
+grabmark-ocr.workspace = true
+grabmark-overlay.workspace = true
+grabmark-render.workspace = true
+grabmark-settings = { workspace = true, features = ["specta"] }
+grabmark-stitch.workspace = true
+grabmark-vision.workspace = true
 log = "0.4"
 sys-locale = "0.3"
 tauri-plugin-updater = "2"
@@ -53,7 +53,7 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 
 # Bildinhalt-Erkennung mit ONNX Runtime – unter Linux vorerst aus (ADR 0010).
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-fmshot-vision = { workspace = true, features = ["onnx"] }
+grabmark-vision = { workspace = true, features = ["onnx"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# CI: Importiert das Zertifikat „FMShot Local Signing“ in einen temporären
+# CI: Importiert das Zertifikat „Grabmark Local Signing“ in einen temporären
 # Schlüsselbund und vertraut ihm für Code-Signing. Danach signiert der
 # Tauri-Bundler damit (APPLE_SIGNING_IDENTITY).
 #
@@ -9,7 +9,7 @@
 # Bildschirmaufnahme-Freigabe bei jedem Update.
 set -euo pipefail
 
-NAME="FMShot Local Signing"
+NAME="Grabmark Local Signing"
 
 if [[ -z "${CERT_P12_BASE64:-}" || -z "${CERT_PASSWORD:-}" ]]; then
   echo "::warning::Keine Mac-Signatur-Secrets – Build wird ad-hoc signiert."
@@ -19,8 +19,8 @@ fi
 
 # LibreSSL des Systems: versteht die PKCS#12-Datei aus make-signing-cert.sh.
 OPENSSL=/usr/bin/openssl
-WORK="$RUNNER_TEMP/fmshot-signing"
-KEYCHAIN="$WORK/fmshot.keychain-db"
+WORK="$RUNNER_TEMP/grabmark-signing"
+KEYCHAIN="$WORK/grabmark.keychain-db"
 KC_PASS="$("$OPENSSL" rand -hex 16)"
 mkdir -p "$WORK"
 

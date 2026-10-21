@@ -43,7 +43,7 @@ und Linux fehlt etwas Vergleichbares. Darum braucht es ein eigenes Modell, das
   Release-Pipeline zusätzlich angeben. Normale `cargo`-Builds und die CI
   brauchen das Modell so nicht. Fehlt es, bleibt die Suche nach Bildinhalt
   aus.
-- **Neue Crate `fmshot-vision`:**
+- **Neue Crate `grabmark-vision`:**
   - plattformunabhängig, hängt intern nur von `core` ab
   - Aufgaben: Bild → Vektor, Text → Vektor, Stichwörter aus einer festen
     Begriffsliste

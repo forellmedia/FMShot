@@ -8,10 +8,10 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use fmshot_core::RgbaImage;
-use fmshot_library::{CaptureQuery, CaptureRecord, Library};
-use fmshot_overlay::{PreviewAction, PreviewPlacement};
-use fmshot_settings::{AfterCapture, ImageFormat, PreviewPosition, export_file_name};
+use grabmark_core::RgbaImage;
+use grabmark_library::{CaptureQuery, CaptureRecord, Library};
+use grabmark_overlay::{PreviewAction, PreviewPlacement};
+use grabmark_settings::{AfterCapture, ImageFormat, PreviewPosition, export_file_name};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -92,9 +92,9 @@ fn index_pending(app: &AppHandle) {
                 .library
                 .read_original(&id)
                 .ok()
-                .and_then(|b| fmshot_render::decode_png(&b).ok())
+                .and_then(|b| grabmark_render::decode_png(&b).ok())
                 .and_then(|img| ocr.recognize(&img).ok())
-                .map(|blocks| fmshot_ocr::join_text(&blocks))
+                .map(|blocks| grabmark_ocr::join_text(&blocks))
                 .unwrap_or_default();
             if let Err(e) = state.library.set_ocr_text(&id, &text) {
                 log::error!("Suchindex {id}: {e}");
@@ -170,7 +170,7 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
         }
         AfterCapture::Clipboard => {
             let msg = t("capture.copied", &[]);
-            let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+            let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
         }
         AfterCapture::Preview => show_preview(app, rec, image, settings.preview_position),
     }
@@ -182,7 +182,7 @@ fn show_preview(
     image: &RgbaImage,
     position: PreviewPosition,
 ) {
-    let thumb = std::sync::Arc::new(fmshot_library::thumbnail(image, 520));
+    let thumb = std::sync::Arc::new(grabmark_library::thumbnail(image, 520));
     let placement = match position {
         PreviewPosition::Corner => PreviewPlacement::Corner,
         PreviewPosition::Mouse => app
@@ -215,7 +215,7 @@ fn show_preview(
             labels[2].as_str(),
             labels[3].as_str(),
         ];
-        let result = fmshot_overlay::show_preview(
+        let result = grabmark_overlay::show_preview(
             thumb,
             &file,
             placement,
@@ -242,7 +242,7 @@ fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
                     Ok(()) => t("editor.copied", &[]),
                     Err(e) => e,
                 };
-                let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
             });
         }
         PreviewAction::Save => {
@@ -256,22 +256,22 @@ fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
                     Ok(path) => t("preview.saved", &[("path", &path.to_string_lossy())]),
                     Err(e) => e,
                 };
-                let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
             });
         }
         PreviewAction::Text => {
             std::thread::spawn(move || {
                 let state = app.state::<CaptureState>();
                 let msg = match (state.ocr.as_ref(), state.library.read_original(&id)) {
-                    (Some(ocr), Ok(bytes)) => fmshot_render::decode_png(&bytes)
+                    (Some(ocr), Ok(bytes)) => grabmark_render::decode_png(&bytes)
                         .map_err(|e| e.to_string())
                         .and_then(|img| ocr.recognize(&img).map_err(|e| e.to_string()))
                         .and_then(|blocks| {
-                            let text = fmshot_ocr::join_text(&blocks);
+                            let text = grabmark_ocr::join_text(&blocks);
                             if text.is_empty() {
                                 return Ok(t("ocr.nothing", &[]));
                             }
-                            fmshot_clipboard::copy_text(&text).map_err(|e| e.to_string())?;
+                            grabmark_clipboard::copy_text(&text).map_err(|e| e.to_string())?;
                             Ok(t(
                                 "ocr.copied",
                                 &[("count", &text.chars().count().to_string())],
@@ -280,7 +280,7 @@ fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
                         .unwrap_or_else(|e| e),
                     _ => t("ocr.unavailable", &[]),
                 };
-                let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
             });
         }
     }
@@ -297,11 +297,11 @@ fn copy_flattened(app: &AppHandle, id: &str) -> Result<(), String> {
     let rec = library.get(id).map_err(|e| e.to_string())?;
     if rec.is_video() {
         crate::video_edit::ensure_current(app, id)?;
-        return fmshot_clipboard::copy_file(&rec.video_path()).map_err(|e| e.to_string());
+        return grabmark_clipboard::copy_file(&rec.video_path()).map_err(|e| e.to_string());
     }
     let doc = library.load_document(id).map_err(|e| e.to_string())?;
     let img = flattened(app, &library, id)?;
-    fmshot_clipboard::copy_image(&img, doc.pixel_ratio).map_err(|e| e.to_string())
+    grabmark_clipboard::copy_image(&img, doc.pixel_ratio).map_err(|e| e.to_string())
 }
 
 /// Schreibt ein Bild in den Export-Ordner (Videos nicht). Bei wiederholtem
@@ -336,9 +336,9 @@ pub fn export(
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("jpg"))
     {
-        fmshot_library::encode_jpeg(img, 90)?
+        grabmark_library::encode_jpeg(img, 90)?
     } else {
-        fmshot_library::encode_png(img, rec.scale_factor).map_err(|e| e.to_string())?
+        grabmark_library::encode_png(img, rec.scale_factor).map_err(|e| e.to_string())?
     };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -359,7 +359,7 @@ fn unique(path: &Path) -> PathBuf {
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("FMShot");
+        .unwrap_or("Grabmark");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("png");
     (2..)
         .map(|n| path.with_file_name(format!("{stem} ({n}).{ext}")))
@@ -421,7 +421,7 @@ pub fn get_diagnostics(app: AppHandle) -> Diagnostics {
     }
 }
 
-/// Filter der Galerie (siehe `fmshot_library::CaptureQuery`).
+/// Filter der Galerie (siehe `grabmark_library::CaptureQuery`).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GalleryQuery {
@@ -592,11 +592,11 @@ pub fn report_bug(app: AppHandle) -> Result<(), String> {
         })
         .unwrap_or_default();
     let body = format!(
-        "### Was ist passiert?\n\n\n### Was hättest du erwartet?\n\n\n### Umgebung\n- FMShot {}\n- {}\n\n### Log (letzte Zeilen)\n```text\n{}\n```\n",
+        "### Was ist passiert?\n\n\n### Was hättest du erwartet?\n\n\n### Umgebung\n- Grabmark {}\n- {}\n\n### Log (letzte Zeilen)\n```text\n{}\n```\n",
         d.version, d.platform, log_tail
     );
     let url = format!(
-        "https://github.com/forellmedia/FMShot/issues/new?labels=fehler&title={}&body={}",
+        "https://github.com/forellmedia/Grabmark/issues/new?labels=fehler&title={}&body={}",
         urlencode("Fehler: "),
         urlencode(&body.chars().take(5500).collect::<String>())
     );
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn eindeutiger_dateiname() {
-        let tmp = std::env::temp_dir().join(format!("fmshot-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("grabmark-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let p = tmp.join("Bild.png");
         assert_eq!(unique(&p), p);

@@ -18,12 +18,12 @@ mod vision;
 
 use std::sync::Arc;
 
-use fmshot_library::Library;
+use grabmark_library::Library;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_specta::{Builder, collect_commands};
 
 /// Alle Commands, die das Frontend aufrufen darf. Die TypeScript-Typen dazu
-/// erzeugt `cargo test -p fmshot-desktop` nach `src/lib/bindings.ts`.
+/// erzeugt `cargo test -p grabmark-desktop` nach `src/lib/bindings.ts`.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::app_info,
@@ -94,7 +94,7 @@ pub fn run() {
     log_panics();
     let builder = specta_builder();
     tauri::Builder::default()
-        // Zweiter Start (z. B. `FMShot capture region`): an die laufende App
+        // Zweiter Start (z. B. `Grabmark capture region`): an die laufende App
         // weiterreichen statt ein zweites Tray-Symbol zu öffnen.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             handle_args(app, &argv);
@@ -117,7 +117,7 @@ pub fn run() {
         .setup(move |app| {
             builder.mount_events(app);
 
-            // Kein Dock-Symbol – FMShot lebt im Tray.
+            // Kein Dock-Symbol – Grabmark lebt im Tray.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -129,7 +129,7 @@ pub fn run() {
             let library = Arc::new(Library::open(&root)?);
             log::info!("Bibliothek: {}", root.display());
             app.manage(capture::CaptureState::new(
-                fmshot_capture::platform_capturer(),
+                grabmark_capture::platform_capturer(),
                 library,
             ));
 
@@ -141,6 +141,8 @@ pub fn run() {
             app.manage(services::Services::new());
             app.manage(vision::VisionState::new(app.handle()));
             app.state::<capture::CaptureState>().capturer.warm_up();
+            #[cfg(target_os = "macos")]
+            tray::migrate_launch_agent(app.handle());
             tray::create(app.handle())?;
             menu::create(app.handle())?;
             hotkeys::register(app.handle());
@@ -171,7 +173,7 @@ pub fn run() {
             _ => {}
         })
         .run(tauri::generate_context!())
-        .expect("FMShot konnte nicht gestartet werden");
+        .expect("Grabmark konnte nicht gestartet werden");
 }
 
 /// Befehle aus der Kommandozeile: `capture region|screen|window|scroll|text|video`

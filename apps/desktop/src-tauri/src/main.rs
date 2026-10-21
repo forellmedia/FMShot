@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    fmshot_desktop_lib::run()
+    grabmark_desktop_lib::run()
 }

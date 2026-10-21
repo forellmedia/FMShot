@@ -1,7 +1,7 @@
 //! Video-Aufnahme (ADR 0011): Ziel wählen (Bereich, Fenster, Bildschirm
 //! oder nur Webcam), Countdown, Aufnahmeleiste mit Pause/Stopp und Webcam, danach die Spuren
 //! zusammensetzen und in die Bibliothek legen. Die Aufnahme macht
-//! `fmshot-media`, Layout und Export `fmshot-video`; hier wird nur verdrahtet.
+//! `grabmark-media`, Layout und Export `grabmark-video`; hier wird nur verdrahtet.
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -9,24 +9,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use fmshot_capture::{PrivacyPane, display_at};
-use fmshot_core::{
+use grabmark_capture::{PrivacyPane, display_at};
+use grabmark_core::{
     CameraFormat, CheckpointDrawing, Document, InputSample, InputTrack, LayerTime, Point,
     RecordingCheckpoint, Rect, Size, VideoDoc, WebcamBackground, WebcamLayout, WebcamMode,
     WebcamSection, WebcamShape, WebcamTrack,
 };
-use fmshot_hotkeys::{Action, Platform};
-use fmshot_library::VideoSlot;
-use fmshot_media::{
+use grabmark_hotkeys::{Action, Platform};
+use grabmark_library::VideoSlot;
+use grabmark_media::{
     MediaError, Permission, RecordFiles, RecordOptions, RecordSummary, RecordTarget, Recording,
 };
-use fmshot_overlay::{
+use grabmark_overlay::{
     BubbleStyle, DrawEvent, DrawSurface, DrawTool, OverlayHandle, OverlayMode, OverlayResult,
     OwnClickWatch, RecordAction, RecordLabels, RecordUi, WebcamBubble, WindowTarget,
 };
-use fmshot_settings::{DrawMode, VideoSettings, VideoTarget};
-use fmshot_video::SectionLog;
-use fmshot_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
+use grabmark_settings::{DrawMode, VideoSettings, VideoTarget};
+use grabmark_video::SectionLog;
+use grabmark_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
@@ -136,10 +136,10 @@ pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
     let app = app.clone();
     std::thread::spawn(move || {
         let microphone = settings.microphone
-            && match fmshot_media::microphone_permission() {
+            && match grabmark_media::microphone_permission() {
                 Permission::Granted => true,
                 // Systemfenster; ohne Zustimmung ohne Mikrofon weiter.
-                Permission::NotDetermined => fmshot_media::request_microphone_permission(),
+                Permission::NotDetermined => grabmark_media::request_microphone_permission(),
                 Permission::Denied => {
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Microphone);
@@ -147,10 +147,10 @@ pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
                 }
             };
         let webcam = settings.webcam
-            && !fmshot_media::cameras().is_empty()
-            && match fmshot_media::camera_permission() {
+            && !grabmark_media::cameras().is_empty()
+            && match grabmark_media::camera_permission() {
                 Permission::Granted => true,
-                Permission::NotDetermined => fmshot_media::request_camera_permission(),
+                Permission::NotDetermined => grabmark_media::request_camera_permission(),
                 Permission::Denied => {
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Camera);
@@ -174,14 +174,14 @@ pub fn start_webcam(app: &AppHandle) {
     let settings = crate::settings::get(app).video;
     let app = app.clone();
     std::thread::spawn(move || {
-        if fmshot_media::cameras().is_empty() {
+        if grabmark_media::cameras().is_empty() {
             done_starting(&app);
             capture::show_error(&app, &t("video.no_camera", &[]));
             return;
         }
-        let camera = match fmshot_media::camera_permission() {
+        let camera = match grabmark_media::camera_permission() {
             Permission::Granted => true,
-            Permission::NotDetermined => fmshot_media::request_camera_permission(),
+            Permission::NotDetermined => grabmark_media::request_camera_permission(),
             Permission::Denied => {
                 done_starting(&app);
                 capture::open_privacy_settings(&app, PrivacyPane::Camera);
@@ -193,9 +193,9 @@ pub fn start_webcam(app: &AppHandle) {
             return;
         }
         let microphone = settings.microphone
-            && match fmshot_media::microphone_permission() {
+            && match grabmark_media::microphone_permission() {
                 Permission::Granted => true,
-                Permission::NotDetermined => fmshot_media::request_microphone_permission(),
+                Permission::NotDetermined => grabmark_media::request_microphone_permission(),
                 Permission::Denied => {
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Microphone);
@@ -307,7 +307,7 @@ fn select(
             let a = app.clone();
             let _ = app.run_on_main_thread(move || {
                 let app_done = a.clone();
-                let result = fmshot_overlay::open(
+                let result = grabmark_overlay::open(
                     OverlayMode::Region,
                     Vec::new(),
                     Box::new(move |result| {
@@ -361,7 +361,7 @@ fn select(
             let a = app.clone();
             let _ = app.run_on_main_thread(move || {
                 let app_done = a.clone();
-                let result = fmshot_overlay::open(
+                let result = grabmark_overlay::open(
                     OverlayMode::Window,
                     targets,
                     Box::new(move |result| {
@@ -402,7 +402,7 @@ fn select(
 
 /// Fensterlage (globale Punkte) → physische Pixel des Monitors, auf ihn
 /// begrenzt.
-fn window_pixels(b: Rect, d: &fmshot_capture::Display) -> (u32, u32, u32, u32) {
+fn window_pixels(b: Rect, d: &grabmark_capture::Display) -> (u32, u32, u32, u32) {
     let s = d.scale_factor.max(1.0);
     let x0 = ((b.x - d.bounds.x) * s).max(0.0);
     let y0 = ((b.y - d.bounds.y) * s).max(0.0);
@@ -416,7 +416,7 @@ fn window_pixels(b: Rect, d: &fmshot_capture::Display) -> (u32, u32, u32, u32) {
     )
 }
 
-fn open_result(app: &AppHandle, result: Result<OverlayHandle, fmshot_overlay::OverlayError>) {
+fn open_result(app: &AppHandle, result: Result<OverlayHandle, grabmark_overlay::OverlayError>) {
     match result {
         Ok(handle) => OVERLAY.with(|o| *o.borrow_mut() = Some(handle)),
         Err(e) => {
@@ -439,7 +439,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     };
     let camera_only = choice.target.is_none();
     // Mit Kamera am System lässt sich die Webcam jederzeit zuschalten.
-    let has_camera = !fmshot_media::cameras().is_empty();
+    let has_camera = !grabmark_media::cameras().is_empty();
     let files = RecordFiles {
         screen: (!camera_only).then(|| slot.screen_path()),
         system_audio: (settings.system_audio && !camera_only).then(|| slot.system_audio_path()),
@@ -449,12 +449,12 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     };
     // Kurz warten, bis das Auswahl-Overlay verschwunden ist.
     std::thread::sleep(Duration::from_millis(80));
-    let recording = fmshot_media::start_recording(RecordOptions {
+    let recording = grabmark_media::start_recording(RecordOptions {
         target: choice.target,
         files: files.clone(),
         fps: settings.fps,
         microphone_id: settings.microphone_id.clone(),
-        // FMShot zeichnet den Zeiger selbst aus der Mausspur (Etappe 5).
+        // Grabmark zeichnet den Zeiger selbst aus der Mausspur (Etappe 5).
         show_cursor: false,
         camera_id: settings.camera_id.clone(),
     });
@@ -593,7 +593,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             break;
         }
         if ticks.is_multiple_of(DISK_TICKS) {
-            disk = fmshot_media::free_space(&slot.dir).map_or(DiskState::Ok, disk_state);
+            disk = grabmark_media::free_space(&slot.dir).map_or(DiskState::Ok, disk_state);
             if disk == DiskState::Critical {
                 failure = Some(t("video.disk_full", &[]));
                 break;
@@ -694,7 +694,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             );
             if ok && failure.is_some() {
                 let msg = t("video.failed_saved", &[("time", &saved)]);
-                let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
             }
         }
         Err(MediaError::Empty) => {
@@ -773,7 +773,7 @@ impl Sketch {
                 })
                 .collect();
             let handler = s.clone();
-            match fmshot_overlay::open_draw_surface(
+            match grabmark_overlay::open_draw_surface(
                 display_id,
                 area,
                 &tools,
@@ -909,13 +909,13 @@ fn set_drawing(surface: &DrawSurface, on: bool) {
 const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Mausspur während der Aufnahme (Etappe 5): Lage relativ zum
-/// aufgenommenen Bereich und ob die Taste gedrückt ist. Klicks in FMShot
+/// aufgenommenen Bereich und ob die Taste gedrückt ist. Klicks in Grabmark
 /// selbst (Leisten, Zeichnen) fallen beim Abschluss heraus.
 struct MouseLog {
     app: AppHandle,
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Vec<InputSample>>>,
-    /// Zeitpunkte der Klicks in FMShot selbst (Zeit im Video).
+    /// Zeitpunkte der Klicks in Grabmark selbst (Zeit im Video).
     own_clicks: Arc<Mutex<Vec<u32>>>,
 }
 
@@ -931,7 +931,7 @@ impl MouseLog {
         let own_clicks = Arc::new(Mutex::new(Vec::new()));
         let (rec, own) = (recording.clone(), own_clicks.clone());
         let _ = app.run_on_main_thread(move || {
-            let watch = fmshot_overlay::watch_own_clicks(Box::new(move || {
+            let watch = grabmark_overlay::watch_own_clicks(Box::new(move || {
                 let at = rec.elapsed().as_millis().min(u32::MAX as u128) as u32;
                 own.lock().unwrap_or_else(|e| e.into_inner()).push(at);
             }));
@@ -991,7 +991,7 @@ impl MouseLog {
             .and_then(|t| t.join().ok())
             .unwrap_or_default();
         let own = self.own_clicks.lock().unwrap_or_else(|e| e.into_inner());
-        fmshot_video::cursor::remove_own_clicks(&mut samples, &own);
+        grabmark_video::cursor::remove_own_clicks(&mut samples, &own);
         samples
     }
 
@@ -1182,7 +1182,7 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
 struct WebcamControl {
     on: bool,
     /// Kamera läuft gerade an (im Hintergrund).
-    starting: Option<std::thread::JoinHandle<fmshot_media::Result<()>>>,
+    starting: Option<std::thread::JoinHandle<grabmark_media::Result<()>>>,
     large: bool,
     log: SectionLog,
     layout: WebcamLayout,
@@ -1262,9 +1262,9 @@ impl WebcamControl {
 
 /// Kamera-Freigabe vor dem Einschalten; verweigert → Systemeinstellungen.
 fn camera_allowed(app: &AppHandle) -> bool {
-    match fmshot_media::camera_permission() {
+    match grabmark_media::camera_permission() {
         Permission::Granted => true,
-        Permission::NotDetermined => fmshot_media::request_camera_permission(),
+        Permission::NotDetermined => grabmark_media::request_camera_permission(),
         Permission::Denied => {
             capture::open_privacy_settings(app, PrivacyPane::Camera);
             false
@@ -1292,7 +1292,7 @@ fn bubble_rect(layout: &WebcamLayout, choice: &Choice) -> (f64, f64, f64, f64) {
     }
     let frame = Size::new(area.width, area.height);
     let camera = Size::new(16.0, 9.0);
-    let p = fmshot_video::layout::webcam_overlay(layout, frame, camera);
+    let p = grabmark_video::layout::webcam_overlay(layout, frame, camera);
     (
         (area.x + p.rect.x) as f64,
         (area.y + p.rect.y) as f64,
@@ -1309,7 +1309,7 @@ fn webcam_layout(
 ) -> WebcamLayout {
     if let Some((x, y, w, h)) = bubble {
         let rect = Rect::new(x as f32, y as f32, w as f32, h as f32);
-        let (position, size) = fmshot_video::layout_from_bubble(area_rect(choice), rect);
+        let (position, size) = grabmark_video::layout_from_bubble(area_rect(choice), rect);
         layout.position = position;
         layout.size = size;
     }
@@ -1372,10 +1372,10 @@ fn show_bubble(
             let Some(preview) = recording.webcam_preview(&layout) else {
                 return;
             };
-            // SAFETY: `preview` ist eine gültige Ebene von fmshot-media; die
+            // SAFETY: `preview` ist eine gültige Ebene von grabmark-media; die
             // Blase hält sie selbst fest.
             match unsafe {
-                fmshot_overlay::open_webcam_bubble(display_id, rect, style, preview.as_ptr())
+                grabmark_overlay::open_webcam_bubble(display_id, rect, style, preview.as_ptr())
             } {
                 Ok(bubble) => *b = Some(bubble),
                 Err(e) => log::error!("Webcam-Blase: {e}"),
@@ -1481,7 +1481,7 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
     let (display_id, rect, flags) = (choice.display_id, choice.rect, flags.clone());
     let _ = app.run_on_main_thread(move || {
         DRAW_SHORTCUT.with(|s| *s.borrow_mut() = shortcut);
-        let ui = fmshot_overlay::open_record_ui(
+        let ui = grabmark_overlay::open_record_ui(
             display_id,
             rect,
             &RecordLabels {
@@ -1580,7 +1580,7 @@ fn status_text(recording: &dyn Recording, microphone: bool, system: bool) -> (St
 }
 
 fn meter(peak: f32) -> String {
-    let on = fmshot_media::level_steps(peak, METER_STEPS);
+    let on = grabmark_media::level_steps(peak, METER_STEPS);
     (0..METER_STEPS)
         .map(|i| if i < on { '▮' } else { '▯' })
         .collect()
@@ -1643,7 +1643,7 @@ fn finish(
     let Some(main) = files.screen.as_ref().or(files.webcam.as_ref()) else {
         return false;
     };
-    let poster = match fmshot_media::frame_at(main, Duration::ZERO) {
+    let poster = match grabmark_media::frame_at(main, Duration::ZERO) {
         Ok(p) => p,
         Err(e) => {
             capture::show_error(app, &e.to_string());
@@ -1694,7 +1694,7 @@ pub fn offer_recovery(app: &AppHandle) {
                 let main = [slot.screen_path(), slot.webcam_path()]
                     .into_iter()
                     .find(|p| p.exists())?;
-                match fmshot_media::duration(&main) {
+                match grabmark_media::duration(&main) {
                     Ok(d) => Some((slot, d)),
                     Err(e) => {
                         // Nicht einmal ein Fragment lesbar: nichts zu retten.
@@ -1748,7 +1748,7 @@ pub fn offer_recovery(app: &AppHandle) {
                             "video.recovered",
                             &[("duration", &format_duration(duration))],
                         );
-                        let _ = app.run_on_main_thread(move || fmshot_overlay::show_toast(&msg));
+                        let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
                     }
                 }
                 Some(false) => library.discard_video(&slot),
@@ -1798,7 +1798,7 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
         },
         ..RecordingCheckpoint::default()
     };
-    let r = fmshot_video::recovery::recovered(
+    let r = grabmark_video::recovery::recovered(
         checkpoint,
         fallback,
         duration.as_millis().min(u32::MAX as u128) as u32,
@@ -1817,7 +1817,7 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
         .collect();
     let main = files.screen.as_ref().or(files.webcam.as_ref());
     let (width, height) = main
-        .and_then(|p| fmshot_media::open_video(p).ok())
+        .and_then(|p| grabmark_media::open_video(p).ok())
         .map_or((0, 0), |source| source.size());
     let summary = RecordSummary {
         duration,

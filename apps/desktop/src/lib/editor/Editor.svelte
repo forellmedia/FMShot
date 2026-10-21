@@ -27,7 +27,7 @@
   onMount(() => {
     editor.init();
     // Zum Testen im Browser: Zustand von aussen erreichbar.
-    if (import.meta.env.DEV) (window as unknown as { __fmshot: typeof editor }).__fmshot = editor;
+    if (import.meta.env.DEV) (window as unknown as { __grabmark: typeof editor }).__grabmark = editor;
   });
 
   function isTyping(e: KeyboardEvent) {
@@ -235,7 +235,7 @@
       <Canvas />
     {:else}
         <div class="start">
-          <h1>FMShot</h1>
+          <h1>Grabmark</h1>
           <p>{t("start.hint")}</p>
           <div class="start-buttons">
             <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>⇧⌘2</kbd></button>

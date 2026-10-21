@@ -21,7 +21,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: FMShot-Version
+      label: Grabmark-Version
       placeholder: v0.1.0
     validations:
       required: true

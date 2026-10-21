@@ -19,6 +19,7 @@
   import { t, type MessageKey } from "$lib/i18n";
 
   type Tab = "image" | "screen" | "webcam" | "settings";
+  // Schlüssel aus der Zeit als FMShot – bleibt absichtlich gleich.
   const TAB_KEY = "fmshot.tray.tab";
 
   const ICONS = {

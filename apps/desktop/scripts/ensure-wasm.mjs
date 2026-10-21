@@ -2,6 +2,6 @@
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 
-if (!existsSync(new URL("../src/lib/wasm/fmshot_render.js", import.meta.url))) {
+if (!existsSync(new URL("../src/lib/wasm/grabmark_render.js", import.meta.url))) {
   execSync("bash ../../scripts/build-wasm.sh", { stdio: "inherit" });
 }

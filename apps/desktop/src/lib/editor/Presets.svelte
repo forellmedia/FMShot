@@ -7,6 +7,7 @@
   import { editor, type Style } from "./state.svelte";
   import Dropdown from "./Dropdown.svelte";
 
+  // Schlüssel aus der Zeit als FMShot – bleibt, sonst gehen Vorlagen verloren.
   const KEY = "fmshot.presets";
   const MAX = 6;
 
