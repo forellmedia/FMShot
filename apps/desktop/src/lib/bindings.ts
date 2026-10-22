@@ -6,7 +6,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	/**  Version und Plattform – für „Über Grabmark“ und „Fehler melden“. */
+	/**  Version und Plattform – für „Über Nabshot“ und „Fehler melden“. */
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Neueste Aufnahmen zuerst. */
 	listCaptures: (limit: number) => typedError<CaptureInfo[], string>(__TAURI_INVOKE("list_captures", { limit })),
@@ -70,7 +70,7 @@ export const commands = {
 	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
 	listMicrophones: () => __TAURI_INVOKE<Microphone[]>("list_microphones"),
 	listCameras: () => __TAURI_INVOKE<Camera[]>("list_cameras"),
-	/**  Startet Grabmark mit der Anmeldung am Computer? */
+	/**  Startet Nabshot mit der Anmeldung am Computer? */
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	getSettings: () => __TAURI_INVOKE<Settings>("get_settings"),
@@ -281,7 +281,7 @@ export type ContentSearchStatus = {
 /**  Ecke, z. B. Richtung des Lupengriffs. */
 export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
-/**  Wie Grabmark den Mauszeiger zeichnet (aus `<id>_input.json`). */
+/**  Wie Nabshot den Mauszeiger zeichnet (aus `<id>_input.json`). */
 export type CursorStyle = {
 	visible?: boolean,
 	/**  Grösse als Vielfaches der normalen Zeigergrösse (1 bis 3). */
@@ -301,7 +301,7 @@ export type Diagnostics = {
 };
 
 /**
- *  Ein Grabmark-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ *  Ein Nabshot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
  * 
  *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
  *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
@@ -310,7 +310,7 @@ export type Diagnostics = {
 export type Document = Document_Serialize | Document_Deserialize;
 
 /**
- *  Ein Grabmark-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ *  Ein Nabshot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
  * 
  *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
  *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
@@ -327,7 +327,7 @@ export type Document_Deserialize = {
 };
 
 /**
- *  Ein Grabmark-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
+ *  Ein Nabshot-Dokument: Zeichenfläche plus Ebenen, von unten nach oben.
  * 
  *  Koordinaten sind Pixel des Originalbilds (bei Retina also physische
  *  Pixel). `pixel_ratio` sagt, wie viele davon auf einen Bildschirmpunkt
@@ -378,7 +378,7 @@ export type GalleryItem = {
 	matched: string[],
 };
 
-/**  Filter der Galerie (siehe `grabmark_library::CaptureQuery`). */
+/**  Filter der Galerie (siehe `nabshot_library::CaptureQuery`). */
 export type GalleryQuery = {
 	text: string,
 	/**  Unix-Millisekunden, inklusive. */
@@ -579,7 +579,7 @@ export type Settings = {
 	auto_export?: AutoExport,
 	/**  Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie. */
 	retention_days?: number | null,
-	/**  Ab welcher Grösse Grabmark zum Aufräumen auffordert. */
+	/**  Ab welcher Grösse Nabshot zum Aufräumen auffordert. */
 	storage?: StorageLimits,
 	/**  Log-Dateien nach so vielen Tagen löschen (10, 30, 60 oder 360). */
 	log_retention_days?: number,

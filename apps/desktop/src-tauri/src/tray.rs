@@ -1,4 +1,4 @@
-//! Tray-Symbol – Grabmark läuft im Hintergrund.
+//! Tray-Symbol – Nabshot läuft im Hintergrund.
 //!
 //! Linksklick öffnet ein kleines Fenster mit den Tabs Bild, Video und
 //! Einstellungen (Svelte-Seite `/tray`). Rechtsklick zeigt das klassische
@@ -193,7 +193,7 @@ pub fn open_settings(app: &AppHandle) {
 }
 
 /// Ohne sichtbares Fenster (Haupt- oder Einstellungsfenster) verschwindet
-/// Grabmark aus Dock und ⌘⇥. `closing` = Fenster, das gerade zugeht.
+/// Nabshot aus Dock und ⌘⇥. `closing` = Fenster, das gerade zugeht.
 pub fn update_activation(app: &AppHandle, closing: &str) {
     #[cfg(target_os = "macos")]
     {
@@ -269,7 +269,7 @@ fn glass(effect: Effect, radius: Option<f64>) -> tauri::utils::config::WindowEff
 /// Speicher, solange niemand es öffnet, und ist danach sofort da.
 fn build_popover(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, POPOVER, WebviewUrl::App("tray".into()))
-        .title("Grabmark")
+        .title("Nabshot")
         .inner_size(POPOVER_SIZE.0, POPOVER_SIZE.1)
         .resizable(false)
         .decorations(false)
@@ -388,7 +388,7 @@ fn open_editor(app: &AppHandle) {
     check("Ereignis open-editor", app.emit("open-editor", ()));
 }
 
-/// Fenster verstecken – Grabmark läuft im Tray weiter.
+/// Fenster verstecken – Nabshot läuft im Tray weiter.
 pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         log::info!("Hauptfenster verstecken");
@@ -449,7 +449,7 @@ pub struct Microphone {
 pub async fn list_microphones() -> Vec<Microphone> {
     tauri::async_runtime::spawn_blocking(|| {
         let start = Instant::now();
-        let list: Vec<Microphone> = grabmark_media::microphones()
+        let list: Vec<Microphone> = nabshot_media::microphones()
             .into_iter()
             .map(|d| Microphone {
                 id: d.id,
@@ -482,7 +482,7 @@ pub struct Camera {
 pub async fn list_cameras() -> Vec<Camera> {
     tauri::async_runtime::spawn_blocking(|| {
         let start = Instant::now();
-        let list: Vec<Camera> = grabmark_media::cameras()
+        let list: Vec<Camera> = nabshot_media::cameras()
             .into_iter()
             .map(|d| Camera {
                 id: d.id,
@@ -503,7 +503,7 @@ pub async fn list_cameras() -> Vec<Camera> {
     })
 }
 
-/// Startet Grabmark mit der Anmeldung am Computer?
+/// Startet Nabshot mit der Anmeldung am Computer?
 #[tauri::command]
 #[specta::specta]
 pub fn get_launch_at_login(app: AppHandle) -> bool {
@@ -511,6 +511,30 @@ pub fn get_launch_at_login(app: AppHandle) -> bool {
         log::warn!("Mit Anmeldung starten abfragen: {e}");
         false
     })
+}
+
+/// Früherer Name (ADR 0015): Das alte Startobjekt `Grabmark.plist` zeigt auf
+/// eine App, die es nicht mehr gibt. Weg damit – und neu anlegen, wenn
+/// „Mit Anmeldung starten“ an war.
+#[cfg(target_os = "macos")]
+pub fn migrate_launch_agent(app: &AppHandle) {
+    let Some(old) = dirs::home_dir().map(|h| h.join("Library/LaunchAgents/Grabmark.plist")) else {
+        return;
+    };
+    if !old.exists() {
+        return;
+    }
+    match std::fs::remove_file(&old) {
+        Ok(()) => log::info!("Altes Startobjekt entfernt: {}", old.display()),
+        Err(e) => {
+            log::warn!("Altes Startobjekt {}: {e}", old.display());
+            return;
+        }
+    }
+    match app.autolaunch().enable() {
+        Ok(()) => log::info!("Mit Anmeldung starten: unter neuem Namen eingerichtet"),
+        Err(e) => log::error!("Mit Anmeldung starten neu einrichten: {e}"),
+    }
 }
 
 #[tauri::command]

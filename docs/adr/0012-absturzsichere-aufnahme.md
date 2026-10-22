@@ -3,7 +3,7 @@
 **Status:** angenommen (ergänzt ADR 0011)
 
 ## Kontext
-Eine lange Aufnahme darf nicht verloren gehen, wenn Grabmark abstürzt, hängt oder
+Eine lange Aufnahme darf nicht verloren gehen, wenn Nabshot abstürzt, hängt oder
 beendet wird. Gewünscht war ein Format wie MPEG-TS (`.ts`), das sich bis zum
 Abbruch lesen lässt. Ausserdem soll man während der Aufnahme sehen, dass sie
 läuft, und merken, wenn sie abbricht.
@@ -40,22 +40,22 @@ Kopfausschnitt die ganze Webcam.
 ### Wiederherstellen beim Start
 Eine Aufnahme, die nie fertig wurde, erkennt die Bibliothek am leeren
 Platzhalter `<id>.json` ohne Index-Eintrag (`Library::unfinished_videos`).
-Mit Bildschirm- oder Webcam-Spur fragt Grabmark beim Start: „Wiederherstellen“,
+Mit Bildschirm- oder Webcam-Spur fragt Nabshot beim Start: „Wiederherstellen“,
 „Verwerfen“ oder „Später“ (Esc/Schliessen = später, damit nichts aus Versehen
 verloren geht). Wiederherstellen baut das Dokument aus Zwischenstand und
-Spurlänge (`grabmark_video::recovery`) und nimmt denselben Weg wie nach einer
+Spurlänge (`nabshot_video::recovery`) und nimmt denselben Weg wie nach einer
 normalen Aufnahme – nur ohne Zwischenablage und Vorschau.
 
 ### Sichtbarer Zustand
 - Roter Rahmen bei jedem Ziel: Bereich, Fenster (folgt dem Fenster) und
-  Vollbild (am Monitorrand nach innen). Grabmark ist im Video nie zu sehen.
+  Vollbild (am Monitorrand nach innen). Nabshot ist im Video nie zu sehen.
 - Grosse Zeit mit gleich breiten Ziffern in der Leiste, roter Punkt (grau in
   der Pause), Pegel klein daneben.
 - Bricht die Aufnahme ab (Stream gestoppt, Schreibfehler, unter 500 MB frei):
   Rahmen und Text orange („Unterbrochen – gesichert bis 3:12“), das Video wird
   gesichert, danach ein Hinweis. Unter 2 GB frei warnt die Leiste.
 - Beenden über Menü oder Tray sichert eine laufende Aufnahme erst.
-- Hängt Grabmark, bleibt die Zeit sichtbar stehen; stürzt es ab, verschwinden
+- Hängt Nabshot, bleibt die Zeit sichtbar stehen; stürzt es ab, verschwinden
   Leiste und Rahmen – beides ist selbst ein Zeichen.
 
 ## Folgen

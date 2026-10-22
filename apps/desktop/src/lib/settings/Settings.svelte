@@ -454,7 +454,7 @@
             })}
           </p>
         {:else}
-          <p><b>Grabmark {version}</b> · © forellmedia.ch</p>
+          <p><b>Nabshot {version}</b> · © forellmedia.ch</p>
           <div class="buttons">
             <button onclick={() => api.reportBug()}>{t("settings.report_bug")}</button>
           </div>

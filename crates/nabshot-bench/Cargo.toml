@@ -1,0 +1,21 @@
+[package]
+name = "nabshot-bench"
+description = "Geschwindigkeitsmessungen der zeitkritischen Pfade mit Budgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nabshot-core.workspace = true
+nabshot-render.workspace = true
+nabshot-library.workspace = true
+nabshot-stitch.workspace = true
+nabshot-video = { workspace = true, features = ["gpu"] }
+serde_json.workspace = true
+tempfile = "3"

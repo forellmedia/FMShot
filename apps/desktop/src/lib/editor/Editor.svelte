@@ -29,7 +29,7 @@
   onMount(() => {
     editor.init();
     // Zum Testen im Browser: Zustand von aussen erreichbar.
-    if (import.meta.env.DEV) (window as unknown as { __grabmark: typeof editor }).__grabmark = editor;
+    if (import.meta.env.DEV) (window as unknown as { __nabshot: typeof editor }).__nabshot = editor;
   });
 
   /** Text mit globalem Kürzel, sofern belegt. */
@@ -268,7 +268,7 @@
       <Canvas />
     {:else}
         <div class="start">
-          <h1>Grabmark</h1>
+          <h1>Nabshot</h1>
           <p>{t("start.hint")}</p>
           <div class="start-buttons">
             <button onclick={() => api.startCapture("region")}>{t("capture.region")} <kbd>{editor.hotkey("capture_region")}</kbd></button>

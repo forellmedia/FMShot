@@ -1,6 +1,6 @@
 # 0013 – Neuer Name: Grabmark
 
-**Status:** angenommen (ändert ADR 0008)
+**Status:** ersetzt durch ADR 0015 (ändert ADR 0008)
 
 ## Kontext
 „FMShot“ sagt nichts darüber, was das Programm tut, und ist schwer

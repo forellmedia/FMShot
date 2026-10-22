@@ -1,7 +1,7 @@
 {
-  "name": "grabmark-desktop",
+  "name": "nabshot-desktop",
   "version": "0.2.0-beta.2",
-  "description": "Grabmark Desktop-Oberfl\u00e4che",
+  "description": "Nabshot Desktop-Oberfl\u00e4che",
   "type": "module",
   "scripts": {
     "dev": "node scripts/ensure-wasm.mjs && vite dev",

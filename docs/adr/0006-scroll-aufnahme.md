@@ -8,7 +8,7 @@
   Windows Graphics Capture, Linux PipeWire bzw. X11) + Live-Zusammensetzen.
 - Automatisch: simulierte Scroll-Eingaben (`enigo`); unter Wayland nicht
   verfügbar, macOS fragt Bedienungshilfen-Berechtigung erst beim Einschalten.
-- Das Zusammensetzen liegt plattformunabhängig in `grabmark-stitch` (Zeilen-Hashes
+- Das Zusammensetzen liegt plattformunabhängig in `nabshot-stitch` (Zeilen-Hashes
   / Kreuzkorrelation, fixe Kopf-/Fusszeilen) und wird mit gespeicherten
   Bildfolgen getestet.
 

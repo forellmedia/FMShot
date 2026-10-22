@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use grabmark_hotkeys::{Action, Platform, Shortcut};
-use grabmark_settings::{Settings, action_key};
+use nabshot_hotkeys::{Action, Platform, Shortcut};
+use nabshot_settings::{Settings, action_key};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -22,7 +22,7 @@ impl SettingsState {
             Settings::default()
         });
         // Das Log-Plugin läuft hier schon; die Abweichungen vom Standard
-        // zeigen, womit Grabmark startet.
+        // zeigen, womit Nabshot startet.
         let custom = changed_fields(&Settings::default(), &current);
         log::debug!(
             "Einstellungen geladen: {} – abweichend vom Standard: {}",
@@ -182,7 +182,7 @@ pub fn get_hotkeys(app: AppHandle) -> Vec<HotkeyInfo> {
 pub fn shortcut_label(shortcut: String) -> Result<String, String> {
     let sc: Shortcut = shortcut
         .parse()
-        .map_err(|e: grabmark_hotkeys::ParseError| e.to_string())?;
+        .map_err(|e: nabshot_hotkeys::ParseError| e.to_string())?;
     Ok(crate::i18n::shortcut_label(&sc))
 }
 
@@ -203,7 +203,7 @@ pub fn pause_hotkeys(app: AppHandle, paused: bool) {
 #[tauri::command]
 #[specta::specta]
 pub fn system_shortcuts_active() -> Option<bool> {
-    grabmark_hotkeys::system::screenshot_shortcuts_active()
+    nabshot_hotkeys::system::screenshot_shortcuts_active()
 }
 
 /// Öffnet die Systemeinstellungen, in denen man diese Kürzel ausschaltet.
@@ -212,7 +212,7 @@ pub fn system_shortcuts_active() -> Option<bool> {
 pub fn open_shortcut_settings(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     log::info!("Systemeinstellungen für Tastenkürzel öffnen");
-    let url = grabmark_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
+    let url = nabshot_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
     app.opener()
         .open_url(url, None::<&str>)
         .inspect_err(|e| log::error!("Systemeinstellungen öffnen: {e}"))

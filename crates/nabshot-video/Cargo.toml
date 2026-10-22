@@ -1,0 +1,43 @@
+[package]
+name = "nabshot-video"
+description = "Video: Webcam-Layout, Abschnitte, Export zusammengesetzt (ADR 0011) – plattformunabhängig"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["gpu", "gif", "layers"]
+# Ebenen (Pfeile, Text …) über dem Video – zeichnet nabshot-render.
+layers = ["dep:nabshot-render"]
+# Export als animiertes GIF.
+gif = ["dep:gif"]
+# Zusammensetzen auf der Grafikkarte (wgpu). Ohne: nur Layout-Rechnung (z. B. WASM).
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+nabshot-core.workspace = true
+nabshot-render = { workspace = true, optional = true }
+# Protokoll: ohne eingerichteten Logger (WASM, Tests) kostet es nichts.
+log = "0.4"
+thiserror.workspace = true
+bytemuck = { version = "1", features = ["derive"], optional = true }
+gif = { version = "0.13", optional = true }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "30", optional = true, default-features = false, features = [
+  "std",
+  "parking_lot",
+  "wgsl",
+  "metal",
+  "dx12",
+  "vulkan",
+] }
+
+[dev-dependencies]
+png = "0.18"
+serde_json.workspace = true

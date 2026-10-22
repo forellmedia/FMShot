@@ -7,9 +7,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use grabmark_capture::PixelRect;
-use grabmark_overlay::{ScrollAction, ScrollUi, Selection};
-use grabmark_stitch::{Push, Stitcher};
+use nabshot_capture::PixelRect;
+use nabshot_overlay::{ScrollAction, ScrollUi, Selection};
+use nabshot_stitch::{Push, Stitcher};
 use tauri::{AppHandle, Manager};
 
 use crate::capture::{self, CaptureState};
@@ -80,7 +80,7 @@ pub fn begin(app: &AppHandle, sel: Selection, scale: f32, auto: bool) {
     };
     let (finish_label, cancel_label) = (t("scroll.finish", &[]), t("scroll.cancel", &[]));
     let opened = app.run_on_main_thread(move || {
-        let ui = grabmark_overlay::open_scroll_ui(
+        let ui = nabshot_overlay::open_scroll_ui(
             sel.display_id,
             rect,
             (&status, &finish_label, &cancel_label),

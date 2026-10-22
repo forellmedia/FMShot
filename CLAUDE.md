@@ -1,6 +1,6 @@
-# CLAUDE.md – Arbeitsregeln für Grabmark
+# CLAUDE.md – Arbeitsregeln für Nabshot
 
-Grabmark ist ein schnelles, plattformübergreifendes Screenshot-Tool (Rust + Tauri v2
+Nabshot ist ein schnelles, plattformübergreifendes Screenshot-Tool (Rust + Tauri v2
 + Svelte 5). Produktumfang: [docs/produkt.md](docs/produkt.md).
 Architektur-Entscheidungen: [docs/adr/](docs/adr/). Vor grösseren Änderungen die
 passenden ADRs lesen; neue Grundsatzentscheidungen als neue ADR festhalten.
@@ -9,20 +9,20 @@ passenden ADRs lesen; neue Grundsatzentscheidungen als neue ADR festhalten.
 
 ```
 crates/
-  grabmark-core      Dokumentmodell (Ebenen, doc.json), gemeinsame Typen – kein I/O
-  grabmark-render    Renderer (tiny-skia), nativ + WASM
-  grabmark-capture   Bildschirmaufnahme (Einzelbild + Stream, Mausspur), je Plattform
-  grabmark-media     Mikrofon, Webcam, Video kodieren/dekodieren, je Plattform (ADR 0011)
-  grabmark-video     Video: Zeitachse, Webcam-Layout, Zoom, Export – plattformunabhängig
-  grabmark-stitch    Scroll-Bilder zusammensetzen – plattformunabhängig
-  grabmark-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
-  grabmark-vision    Bildinhalt: Bild/Suchtext → Vektor (SigLIP 2, ONNX) – plattformunabhängig
-  grabmark-library   Bibliothek: Dateien, SQLite-Index, Suche, Auto-Export
-  grabmark-clipboard Zwischenablage (macOS: PNG mit Retina-Auflösung)
-  grabmark-hotkeys   globale Tastenkombinationen
-  grabmark-overlay   natives Auswahl-Overlay (macOS: NSPanel + Core Animation)
-  grabmark-cli       Kommandozeile `grabmark`
-  grabmark-bench     Geschwindigkeitsmessungen mit Budgets (läuft in der CI)
+  nabshot-core      Dokumentmodell (Ebenen, doc.json), gemeinsame Typen – kein I/O
+  nabshot-render    Renderer (tiny-skia), nativ + WASM
+  nabshot-capture   Bildschirmaufnahme (Einzelbild + Stream, Mausspur), je Plattform
+  nabshot-media     Mikrofon, Webcam, Video kodieren/dekodieren, je Plattform (ADR 0011)
+  nabshot-video     Video: Zeitachse, Webcam-Layout, Zoom, Export – plattformunabhängig
+  nabshot-stitch    Scroll-Bilder zusammensetzen – plattformunabhängig
+  nabshot-ocr       Trait OcrEngine + Vision / Windows.Media.Ocr / Tesseract
+  nabshot-vision    Bildinhalt: Bild/Suchtext → Vektor (SigLIP 2, ONNX) – plattformunabhängig
+  nabshot-library   Bibliothek: Dateien, SQLite-Index, Suche, Auto-Export
+  nabshot-clipboard Zwischenablage (macOS: PNG mit Retina-Auflösung)
+  nabshot-hotkeys   globale Tastenkombinationen
+  nabshot-overlay   natives Auswahl-Overlay (macOS: NSPanel + Core Animation)
+  nabshot-cli       Kommandozeile `nabshot`
+  nabshot-bench     Geschwindigkeitsmessungen mit Budgets (läuft in der CI)
 apps/desktop/        Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 ```
 
@@ -30,7 +30,7 @@ apps/desktop/        Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 
 1. **Logik gehört in `crates/`.** `apps/desktop/src-tauri` verdrahtet nur
    (Commands, Fenster, Tray). Das Svelte-Frontend zeichnet nur Bedienelemente –
-   die Leinwand zeichnet `grabmark-render`.
+   die Leinwand zeichnet `nabshot-render`.
 2. **Plattformcode nur in `capture`, `clipboard`, `ocr`, `hotkeys`, `overlay`, `media`**, jeweils hinter
    einem Trait, Implementierungen in `src/<plattform>.rs` per `#[cfg(target_os)]`.
    Alle anderen Crates sind plattformunabhängig und ohne Bildschirm testbar.
@@ -39,7 +39,7 @@ apps/desktop/        Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
    `crates/`.
 4. **Rust↔TS-Typen** werden mit `tauri-specta` erzeugt, nie von Hand gepflegt.
    Neue Commands in `specta_builder()` (src-tauri/src/lib.rs) eintragen, dann
-   `cargo test -p grabmark-desktop` – die CI prüft, ob `bindings.ts` aktuell ist.
+   `cargo test -p nabshot-desktop` – die CI prüft, ob `bindings.ts` aktuell ist.
 5. **Lizenzen:** Keine Copyleft-Abhängigkeiten (GPL/AGPL/LGPL). `cargo deny check`
    muss grün sein.
 6. **Geschwindigkeit ist eine Funktion.** Budgets in docs/produkt.md. Nichts
@@ -53,18 +53,18 @@ apps/desktop/        Tauri-App: src-tauri/ (Rust) + src/ (Svelte)
 - `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`.
 - Fehler: `thiserror` in Bibliotheks-Crates, `anyhow` nur in Apps/CLI.
 - Tests neben dem Code (`#[cfg(test)]`); Snapshot-Tests des Renderers unter
-  `crates/grabmark-render/tests/`.
+  `crates/nabshot-render/tests/`.
 
 ## Befehle
 
 ```bash
 cargo test --workspace                 # alle Rust-Tests
 ./scripts/fetch-model.sh               # Bildmodell nach models/ (ADR 0010, braucht uv)
-cargo test -p grabmark-vision --release --features onnx -- --ignored  # Bildinhalt mit echtem Modell
+cargo test -p nabshot-vision --release --features onnx -- --ignored  # Bildinhalt mit echtem Modell
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                       # Lizenzen/Advisories
-cargo test -p grabmark-desktop           # erzeugt apps/desktop/src/lib/bindings.ts
-cargo run --profile bench -p grabmark-bench  # Geschwindigkeit messen (Budgets)
+cargo test -p nabshot-desktop           # erzeugt apps/desktop/src/lib/bindings.ts
+cargo run --profile bench -p nabshot-bench  # Geschwindigkeit messen (Budgets)
 cd apps/desktop && npm test             # Frontend-Tests (Vitest)
 cd apps/desktop && npm run tauri dev   # App starten
 cd apps/desktop && npm run dev         # nur Frontend im Browser (Beispieldaten)

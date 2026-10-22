@@ -17,7 +17,7 @@ fester Suche oben.
   dem Inhalt (`titleBarStyle: Overlay`), Kopfleisten ziehen das Fenster
   (`data-tauri-drag-region`).
 - Dafür braucht Tauri `macOSPrivateApi` (Feature `macos-private-api`). Für den
-  App Store wäre das ein Ausschlussgrund – Grabmark wird dort nicht
+  App Store wäre das ein Ausschlussgrund – Nabshot wird dort nicht
   angeboten (ADR 0008), darum annehmbar.
 - Die Fenstereinstellungen nur für macOS stehen in
   `src-tauri/tauri.macos.conf.json` bzw. hinter `#[cfg(target_os = "macos")]`.

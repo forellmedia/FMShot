@@ -4,7 +4,7 @@
 und CLAUDE.md Regel 2: neue Plattform-Crate `media`)
 
 ## Kontext
-Grabmark soll Bildschirmvideos aufnehmen können, mit Mikrofon, Systemton und
+Nabshot soll Bildschirmvideos aufnehmen können, mit Mikrofon, Systemton und
 Webcam – mindestens so viel wie Snagit. Die Webcam soll in jeder Ecke stehen
 können, rund, quadratisch oder im Querformat sein, mit oder ohne Rundung, als
 Vollbild oder nur mit dem Kopf, der auf Wunsch verfolgt wird.
@@ -55,11 +55,11 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 | Kodieren / Dekodieren | AVAssetWriter / AVAssetReader      | Media Foundation              | openh264 (BSD) + Opus     |
 | Mausspur              | `NSEvent` (Klicks), Zeigerbild     | Raw Input, `GetCursorInfo`    | Portal / X11              |
 
-- **Neue Plattform-Crate `grabmark-media`:** Bildschirm als Video, Webcam,
+- **Neue Plattform-Crate `nabshot-media`:** Bildschirm als Video, Webcam,
   Mikrofon, Kodieren und Dekodieren hinter Traits, Implementierungen in
   `src/<plattform>.rs`. Der Bildschirm-Stream liegt hier und nicht in
-  `grabmark-capture`, weil die Bilder ohne Kopie direkt zum Encoder gehen
-  (macOS: IOSurface → AVAssetWriter). `grabmark-capture` bleibt bei
+  `nabshot-capture`, weil die Bilder ohne Kopie direkt zum Encoder gehen
+  (macOS: IOSurface → AVAssetWriter). `nabshot-capture` bleibt bei
   Einzelbildern; die Mausspur kommt mit Etappe 5 dorthin.
 - **Mikrofon über das System statt `cpal`:** Unter macOS liefert
   AVFoundation Tonblöcke mit derselben Systemuhr wie ScreenCaptureKit. So
@@ -69,7 +69,7 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   Start legt den Nullpunkt fest; das letzte Bild davor wird das erste Bild
   des Videos (ein ruhiger Bildschirm liefert sonst lange kein neues Bild).
   Pausen werden aus allen Spuren gleich herausgerechnet.
-- **Neue Crate `grabmark-video`**, plattformunabhängig, hängt intern nur von `core`
+- **Neue Crate `nabshot-video`**, plattformunabhängig, hängt intern nur von `core`
   und `render` ab:
   - Zeitachse und Schnitt
   - Webcam-Layout
@@ -79,8 +79,8 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   - Sie entscheidet, was in jedem Bild wo liegt. Editor-Vorschau und Export
     nutzen dieselbe Rechnung.
   - Sie kennt Dekoder und Encoder nur als Schnittstellen (`FrameSource`,
-    `FrameSink`); `grabmark-media` setzt sie mit den Bordmitteln des Systems um
-    und hängt dafür von `grabmark-video` ab (ohne die GPU-Funktion). Der
+    `FrameSink`); `nabshot-media` setzt sie mit den Bordmitteln des Systems um
+    und hängt dafür von `nabshot-video` ab (ohne die GPU-Funktion). Der
     Export lässt sich so mit erzeugten Bildern testen.
 
 ### Webcam
@@ -108,7 +108,7 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 
 ### Mauszeiger, Klicks, Auto-Zoom
 - Ab Etappe 5 wird der Bildschirm **ohne** Mauszeiger aufgenommen (bis dahin
-  mit Zeiger). Grabmark zeichnet ihn dann aus `input.json` selbst. Dadurch sind möglich:
+  mit Zeiger). Nabshot zeichnet ihn dann aus `input.json` selbst. Dadurch sind möglich:
   - Zeiger vergrössern, glätten oder ausblenden
   - Klicks als Kreis hervorheben
 - **Auto-Zoom:** Aus den Klicks entstehen Zoom-Abschnitte (weich hinein auf
@@ -122,13 +122,13 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   - Pfeile, Text und andere Werkzeuge mit Ein- und Ausblendzeit
   - Ein Einzelbild als Screenshot in die Bibliothek
 - **Vorschau im Editor:** Die Webview spielt `screen.mp4` und `webcam.mp4` mit
-  `<video>` ab. Lage, Maske und Zoom kommen aus `grabmark-video` (WASM), die
-  Ebenen zeichnet `grabmark-render` (WASM) darüber.
+  `<video>` ab. Lage, Maske und Zoom kommen aus `nabshot-video` (WASM), die
+  Ebenen zeichnet `nabshot-render` (WASM) darüber.
 - **Export:** nativ, ohne Webview:
   1. Dekodieren über das System
   2. Zusammensetzen auf der Grafikkarte mit `wgpu` (MIT/Apache-2.0): Skalieren,
      Zoom, Webcam-Maske, Hintergrund
-  3. Vektor-Ebenen und Zeiger zeichnet `grabmark-render` einmal und lädt sie als
+  3. Vektor-Ebenen und Zeiger zeichnet `nabshot-render` einmal und lädt sie als
      Textur hoch (ADR 0002 sieht den GPU-Weg hinter dem Trait vor)
   4. Kodieren über das System
 
@@ -136,7 +136,7 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   - MP4 (H.264 + AAC, Standard; HEVC wählbar)
   - GIF (`gif`-Crate, MIT/Apache-2.0; nicht `imagequant`, das ist GPL)
 - Snapshot-Tests: Für feste Zeitpunkte wird ein Bild exportiert und mit einer
-  Referenz verglichen, wie bei `grabmark-render`.
+  Referenz verglichen, wie bei `nabshot-render`.
 
 ### Bedienung
 - **Tray-Fenster:** Ein Klick aufs Symbol öffnet ein kleines Fenster mit den
@@ -157,7 +157,7 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 - Rechte unter macOS: Kamera und Mikrofon (`NSCameraUsageDescription`,
   `NSMicrophoneUsageDescription`, Entitlement `device.audio-input` bzw.
   `device.camera` wegen Hardened Runtime). Beim ersten Mal fragt das System
-  selbst; ist die Freigabe verweigert, öffnet Grabmark direkt die passende
+  selbst; ist die Freigabe verweigert, öffnet Nabshot direkt die passende
   Stelle der Systemeinstellungen – nie ein eigener Hinweis.
 
 ### Nachtrag Etappe 2: gewählte Standards
@@ -185,30 +185,30 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   ohne Webcam.
 
 ### Nachtrag Etappe 2: Erweiterungspunkte für Etappe 3–6
-- `grabmark_video::layout::scene_at` liefert pro Bild eine `Scene`: Spuren
+- `nabshot_video::layout::scene_at` liefert pro Bild eine `Scene`: Spuren
   (`Source`) mit `Placement` (Ziel, Ausschnitt `crop`, Radius, Rahmen,
   Schatten, Deckkraft). **Kopfausschnitt** (3) setzt nur `crop` der Webcam
   aus `faces.json`; **Zoom** (5) setzt `crop` des Bildschirms.
 - **Hintergrundmaske** (3): zusätzliche Textur je Spur im Compositor
   (`gpu.rs`, Bindung 3) und Mischung im Shader `compose.wgsl`.
 - **Zeiger und Ebenen** (5, 6): weitere `Source`-Arten, deren Bild
-  `grabmark-render` zeichnet und `Compositor::upload` hochlädt; sie kommen
+  `nabshot-render` zeichnet und `Compositor::upload` hochlädt; sie kommen
   oben auf die Szene. Ebenen mit Zeitbereich filtert `scene_at` nach `t`.
-- Snapshot-Tests (`crates/grabmark-video/tests/snapshots.rs`) laufen mit
+- Snapshot-Tests (`crates/nabshot-video/tests/snapshots.rs`) laufen mit
   erzeugten Spuren; neue Fälle dort ergänzen.
 
 ### Nachtrag Etappe 3: Kopf und Hintergrund
 - Datenmodell: `framing` Ganzes Bild/Kopf, `follow`, `background`
   Original/unscharf/entfernt im Webcam-Layout; `FaceTrack` in
   `<id>_faces.json`. Kopfausschnitt mit kritisch gedämpfter Feder und
-  Totzone (`grabmark_video::head`), Personen-Maske im Shader (Weichzeichnen
+  Totzone (`nabshot_video::head`), Personen-Maske im Shader (Weichzeichnen
   mit 48 Abtastpunkten, Entfernen bzw. dunkle Fläche bei grosser Webcam).
 - **Erkennung unter macOS mit Apple Vision statt ONNX** (Gesicht:
   `VNDetectFaceRectanglesRequest`, Person: `VNGeneratePersonSegmentationRequest`,
   Qualität *balanced* – von Apple für Video gedacht): kein Modell-Download,
   läuft auf der Neural Engine. Für Windows/Linux kommt ein ONNX-Modell hinter
   denselben Schnittstellen (`Segmenter`, Gesichter als `FaceTrack`).
-- **Während der Aufnahme** erkennt `grabmark-media` das grösste Gesicht etwa
+- **Während der Aufnahme** erkennt `nabshot-media` das grösste Gesicht etwa
   10× pro Sekunde, immer wenn die Webcam läuft – so lässt sich der
   Kopfausschnitt auch nachträglich einschalten. Zeit ohne Pausen, Rechteck
   oben links, nicht gespiegelt; beim Stopp nach `<id>_faces.json`
@@ -218,13 +218,13 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   Bild nur für Erkennung und Blase aus; die Webcam-Spur bekommt jedes Bild.
 - **Live-Blase:** Bei Ganzes Bild + Original bleibt es beim
   `AVCaptureVideoPreviewLayer` (ohne Verzögerung). Sonst füllt
-  `grabmark-media` eine eigene Ebene mit CoreImage: Zuschnitt aus
-  `grabmark_video::LiveHead` (dieselbe Feder wie im Export; ohne Folgen der
+  `nabshot-media` eine eigene Ebene mit CoreImage: Zuschnitt aus
+  `nabshot_video::LiveHead` (dieselbe Feder wie im Export; ohne Folgen der
   Median der ersten 20 Erkennungen), Maske mit `CIBlendWithMask`
   (Gauss mit 2 % der Breite ≈ Scheibe des Shaders), höchstens 720 px.
   Bei *Entfernen* ist die Blase durchsichtig, ohne Rahmen und Schatten –
   wie im Export.
-- **Export:** `grabmark_media::segmenter()` liefert die Maske je Webcam-Bild
+- **Export:** `nabshot_media::segmenter()` liefert die Maske je Webcam-Bild
   (BGRA → `CVPixelBuffer` → Maske R8); die App setzt ihn nur, wenn der
   Hintergrund nicht *Original* ist.
 - **Vorschau im Editor:** Den Kopfausschnitt rechnet die WASM-Vorschau mit
@@ -238,15 +238,15 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
 - **Ein Editor für Bild und Video:** Ein Video öffnet in der normalen
   Leinwand. An der Stelle der Aufnahme (unterste Bild-Ebene) liegt die
   Vorschau aus `<video>`-Elementen; Pfeile, Text usw. zeichnet wie immer
-  `grabmark-render`. Werkzeuge, die die Bildpunkte darunter brauchen
+  `nabshot-render`. Werkzeuge, die die Bildpunkte darunter brauchen
   (Weichzeichnen, Lupe, Spotlight) oder die Zeichenfläche ändern
   (Zuschneiden, Hintergrund), fehlen im Video.
 - **Zeitachse:** Alles im Dokument steht in Zeit der Aufnahme; Schnitte
-  (`video.cuts`) fallen im fertigen Video weg (`grabmark_video::timeline`).
+  (`video.cuts`) fallen im fertigen Video weg (`nabshot_video::timeline`).
   Editor (WASM `VideoPreview`) und Export rechnen dieselbe Umrechnung.
-  Bearbeiten (`grabmark_video::edit`) gibt immer ein neues Dokument zurück –
+  Bearbeiten (`nabshot_video::edit`) gibt immer ein neues Dokument zurück –
   Rückgängig funktioniert wie bei Bildern.
-- **Fertiges Video:** Nach jeder Änderung setzt Grabmark `<id>_video.mp4`
+- **Fertiges Video:** Nach jeder Änderung setzt Nabshot `<id>_video.mp4`
   1,5 s später im Hintergrund neu zusammen (ein neuer Auftrag bricht den
   alten ab) und ersetzt die Datei erst am Ende. Kopieren, Sichern und
   Einzelbild warten darauf.
@@ -264,7 +264,7 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   weniger als 3 s Abstand zusammen (0,7 s Vorlauf, 1,8 s Nachlauf, 1,8×).
 - **Ebenen mit Zeitbereich (Etappe 6):** `video.layer_times`; neue Ebenen
   sind ab der aktuellen Stelle 4 s zu sehen, „Ab hier“/„Bis hier“/„Immer“
-  ändern das. Im Export zeichnet `grabmark_video::overlay` die sichtbaren
+  ändern das. Im Export zeichnet `nabshot_video::overlay` die sichtbaren
   Ebenen nur neu, wenn sich die Auswahl ändert, und legt sie oben auf.
 - **Compositor:** Ein gemeinsamer Uniform-Puffer mit dynamischem Versatz
   (bis 64 Ebenen pro Bild); Texturen bringen ihre Deckkraft mit (Zeiger,
@@ -294,8 +294,8 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   Standard, hoch 2× der Datenrate; HEVC 0,6× von H.264, 1–100 Mbit/s) und
   Bilder pro Sekunde (`settings.video.encoding`, `VideoEncoding` in `core`).
 - Aufgenommen wird weiter in voller Qualität. Die Einstellung gilt beim
-  Zusammensetzen (`grabmark_video::export_size`, `ExportExtras::size`,
-  `grabmark_media::create_mp4`) – direkt nach der Aufnahme und nach jeder
+  Zusammensetzen (`nabshot_video::export_size`, `ExportExtras::size`,
+  `nabshot_media::create_mp4`) – direkt nach der Aufnahme und nach jeder
   Änderung im Editor. Der Ausweg ohne GPU (`export_mp4`) bleibt beim
   Standard.
 - Das Dokument bezieht sich immer auf die volle Grösse (`save_video` bekommt
@@ -311,14 +311,14 @@ Der Index kennt Videos an `mode = video` und der Spalte `duration_ms`.
   3 s nach der letzten Zeichnung (Uhrzeit, läuft auch in der Pause) oder
   sofort mit Esc; ein zweites Esc beendet das Zeichnen. Danach beginnen die
   Nummern wieder bei 1.
-- **Nichts eingebrannt:** Die Zeichenfläche ist ein Panel von Grabmark und
+- **Nichts eingebrannt:** Die Zeichenfläche ist ein Panel von Nabshot und
   damit nicht im Bildschirmvideo. Jede Zeichnung wird eine Ebene mit
   Zeitbereich (`video.layer_times`) – im Editor verschieb- und löschbar.
   Das erste Zusammensetzen nach der Aufnahme zeichnet sie schon mit.
-- **Logik** in `grabmark_video::sketch::LiveSketch` (plattformunabhängig,
-  getestet), **Fläche** in `grabmark-overlay` (`DrawSurface`; macOS: Panel
+- **Logik** in `nabshot_video::sketch::LiveSketch` (plattformunabhängig,
+  getestet), **Fläche** in `nabshot-overlay` (`DrawSurface`; macOS: Panel
   unter Leiste und Blase, Werkzeuge als SF Symbols). Auf dem Bildschirm
-  zeichnet `grabmark-render` in Punkt-Auflösung; das Video in voller Grösse.
+  zeichnet `nabshot-render` in Punkt-Auflösung; das Video in voller Grösse.
 - Textmarker mit 45 % Deckkraft: Auf durchsichtigem Grund wirkt
   „Multiplizieren“ nicht.
 - **Pause** hat jetzt auch ein Kürzel: ⌘⇧9 / Ctrl+Shift+9.
@@ -349,13 +349,13 @@ brauchten 216 s, 5 s brauchten 29 s. Ursachen:
 - **Aufnahme grösser als das Panel:** Bei skalierten Auflösungen rechnet
   macOS in einem Puffer mit doppelten Punkten (6016 × 3384) und verkleinert
   erst für das Panel. Aufgenommen wird jetzt höchstens, was das Panel
-  zeigt (`grabmark_media::record_ratio`, hier 3840 × 2160). Bereiche gehen
+  zeigt (`nabshot_media::record_ratio`, hier 3840 × 2160). Bereiche gehen
   weiter in Pufferpixeln an die Aufnahme; das Dokument bekommt die
   Pixel des Videos je Punkt (`Choice::video_scale`), Live-Zeichnungen
   werden umgerechnet.
 - **H.264 über 4096 Pixel:** Der Hardware-Encoder schafft H.264 nur bis
   4096 Pixel Seitenlänge, darüber kodiert der Prozessor (≈ 15× langsamer).
-  H.264 wird darum auf 4096 begrenzt (`grabmark_video::encode_size`), HEVC
+  H.264 wird darum auf 4096 begrenzt (`nabshot_video::encode_size`), HEVC
   nicht.
 - **Alles nacheinander:** Hochladen, Zeichnen, Zurücklesen und Kodieren
   liefen hintereinander. Jetzt sind bis zu drei Bilder unterwegs
@@ -365,7 +365,7 @@ brauchten 216 s, 5 s brauchten 29 s. Ursachen:
 Ergebnis (gleiche Aufnahme): 30 s in ≈ 15 s, 5 s in ≈ 3 s. Grenze ist jetzt
 der H.264-Encoder (4K ≈ 60 Bilder/s). Die Zeiten je Schritt stehen im Log
 (`ExportTimes`), gemessen wird mit
-`cargo run --release -p grabmark-media --example export_timing`.
+`cargo run --release -p nabshot-media --example export_timing`.
 
 ### Budgets (Apple M1)
 | Messpunkt                                  | Ziel              |
@@ -380,10 +380,10 @@ der H.264-Encoder (4K ≈ 60 Bilder/s). Die Zeiten je Schritt stehen im Log
   Videospur). Die Aufbewahrungsregel gilt auch für Videos.
 - Der Export braucht Zeit. Dafür bleibt alles bis zuletzt änderbar.
 - Vorschau (Webview) und Export (wgpu) sind zwei Wege zum Bild. Damit sie
-  nicht auseinanderlaufen, rechnet `grabmark-video` die Lage für beide, und die
+  nicht auseinanderlaufen, rechnet `nabshot-video` die Lage für beide, und die
   Snapshot-Tests decken die Unterschiede auf.
 - Unter Linux spielt die Webview Videos über das GStreamer des Systems ab. Das
-  ist keine Abhängigkeit von Grabmark.
+  ist keine Abhängigkeit von Nabshot.
 - `wgpu` vergrössert die App um einige MB.
 
 ## Etappen (je ein Meilenstein-Issue)

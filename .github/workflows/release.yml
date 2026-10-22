@@ -31,7 +31,7 @@ jobs:
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -n1)
           if [ -z "$id" ]; then
             id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$TAG" -f name="Grabmark $TAG" -F draft=true \
+              -f tag_name="$TAG" -f name="Nabshot $TAG" -F draft=true \
               -f body="Siehe CHANGELOG. Mac-Hinweis – beim ersten Start unter Systemeinstellungen → Datenschutz & Sicherheit auf „Dennoch öffnen“ klicken." \
               --jq .id)
           fi
@@ -114,7 +114,7 @@ jobs:
           name: siglip2
           path: models/siglip2
 
-      # Selbst erstelltes Zertifikat „Grabmark Local Signing“ (ADR 0008).
+      # Selbst erstelltes Zertifikat „Nabshot Local Signing“ (ADR 0008).
       # Fehlen die Secrets, wird der Mac-Build ad-hoc signiert.
       - name: Mac-Signatur vorbereiten
         if: runner.os == 'macOS'

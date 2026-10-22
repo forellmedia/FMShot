@@ -11,7 +11,7 @@ bei gemischtem HiDPI unzuverlässig.
 - **Ein Prozess**, dauerhaft im Tray. Editor wird beim ersten Öffnen erzeugt und
   danach versteckt statt geschlossen.
 - Das **Auswahl-Overlay** ist ein natives Fenster pro Monitor ohne Webview,
-  gezeichnet mit tiny-skia über `softbuffer` (`grabmark-overlay`). Das eingefrorene
+  gezeichnet mit tiny-skia über `softbuffer` (`nabshot-overlay`). Das eingefrorene
   Bild bleibt im Speicher, nichts wird kopiert. Fensterebenen pro Plattform
   nativ (macOS: über Menüleiste und Vollbild-Spaces).
 - Das Vorschau-Popup darf den Fokus nicht stehlen (macOS: nicht aktivierendes
@@ -46,7 +46,7 @@ Windows und Linux entscheiden wir bei ihrer Umsetzung nach demselben Massstab.
 - **Fenster-Modus:** ohne eingefrorenes Bild; eine Ebene mit Alpha pro Pixel
   (`UpdateLayeredWindowIndirect`, nur geänderte Rechtecke) dunkelt den
   laufenden Bildschirm ab und hebt das Fenster blau hervor.
-- **Koordinaten:** Grabmark ist „per monitor aware v2“ und rechnet unter
+- **Koordinaten:** Nabshot ist „per monitor aware v2“ und rechnet unter
   Windows in physischen Pixeln des virtuellen Desktops. Mit gemischten
   Skalierungen gibt es dort kein durchgehendes logisches System;
   `Display::scale_factor` ist 1.0, die Skalierung des Monitors (z. B. 1.5)

@@ -90,7 +90,7 @@
           onclick={() => editor.open(c.id)}
           oncontextmenu={(e) => editor.openCaptureMenu(e, c.id)}
           draggable="true"
-          ondragstart={(e) => e.dataTransfer?.setData("text/x-grabmark-capture", c.id)}
+          ondragstart={(e) => e.dataTransfer?.setData("text/x-nabshot-capture", c.id)}
         >
           <span class="image">
             {#if urls[c.id]}<img src={urls[c.id]} alt="" draggable="false" />{/if}

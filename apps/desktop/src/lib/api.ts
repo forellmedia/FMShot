@@ -254,7 +254,7 @@ const mock = (() => {
       scroll_mode: "manual",
       hotkeys: {},
       replace_mac_system_shortcuts: false,
-      auto_export: { enabled: false, folder: null, pattern: "Grabmark {date} {time}", format: "png" },
+      auto_export: { enabled: false, folder: null, pattern: "Nabshot {date} {time}", format: "png" },
       retention_days: 90,
       storage: { library_gb: 10, export_gb: 10 },
       log_retention_days: 30,
@@ -436,7 +436,7 @@ const mock = (() => {
         capture: c,
         libraryBytes: c.videoPath ? 2_400_000_000 : 380_000 * (i + 1),
         exportBytes: i % 2 ? 0 : 290_000 * (i + 1),
-        exportPath: i % 2 ? null : `/Users/beispiel/Desktop/Grabmark ${c.id}.png`,
+        exportPath: i % 2 ? null : `/Users/beispiel/Desktop/Nabshot ${c.id}.png`,
       }));
       const sum = (f: (x: StorageItem) => number) => items.reduce((a, x) => a + f(x), 0);
       return {
@@ -445,7 +445,7 @@ const mock = (() => {
           exportBytes: sum((x) => x.exportBytes ?? 0),
           libraryLimit: 10_000_000_000,
           exportLimit: 10_000_000_000,
-          libraryDir: "~/Library/Application Support/Grabmark/Library",
+          libraryDir: "~/Library/Application Support/Nabshot/Library",
           exportDir: "~/Desktop",
         },
         items,

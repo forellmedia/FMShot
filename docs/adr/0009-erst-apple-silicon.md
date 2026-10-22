@@ -9,7 +9,7 @@ Macs bringen zusätzliche Build-Zeit und doppelte Binärgrösse, aber keinen Nut
 für die aktuelle Phase.
 
 ## Entscheidung
-- **Phase „Apple Silicon“**: Grabmark wird zuerst nur auf Macs mit Apple Silicon
+- **Phase „Apple Silicon“**: Nabshot wird zuerst nur auf Macs mit Apple Silicon
   (arm64) fertig gemacht. Die Phase endet, wenn der Nutzer sie für beendet
   erklärt.
 - **Intel-Macs fallen weg** – kein x86_64-Build, keine Unterstützung. Mindestens
@@ -29,6 +29,6 @@ für die aktuelle Phase.
 
 ## Folgen
 - Kleinere App, schnellerer Build, schnellere Runden.
-- Wer Grabmark auf einem Intel-Mac installiert hat, bekommt keine Updates mehr.
+- Wer Nabshot auf einem Intel-Mac installiert hat, bekommt keine Updates mehr.
 - Nach der Phase braucht es eine eigene Runde „Windows/Linux nachziehen“ mit
   Tests in den UTM-VMs.

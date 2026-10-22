@@ -3,6 +3,9 @@
 ## 0.2.0-beta.2
 
 **Neu**
+- **Neuer Name: Nabshot** (vorher Grabmark, ADR 0015). Aufnahmen,
+  Einstellungen und Logs werden beim ersten Start übernommen; macOS fragt
+  die Freigaben einmal neu ab.
 - **Video aufnehmen** (macOS, ADR 0011): Bereich, Fenster oder Vollbild mit
   Ton (⇧⌘6), Countdown, Aufnahmeleiste mit Pause (⇧⌘9), Stopp und Pegel.
   - Webcam als Blase, auf Wunsch nur der Kopf mit weichem Rand und
@@ -30,7 +33,7 @@
 **Verbessert**
 - ⌘C und ⌘S (Ctrl+C / Ctrl+S) kopieren bzw. speichern das ganze Bild auch
   direkt nach dem Zeichnen, ohne vorher Esc. Eine markierte Ebene lässt sich
-  danach in Grabmark trotzdem mit ⌘V einfügen.
+  danach in Nabshot trotzdem mit ⌘V einfügen.
 - Das Rechtsklick-Menü der Leiste unten im Editor wird am rechten Rand nicht
   mehr abgeschnitten.
 - Fehlende Freigaben öffnen direkt die Systemeinstellungen.
@@ -65,14 +68,14 @@
 - **Scroll- und Text-Aufnahme** lassen sich direkt aus dem Editor starten.
 
 **Verbessert**
-- ⌘Q schliesst nur den Editor. Beendet wird Grabmark über das Menü.
+- ⌘Q schliesst nur den Editor. Beendet wird Nabshot über das Menü.
 - Beim ersten Screenshot erscheint nur noch Apples Freigabe-Dialog.
 - Vorlagen sind wieder wählbar, die Kopfleiste läuft nicht mehr über den
   Rand, und Farbe und Stärke gezeichneter Elemente lassen sich wieder
   ändern.
 - Das Bild lässt sich nicht mehr aus dem Fenster schieben, und es flackert
   beim Zeichnen nicht mehr.
-- Für die macOS-Kürzel ⇧⌘3/4/5 erkennt Grabmark, ob sie noch belegt sind, und
+- Für die macOS-Kürzel ⇧⌘3/4/5 erkennt Nabshot, ob sie noch belegt sind, und
   öffnet auf Knopfdruck die passenden Systemeinstellungen.
 
 **Hinweise**

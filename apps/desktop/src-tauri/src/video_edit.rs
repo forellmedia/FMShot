@@ -1,6 +1,6 @@
 //! Video-Editor (ADR 0011, Etappe 4–6): Spuren für die Vorschau nennen,
 //! auf Wunsch neu zusammensetzen, GIF und Einzelbild. Die Logik liegt
-//! in `grabmark-video` und `grabmark-media`; hier wird nur verdrahtet.
+//! in `nabshot-video` und `nabshot-media`; hier wird nur verdrahtet.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,17 +8,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use grabmark_core::{
+use nabshot_core::{
     AssetRef, Document, FaceTrack, InputTrack, LayerKind, RgbaImage, VideoDoc, VideoEncoding,
     WebcamBackground, WebcamFraming,
 };
-use grabmark_library::{CaptureRecord, Library, NewCapture};
-use grabmark_media::{AudioInput, RecordFiles};
-use grabmark_video::audio::AudioTrack;
-use grabmark_video::cursor::CURSOR_POINTS;
-use grabmark_video::overlay::LayerOverlay;
-use grabmark_video::timeline::{kept, output_duration};
-use grabmark_video::{CursorTrack, ExportExtras, FrameSink, HeadPath};
+use nabshot_library::{CaptureRecord, Library, NewCapture};
+use nabshot_media::{AudioInput, RecordFiles};
+use nabshot_video::audio::AudioTrack;
+use nabshot_video::cursor::CURSOR_POINTS;
+use nabshot_video::overlay::LayerOverlay;
+use nabshot_video::timeline::{kept, output_duration};
+use nabshot_video::{CursorTrack, ExportExtras, FrameSink, HeadPath};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
@@ -93,7 +93,7 @@ fn layer_assets(rec: &CaptureRecord, doc: &Document) -> HashMap<AssetRef, RgbaIm
         {
             match std::fs::read(rec.asset_path(hash))
                 .map_err(err)
-                .and_then(|b| grabmark_render::decode_png(&b).map_err(err))
+                .and_then(|b| nabshot_render::decode_png(&b).map_err(err))
             {
                 Ok(img) => {
                     assets.insert(AssetRef::Asset(hash.clone()), img);
@@ -125,7 +125,7 @@ pub fn extras(
         .webcam
         .as_ref()
         .is_some_and(|w| w.layout.background != WebcamBackground::Original);
-    let segmenter = wants_segmenter.then(grabmark_media::segmenter).flatten();
+    let segmenter = wants_segmenter.then(nabshot_media::segmenter).flatten();
     if wants_segmenter && segmenter.is_none() {
         log::warn!("Video: Webcam-Hintergrund gewünscht, aber keine Freistellung verfügbar");
     }
@@ -135,7 +135,7 @@ pub fn extras(
         .filter(|t| !t.is_empty());
     let overlay = layers
         .and_then(|(doc, assets)| LayerOverlay::new(doc, assets))
-        .map(|o| Box::new(o) as Box<dyn grabmark_video::OverlaySource>);
+        .map(|o| Box::new(o) as Box<dyn nabshot_video::OverlaySource>);
     log::debug!(
         "Video: Zusätze – Kopf {}, Freistellung {}, Zeiger {}, Ebenen {}",
         head.is_some(),
@@ -161,14 +161,14 @@ fn compose_into(
     extras: ExportExtras,
     sink: &mut dyn FrameSink,
     progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<grabmark_video::ExportStats, String> {
-    let screen: Box<dyn grabmark_video::FrameSource> = match &files.screen {
-        Some(path) => grabmark_media::open_video(path).map_err(err)?,
+) -> Result<nabshot_video::ExportStats, String> {
+    let screen: Box<dyn nabshot_video::FrameSource> = match &files.screen {
+        Some(path) => nabshot_media::open_video(path).map_err(err)?,
         // Nur Webcam: eine leere Spur gibt die Grösse vor.
-        None => Box::new(grabmark_video::BlankSource::new(frame_size(files, video)?)),
+        None => Box::new(nabshot_video::BlankSource::new(frame_size(files, video)?)),
     };
     let webcam = match (&video.webcam, &files.webcam) {
-        (Some(_), Some(path)) => match grabmark_media::open_video(path) {
+        (Some(_), Some(path)) => match nabshot_media::open_video(path) {
             Ok(w) => Some(w),
             Err(e) => {
                 log::warn!("Webcam lesen: {e} – Export ohne Webcam");
@@ -177,19 +177,19 @@ fn compose_into(
         },
         _ => None,
     };
-    grabmark_video::export_with(video, screen, webcam, extras, sink, progress).map_err(err)
+    nabshot_video::export_with(video, screen, webcam, extras, sink, progress).map_err(err)
 }
 
 /// Grösse des fertigen Videos: wie der Bildschirm bzw. bei „nur Webcam“
 /// aus Format und Kamerabild.
 pub fn frame_size(files: &RecordFiles, video: &VideoDoc) -> Result<(u32, u32), String> {
     match (video.camera_only, &files.screen, &files.webcam) {
-        (None, Some(screen), _) => Ok(grabmark_video::output_size(
-            grabmark_media::open_video(screen).map_err(err)?.size(),
+        (None, Some(screen), _) => Ok(nabshot_video::output_size(
+            nabshot_media::open_video(screen).map_err(err)?.size(),
         )),
-        (Some(format), _, Some(webcam)) => Ok(grabmark_video::camera_frame_size(
+        (Some(format), _, Some(webcam)) => Ok(nabshot_video::camera_frame_size(
             format,
-            grabmark_media::open_video(webcam).map_err(err)?.size(),
+            nabshot_media::open_video(webcam).map_err(err)?.size(),
         )),
         _ => Err("Spur fehlt".into()),
     }
@@ -205,8 +205,8 @@ pub fn compose(
     encoding: &VideoEncoding,
     out: &Path,
     progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<grabmark_video::ExportStats, String> {
-    let size = grabmark_video::encode_size(frame_size(files, video)?, encoding);
+) -> Result<nabshot_video::ExportStats, String> {
+    let size = nabshot_video::encode_size(frame_size(files, video)?, encoding);
     extras.size = Some(size);
     let mut audio = Vec::new();
     for (path, track) in [
@@ -217,7 +217,7 @@ pub fn compose(
             audio.push(AudioInput {
                 path: p.clone(),
                 volume: track.base(video),
-                ramps: grabmark_video::audio::export_ramps(video, track),
+                ramps: nabshot_video::audio::export_ramps(video, track),
             });
         }
     }
@@ -229,7 +229,7 @@ pub fn compose(
         encoding,
         audio.len()
     );
-    let mut sink = grabmark_media::create_mp4(
+    let mut sink = nabshot_media::create_mp4(
         out,
         size,
         video.fps,
@@ -373,7 +373,7 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
     };
     let composed = started.elapsed();
     std::fs::rename(&temp, &target).map_err(err)?;
-    let poster = grabmark_media::frame_at(&target, Duration::ZERO).map_err(err)?;
+    let poster = nabshot_media::frame_at(&target, Duration::ZERO).map_err(err)?;
     lib.refresh_video(id, &poster, output_duration(&video) as i64)
         .map_err(err)?;
     lib.mark_video_current(id, &doc).map_err(err)?;
@@ -479,7 +479,7 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("Grabmark {id}.gif"))
+            .set_file_name(format!("Nabshot {id}.gif"))
             .add_filter("GIF", &["gif"])
             .blocking_save_file()
         else {
@@ -511,7 +511,7 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
 }
 
 fn is_cancelled(e: &str) -> bool {
-    e == grabmark_video::VideoError::Cancelled.to_string()
+    e == nabshot_video::VideoError::Cancelled.to_string()
 }
 
 fn write_gif(app: &AppHandle, id: &str, path: &Path) -> Result<(), String> {
@@ -527,7 +527,7 @@ fn write_gif(app: &AppHandle, id: &str, path: &Path) -> Result<(), String> {
         size.0,
         size.1
     );
-    let mut sink = grabmark_video::GifSink::create(path, size)?;
+    let mut sink = nabshot_video::GifSink::create(path, size)?;
     let extras = extras(
         &files,
         &video,
@@ -592,7 +592,7 @@ fn snapshot(app: &AppHandle, id: &str, output_ms: f64) -> Result<CaptureRecord, 
     let lib = library(app);
     let rec = lib.get(id).map_err(err)?;
     let at = Duration::from_secs_f64(output_ms.max(0.0) / 1000.0);
-    let image = grabmark_media::frame_at(&rec.video_path(), at).map_err(err)?;
+    let image = nabshot_media::frame_at(&rec.video_path(), at).map_err(err)?;
     let capture = NewCapture {
         image,
         scale_factor: rec.scale_factor,

@@ -1,5 +1,5 @@
 //! Speicherplatz von Bibliothek und Auto-Export: anzeigen, warnen,
-//! aufräumen. Gemessen wird in `grabmark-library`.
+//! aufräumen. Gemessen wird in `nabshot-library`.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -69,7 +69,7 @@ fn export_dir(app: &AppHandle) -> String {
         .unwrap_or_default()
 }
 
-fn measure(app: &AppHandle) -> Result<(StorageSummary, grabmark_library::StorageUsage), String> {
+fn measure(app: &AppHandle) -> Result<(StorageSummary, nabshot_library::StorageUsage), String> {
     let state = app.state::<CaptureState>();
     let usage = state.library.storage_usage().map_err(|e| {
         log::error!("Speicher messen: {e}");

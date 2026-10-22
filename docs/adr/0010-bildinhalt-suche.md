@@ -43,7 +43,7 @@ und Linux fehlt etwas Vergleichbares. Darum braucht es ein eigenes Modell, das
   Release-Pipeline zusätzlich angeben. Normale `cargo`-Builds und die CI
   brauchen das Modell so nicht. Fehlt es, bleibt die Suche nach Bildinhalt
   aus.
-- **Neue Crate `grabmark-vision`:**
+- **Neue Crate `nabshot-vision`:**
   - plattformunabhängig, hängt intern nur von `core` ab
   - Aufgaben: Bild → Vektor, Text → Vektor, Stichwörter aus einer festen
     Begriffsliste
@@ -145,4 +145,4 @@ Neu:
   Hintergrund (M4, 2 Kerne). Die Kennung des Modells ist neu `…/2`; ältere
   Aufnahmen werden nach und nach neu berechnet.
 - Eichen mit dem echten Modell:
-  `cargo run -p grabmark-vision --release --features onnx --example tags -- BILD …`
+  `cargo run -p nabshot-vision --release --features onnx --example tags -- BILD …`

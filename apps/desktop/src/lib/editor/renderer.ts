@@ -1,7 +1,7 @@
-// Brücke zum WASM-Renderer (grabmark-render). Lädt das Modul einmal und hält die
+// Brücke zum WASM-Renderer (nabshot-render). Lädt das Modul einmal und hält die
 // Bilder der aktuellen Aufnahme.
 
-import init, { WasmRenderer } from "$lib/wasm/grabmark_render";
+import init, { WasmRenderer } from "$lib/wasm/nabshot_render";
 import type { Doc, Rect } from "./model";
 
 let module: Promise<unknown> | null = null;

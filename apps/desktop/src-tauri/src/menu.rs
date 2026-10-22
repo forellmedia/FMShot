@@ -1,5 +1,5 @@
-//! App-Menü (macOS): ⌘Q schliesst nur den Editor. Grabmark beendet sich nur
-//! über „Grabmark beenden“ im Menü.
+//! App-Menü (macOS): ⌘Q schliesst nur den Editor. Nabshot beendet sich nur
+//! über „Nabshot beenden“ im Menü.
 
 use tauri::AppHandle;
 use tauri::menu::{Menu, MenuItem};

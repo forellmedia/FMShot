@@ -14,10 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use grabmark_capture::{Frame, OwnWindows, PrivacyPane, ScreenCapturer, display_at};
-use grabmark_core::RgbaImage;
-use grabmark_library::{CaptureRecord, Library, NewCapture};
-use grabmark_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
+use nabshot_capture::{Frame, OwnWindows, PrivacyPane, ScreenCapturer, display_at};
+use nabshot_core::RgbaImage;
+use nabshot_library::{CaptureRecord, Library, NewCapture};
+use nabshot_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -27,10 +27,10 @@ use crate::i18n::t;
 pub struct CaptureState {
     pub capturer: Box<dyn ScreenCapturer>,
     pub library: Arc<Library>,
-    pub ocr: Option<Box<dyn grabmark_ocr::OcrEngine>>,
+    pub ocr: Option<Box<dyn nabshot_ocr::OcrEngine>>,
     /// Verhindert zwei Aufnahmen gleichzeitig (Taste doppelt gedrückt).
     busy: AtomicBool,
-    /// Laufende Aufnahme zeigt offene Fenster von Grabmark (Tastenkürzel) –
+    /// Laufende Aufnahme zeigt offene Fenster von Nabshot (Tastenkürzel) –
     /// das Tray-Fenster bleibt dann offen, obwohl das Overlay den Fokus hat.
     own_shown: AtomicBool,
 }
@@ -40,7 +40,7 @@ impl CaptureState {
         Self {
             capturer,
             library,
-            ocr: grabmark_ocr::platform_engine(),
+            ocr: nabshot_ocr::platform_engine(),
             busy: AtomicBool::new(false),
             own_shown: AtomicBool::new(false),
         }
@@ -56,7 +56,7 @@ pub enum Mode {
     Text,
     /// Bereich wählen, dann von Hand scrollen.
     Scroll,
-    /// Bereich wählen, Grabmark scrollt selbst.
+    /// Bereich wählen, Nabshot scrollt selbst.
     ScrollAuto,
     /// Video (ADR 0011) – Ziel aus den Einstellungen.
     Video,
@@ -68,8 +68,8 @@ impl Mode {
     /// Scroll-Aufnahme so, wie in den Einstellungen gewählt (von Hand/automatisch).
     pub fn scroll(app: &AppHandle) -> Mode {
         match crate::settings::get(app).scroll_mode {
-            grabmark_settings::ScrollMode::Manual => Mode::Scroll,
-            grabmark_settings::ScrollMode::Auto => Mode::ScrollAuto,
+            nabshot_settings::ScrollMode::Manual => Mode::Scroll,
+            nabshot_settings::ScrollMode::Auto => Mode::ScrollAuto,
         }
     }
 
@@ -100,12 +100,12 @@ struct Pending {
     finished: bool,
 }
 
-/// Startet eine Aufnahme ohne die Fenster von Grabmark. Kehrt sofort zurück.
+/// Startet eine Aufnahme ohne die Fenster von Nabshot. Kehrt sofort zurück.
 pub fn start(app: &AppHandle, mode: Mode) {
     start_with(app, mode, OwnWindows::Hidden);
 }
 
-/// Wie [`start`]; `own` bestimmt, ob offene Fenster von Grabmark (Editor,
+/// Wie [`start`]; `own` bestimmt, ob offene Fenster von Nabshot (Editor,
 /// Einstellungen) mit ins Bild kommen – bei globalen Tastenkürzeln ja.
 pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
     let started = Instant::now();
@@ -149,7 +149,7 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
     if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
         log::warn!("Bedienungshilfen-Freigabe fehlt für automatisches Scrollen");
         release(app);
-        // Trägt Grabmark in die Liste „Bedienungshilfen“ ein (beim ersten Mal
+        // Trägt Nabshot in die Liste „Bedienungshilfen“ ein (beim ersten Mal
         // mit Systemfenster); die Einstellungen öffnen wir direkt.
         let first = first_permission_request("input");
         state.capturer.request_input_permission();
@@ -159,7 +159,7 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
         return;
     }
     match mode {
-        // Scroll-Aufnahmen setzen Ausschnitte ohne Grabmark zusammen.
+        // Scroll-Aufnahmen setzen Ausschnitte ohne Nabshot zusammen.
         Mode::Scroll | Mode::ScrollAuto => start_region(app, started, mode, OwnWindows::Hidden),
         Mode::Region | Mode::Text => start_region(app, started, mode, own),
         Mode::Window => start_window(app, started, own),
@@ -183,7 +183,7 @@ fn release(app: &AppHandle) {
     }
 }
 
-/// Läuft eine Aufnahme, auf der Grabmark selbst zu sehen sein soll?
+/// Läuft eine Aufnahme, auf der Nabshot selbst zu sehen sein soll?
 pub fn shows_own_windows(app: &AppHandle) -> bool {
     app.state::<CaptureState>()
         .own_shown
@@ -197,7 +197,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
     let (app_main, pending_main) = (app.clone(), pending.clone());
     let opened = app.run_on_main_thread(move || {
         let (app_done, pending_done) = (app_main.clone(), pending_main.clone());
-        let result = grabmark_overlay::open(
+        let result = nabshot_overlay::open(
             OverlayMode::Region,
             Vec::new(),
             Box::new(move |result| {
@@ -364,14 +364,14 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
         let ms = || started.elapsed().as_secs_f64() * 1000.0;
         let message = match ocr.recognize(&image) {
             Ok(blocks) if !blocks.is_empty() => {
-                let text = grabmark_ocr::join_text(&blocks);
+                let text = nabshot_ocr::join_text(&blocks);
                 let count = text.chars().count();
                 log::info!(
                     "Texterkennung: {} Blöcke, {count} Zeichen in {:.0} ms",
                     blocks.len(),
                     ms()
                 );
-                match grabmark_clipboard::copy_text(&text) {
+                match nabshot_clipboard::copy_text(&text) {
                     Ok(()) => {
                         log::info!("Zwischenablage: Text kopiert");
                         t("ocr.copied", &[("count", &count.to_string())])
@@ -391,7 +391,7 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
                 e.to_string()
             }
         };
-        if let Err(e) = app.run_on_main_thread(move || grabmark_overlay::show_toast(&message)) {
+        if let Err(e) = app.run_on_main_thread(move || nabshot_overlay::show_toast(&message)) {
             log::debug!("Hinweis anzeigen: {e}");
         }
     });
@@ -429,7 +429,7 @@ fn start_window(app: &AppHandle, started: Instant, own: OwnWindows) {
         let app_main = app.clone();
         let opened = app.run_on_main_thread(move || {
             let app_done = app_main.clone();
-            let result = grabmark_overlay::open(
+            let result = nabshot_overlay::open(
                 OverlayMode::Window,
                 windows,
                 Box::new(move |result| {
@@ -585,7 +585,7 @@ pub fn save_and_copy(
 }
 
 pub fn copy_to_clipboard(image: &RgbaImage, scale_factor: f32) {
-    match grabmark_clipboard::copy_image(image, scale_factor) {
+    match nabshot_clipboard::copy_image(image, scale_factor) {
         Ok(()) => log::info!(
             "Zwischenablage: Bild {}×{} kopiert",
             image.width(),
@@ -621,7 +621,7 @@ pub fn first_permission_request(kind: &str) -> bool {
 /// Hinweis dazwischen.
 pub fn open_privacy_settings(app: &AppHandle, pane: PrivacyPane) {
     use tauri_plugin_opener::OpenerExt;
-    let Some(url) = grabmark_capture::privacy_settings_url(pane) else {
+    let Some(url) = nabshot_capture::privacy_settings_url(pane) else {
         log::debug!("Systemeinstellungen für {pane:?} gibt es hier nicht");
         return;
     };

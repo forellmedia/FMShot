@@ -8,8 +8,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use grabmark_library::Library;
-use grabmark_vision::{
+use nabshot_library::Library;
+use nabshot_vision::{
     Embedding, ImageEncoder, ImageVectors, MODEL_ID, Tagger, TextEncoder, tags_version,
 };
 use serde::Serialize;
@@ -189,7 +189,7 @@ fn find_model_dir(app: &AppHandle) -> Option<PathBuf> {
     [bundled, dev]
         .into_iter()
         .flatten()
-        .find(|d| d.join(grabmark_vision::VISION_FILE).is_file())
+        .find(|d| d.join(nabshot_vision::VISION_FILE).is_file())
 }
 
 /// Hintergrund-Thread starten.
@@ -384,7 +384,7 @@ fn embed(library: &Library, encoder: &ImageEncoder, id: &str) -> Result<Vec<u8>,
         .iter()
         .find_map(|p| {
             let bytes = std::fs::read(p).ok()?;
-            grabmark_render::decode_image(&bytes).ok()
+            nabshot_render::decode_image(&bytes).ok()
         })
         .ok_or("Bild nicht lesbar")?;
     Ok(encoder
@@ -453,7 +453,7 @@ pub fn tags_for_text(text: &str) -> Vec<String> {
                     })
             })
     };
-    grabmark_vision::terms::TERMS
+    nabshot_vision::terms::TERMS
         .iter()
         .filter(|term| {
             matches(&format!("tag.{}", term.key)) || matches(&format!("group.{}", term.group))
@@ -466,7 +466,7 @@ pub fn tags_for_text(text: &str) -> Vec<String> {
 /// Treffern, in der festen Reihenfolge.
 pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
     use std::collections::{HashMap, HashSet};
-    let group_of: HashMap<&str, &str> = grabmark_vision::terms::TERMS
+    let group_of: HashMap<&str, &str> = nabshot_vision::terms::TERMS
         .iter()
         .map(|t| (t.key, t.group))
         .collect();
@@ -476,7 +476,7 @@ pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
             ids.entry(group).or_default().insert(id);
         }
     }
-    grabmark_vision::terms::GROUPS
+    nabshot_vision::terms::GROUPS
         .iter()
         .filter_map(|g| ids.get(g).map(|s| (g.to_string(), s.len() as u32)))
         .collect()
@@ -484,7 +484,7 @@ pub fn group_counts(tagged: &[(String, String)]) -> Vec<(String, u32)> {
 
 /// Stichwörter einer Gruppe (Schnellfilter).
 pub fn group_tags(group: &str) -> Vec<String> {
-    grabmark_vision::terms::in_group(group)
+    nabshot_vision::terms::in_group(group)
         .map(|t| t.key.to_string())
         .collect()
 }

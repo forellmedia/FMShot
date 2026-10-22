@@ -1,13 +1,13 @@
-//! Commands für Editor und Galerie. Die Logik liegt in `grabmark-library` und
-//! `grabmark-render`; hier wird nur verdrahtet.
+//! Commands für Editor und Galerie. Die Logik liegt in `nabshot-library` und
+//! `nabshot-render`; hier wird nur verdrahtet.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use grabmark_core::{AssetRef, Document, RgbaImage};
-use grabmark_library::{CaptureRecord, Library};
-use grabmark_render::{RenderOptions, Renderer};
+use nabshot_core::{AssetRef, Document, RgbaImage};
+use nabshot_library::{CaptureRecord, Library};
+use nabshot_render::{RenderOptions, Renderer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State};
@@ -169,7 +169,7 @@ pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(
             &state,
             &id,
             &document,
-            Some(grabmark_library::THUMBNAIL_MAX * 2),
+            Some(nabshot_library::THUMBNAIL_MAX * 2),
         );
         match preview {
             Ok(img) => match lib.save_document(&id, &document, Some(&img)) {
@@ -192,7 +192,7 @@ pub async fn copy_document(app: AppHandle, id: String, document: Document) -> Re
         let lib = library(&app);
         let state = app.state::<EditorState>();
         let result = render(&lib, &state, &id, &document, None).and_then(|img| {
-            grabmark_clipboard::copy_image(&img, document.pixel_ratio)
+            nabshot_clipboard::copy_image(&img, document.pixel_ratio)
                 .map_err(err)
                 .map(|()| (img.width(), img.height()))
         });
@@ -227,7 +227,7 @@ pub async fn export_document(
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("Grabmark {id}.{ext}"))
+            .set_file_name(format!("Nabshot {id}.{ext}"))
             .add_filter(label, &[ext])
             .blocking_save_file()
         else {
@@ -264,9 +264,9 @@ fn write_export(
     let img = render(&lib, &state, id, document, None)?;
     let bytes = match format {
         ExportFormat::Png => {
-            grabmark_library::encode_png(&img, document.pixel_ratio).map_err(err)?
+            nabshot_library::encode_png(&img, document.pixel_ratio).map_err(err)?
         }
-        ExportFormat::Jpg => grabmark_library::encode_jpeg(&img, 90)?,
+        ExportFormat::Jpg => nabshot_library::encode_jpeg(&img, 90)?,
     };
     std::fs::write(&path, bytes).map_err(err)?;
     Ok(path)
@@ -281,7 +281,7 @@ pub async fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
         let start = Instant::now();
         let result = crate::video_edit::ensure_current(&app, &id).and_then(|()| {
             let rec = library(&app).get(&id).map_err(err)?;
-            grabmark_clipboard::copy_file(&rec.video_path()).map_err(err)
+            nabshot_clipboard::copy_file(&rec.video_path()).map_err(err)
         });
         match &result {
             Ok(()) => log::info!("Zwischenablage: Video {id} kopiert ({:.0} ms)", ms(start)),
@@ -307,7 +307,7 @@ pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>,
         let Some(path) = app
             .dialog()
             .file()
-            .set_file_name(format!("Grabmark {id}.mp4"))
+            .set_file_name(format!("Nabshot {id}.mp4"))
             .add_filter("MP4", &["mp4"])
             .blocking_save_file()
         else {
@@ -345,11 +345,11 @@ fn store_asset(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, Str
 
 fn store_asset_inner(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, String> {
     let start = Instant::now();
-    let img = grabmark_render::decode_image(bytes).map_err(err)?;
+    let img = nabshot_render::decode_image(bytes).map_err(err)?;
     let png = if bytes.starts_with(b"\x89PNG") {
         bytes.to_vec()
     } else {
-        grabmark_library::encode_png(&img, 1.0).map_err(err)?
+        nabshot_library::encode_png(&img, 1.0).map_err(err)?
     };
     let hash = library(app).add_asset(id, &png).map_err(err)?;
     log::info!(
@@ -407,7 +407,7 @@ pub async fn add_asset_from_capture(
                 let state = app.state::<EditorState>();
                 render(&lib, &state, &source_id, &doc, None)
             })
-            .and_then(|img| grabmark_library::encode_png(&img, 1.0).map_err(err))
+            .and_then(|img| nabshot_library::encode_png(&img, 1.0).map_err(err))
             .inspect_err(|e| log::error!("Aufnahme {source_id} übernehmen: {e}"))?;
         store_asset(&app, &id, &png)
     })
@@ -440,7 +440,7 @@ pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>,
             .library
             .read_original(&id)
             .map_err(err)
-            .and_then(|bytes| grabmark_render::decode_png(&bytes).map_err(err))
+            .and_then(|bytes| nabshot_render::decode_png(&bytes).map_err(err))
             .and_then(|img| ocr.recognize(&img).map_err(err))
             .inspect_err(|e| log::error!("Texterkennung {id}: {e}"))?;
         // Nur die Anzahl – der erkannte Text ist privat.
@@ -467,7 +467,7 @@ pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>,
 #[tauri::command]
 #[specta::specta]
 pub fn copy_text(text: String) -> Result<(), String> {
-    match grabmark_clipboard::copy_text(&text) {
+    match nabshot_clipboard::copy_text(&text) {
         Ok(()) => {
             log::info!("Zwischenablage: Text kopiert");
             Ok(())
@@ -483,7 +483,7 @@ pub fn copy_text(text: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn clipboard_change_count() -> Option<u32> {
-    grabmark_clipboard::change_count()
+    nabshot_clipboard::change_count()
 }
 
 #[tauri::command]
@@ -582,7 +582,7 @@ fn render(
         .map_err(err)?;
         assets.insert(
             asset.clone(),
-            grabmark_render::decode_png(&bytes).map_err(err)?,
+            nabshot_render::decode_png(&bytes).map_err(err)?,
         );
     }
     let opts = match max {

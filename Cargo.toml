@@ -9,23 +9,23 @@ rust-version = "1.95"
 authors = ["forellmedia.ch"]
 license = "LicenseRef-Proprietary"
 publish = false
-repository = "https://github.com/forellmedia/Grabmark"
+repository = "https://github.com/forellmedia/Nabshot"
 
 [workspace.dependencies]
-grabmark-core = { path = "crates/grabmark-core" }
-grabmark-render = { path = "crates/grabmark-render" }
-grabmark-render-wasm = { path = "crates/grabmark-render-wasm" }
-grabmark-capture = { path = "crates/grabmark-capture" }
-grabmark-clipboard = { path = "crates/grabmark-clipboard" }
-grabmark-settings = { path = "crates/grabmark-settings" }
-grabmark-stitch = { path = "crates/grabmark-stitch" }
-grabmark-ocr = { path = "crates/grabmark-ocr" }
-grabmark-library = { path = "crates/grabmark-library" }
-grabmark-hotkeys = { path = "crates/grabmark-hotkeys" }
-grabmark-overlay = { path = "crates/grabmark-overlay" }
-grabmark-vision = { path = "crates/grabmark-vision" }
-grabmark-media = { path = "crates/grabmark-media" }
-grabmark-video = { path = "crates/grabmark-video", default-features = false }
+nabshot-core = { path = "crates/nabshot-core" }
+nabshot-render = { path = "crates/nabshot-render" }
+nabshot-render-wasm = { path = "crates/nabshot-render-wasm" }
+nabshot-capture = { path = "crates/nabshot-capture" }
+nabshot-clipboard = { path = "crates/nabshot-clipboard" }
+nabshot-settings = { path = "crates/nabshot-settings" }
+nabshot-stitch = { path = "crates/nabshot-stitch" }
+nabshot-ocr = { path = "crates/nabshot-ocr" }
+nabshot-library = { path = "crates/nabshot-library" }
+nabshot-hotkeys = { path = "crates/nabshot-hotkeys" }
+nabshot-overlay = { path = "crates/nabshot-overlay" }
+nabshot-vision = { path = "crates/nabshot-vision" }
+nabshot-media = { path = "crates/nabshot-media" }
+nabshot-video = { path = "crates/nabshot-video", default-features = false }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

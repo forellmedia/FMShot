@@ -1,7 +1,7 @@
 //! Registriert die globalen Tastenkürzel beim System.
 
-use grabmark_capture::OwnWindows;
-use grabmark_hotkeys::{Action, Platform};
+use nabshot_capture::OwnWindows;
+use nabshot_hotkeys::{Action, Platform};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -48,8 +48,8 @@ pub fn register(app: &AppHandle) {
     );
 }
 
-/// Führt ein Tastenkürzel aus. Offene Fenster von Grabmark bleiben dabei im
-/// Bild – so lässt sich Grabmark selbst fotografieren.
+/// Führt ein Tastenkürzel aus. Offene Fenster von Nabshot bleiben dabei im
+/// Bild – so lässt sich Nabshot selbst fotografieren.
 pub fn run(app: &AppHandle, action: Action) {
     log::info!("Tastenkürzel ausgelöst: {action:?}");
     let start = |mode| capture::start_with(app, mode, OwnWindows::Shown);

@@ -1,4 +1,4 @@
-// Dokumentmodell im Frontend – entspricht grabmark-core (Rust).
+// Dokumentmodell im Frontend – entspricht nabshot-core (Rust).
 //
 // Die erzeugten Bindings (bindings.ts) erlauben `null` für jede Zahl (JSON
 // kennt kein NaN). Im Editor arbeiten wir mit strengen Typen und prüfen die
@@ -74,7 +74,7 @@ export type Layer = {
   locked: boolean;
   opacity: number;
   rotation: number;
-  /** Gruppe (Ebenen liegen direkt übereinander), siehe grabmark-core. */
+  /** Gruppe (Ebenen liegen direkt übereinander), siehe nabshot-core. */
   group?: number | null;
   kind: LayerKind;
 };
@@ -217,7 +217,7 @@ export function controlThrough(from: Point, to: Point, mid: Point, snap: number)
   return { x: 2 * mid.x - straight.x, y: 2 * mid.y - straight.y };
 }
 
-/** Umschliessendes Rechteck der Kurve (wie `quad_bounds` in grabmark-core). */
+/** Umschliessendes Rechteck der Kurve (wie `quad_bounds` in nabshot-core). */
 function quadBounds(a: Point, c: Point, b: Point): Rect {
   const xs = [a.x, b.x];
   const ys = [a.y, b.y];

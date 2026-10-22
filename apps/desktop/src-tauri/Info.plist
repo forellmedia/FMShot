@@ -4,8 +4,8 @@
 <dict>
   <!-- Wird von Tauri in die Info.plist der App übernommen (ADR 0011). -->
   <key>NSMicrophoneUsageDescription</key>
-  <string>Grabmark nimmt bei Video-Aufnahmen auf Wunsch das Mikrofon auf.</string>
+  <string>Nabshot nimmt bei Video-Aufnahmen auf Wunsch das Mikrofon auf.</string>
   <key>NSCameraUsageDescription</key>
-  <string>Grabmark nimmt bei Video-Aufnahmen auf Wunsch die Webcam auf.</string>
+  <string>Nabshot nimmt bei Video-Aufnahmen auf Wunsch die Webcam auf.</string>
 </dict>
 </plist>

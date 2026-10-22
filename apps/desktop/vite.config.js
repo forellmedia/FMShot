@@ -24,8 +24,8 @@ export default defineConfig(() => ({
           port: 1421,
         }
       : undefined,
-    // Schriften liegen beim Renderer (crates/grabmark-render/fonts).
-    fs: { allow: ["..", "../../crates/grabmark-render/fonts"] },
+    // Schriften liegen beim Renderer (crates/nabshot-render/fonts).
+    fs: { allow: ["..", "../../crates/nabshot-render/fonts"] },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

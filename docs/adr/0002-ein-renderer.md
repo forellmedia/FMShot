@@ -7,7 +7,7 @@ Dasselbe Dokument muss im Editor, beim Export, beim Auto-Export (ohne Fenster),
 als Galerie-Vorschau und über die CLI identisch aussehen.
 
 ## Entscheidung
-- `grabmark-render` (tiny-skia + cosmic-text, mitgelieferte Schriften) zeichnet
+- `nabshot-render` (tiny-skia + cosmic-text, mitgelieferte Schriften) zeichnet
   Dokumente. Nativ für Export/Auto-Export/Vorschau/CLI, als **WASM** im Editor.
 - Im Editor werden unveränderte Ebenen als Bitmap gecacht; beim Ziehen wird nur
   die aktive Ebene neu gezeichnet.

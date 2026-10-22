@@ -3,7 +3,7 @@
   // wählen, Schneiden, Webcam je Abschnitt, Vergrössern (Zoom), Klicks, Ton
   // und Mauszeiger. Pfeile, Rahmen usw. stehen je Werkzeug in einer eigenen
   // Zeile; jede Zeichnung ist ein Block, der sich wählen, verschieben und in
-  // der Länge ziehen lässt. Gerechnet wird in `grabmark-video` (WASM).
+  // der Länge ziehen lässt. Gerechnet wird in `nabshot-video` (WASM).
 
   import type { WebcamMode } from "$lib/bindings";
   import { t } from "$lib/i18n";
@@ -334,12 +334,13 @@
   // --- Ansicht: Höhe, einklappen, Spuren zeigen --------------------------------
 
   /** Gemerkt je Rechner (nicht im Dokument): Höhe, eingeklappt, versteckte Spuren. */
-  const VIEW_KEY = "grabmark.timeline";
+  const VIEW_KEY = "nabshot.timeline";
   type View = { height: number | null; collapsed: boolean; hidden: string[] };
 
   function loadView(): View {
     try {
-      const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
+      // Früherer Name (ADR 0015): einmal übernehmen.
+      const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? localStorage.getItem("grabmark.timeline") ?? "null");
       if (v && typeof v === "object") {
         return {
           height: typeof v.height === "number" ? v.height : null,

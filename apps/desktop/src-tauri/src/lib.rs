@@ -22,12 +22,12 @@ mod vision;
 use std::sync::Arc;
 use std::time::Instant;
 
-use grabmark_library::Library;
+use nabshot_library::Library;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_specta::{Builder, collect_commands};
 
 /// Alle Commands, die das Frontend aufrufen darf. Die TypeScript-Typen dazu
-/// erzeugt `cargo test -p grabmark-desktop` nach `src/lib/bindings.ts`.
+/// erzeugt `cargo test -p nabshot-desktop` nach `src/lib/bindings.ts`.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::app_info,
@@ -102,10 +102,12 @@ fn log_panics() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Vor allem anderen: Ordner vom früheren Namen übernehmen (ADR 0015).
+    paths::migrate_old_name();
     log_panics();
     let builder = specta_builder();
     tauri::Builder::default()
-        // Zweiter Start (z. B. `Grabmark capture region`): an die laufende App
+        // Zweiter Start (z. B. `Nabshot capture region`): an die laufende App
         // weiterreichen statt ein zweites Tray-Symbol zu öffnen.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             handle_args(app, &argv);
@@ -132,7 +134,7 @@ pub fn run() {
             };
             builder.mount_events(app);
 
-            // Kein Dock-Symbol – Grabmark lebt im Tray.
+            // Kein Dock-Symbol – Nabshot lebt im Tray.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -140,6 +142,11 @@ pub fn run() {
             app.manage(settings::SettingsState::load(config));
             i18n::set_language(settings::get(app.handle()).language.as_deref());
             logs::log_startup(app.handle());
+            for note in paths::migration_notes() {
+                log::info!("{note}");
+            }
+            #[cfg(target_os = "macos")]
+            tray::migrate_launch_agent(app.handle());
 
             log_displays(app.handle());
 
@@ -157,7 +164,7 @@ pub fn run() {
             );
             let t = Instant::now();
             app.manage(capture::CaptureState::new(
-                grabmark_capture::platform_capturer(),
+                nabshot_capture::platform_capturer(),
                 library,
             ));
             step("Aufnahme und Texterkennung", t);
@@ -218,10 +225,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .inspect_err(|e| log::error!("Start fehlgeschlagen: {e}"))
-        .expect("Grabmark konnte nicht gestartet werden")
+        .expect("Nabshot konnte nicht gestartet werden")
         .run(|_app, event| {
             if let RunEvent::Exit = event {
-                log::info!("Grabmark beendet");
+                log::info!("Nabshot beendet");
                 log::logger().flush();
             }
         });

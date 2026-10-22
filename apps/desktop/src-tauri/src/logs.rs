@@ -2,7 +2,7 @@
 //! Frontend.
 //!
 //! Eine Datei wächst bis [`MAX_FILE_SIZE`], dann benennt das Plugin sie mit
-//! Datum um (`Grabmark_2026-10-22_17-20-51.log`) und beginnt eine neue. Alte
+//! Datum um (`Nabshot_2026-10-22_17-20-51.log`) und beginnt eine neue. Alte
 //! Dateien löscht [`prune`] nach den Tagen aus den Einstellungen.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ const MAX_FILE_SIZE: u128 = 5_000_000;
 /// Obergrenze für alle Dateien zusammen – falls etwas Amok läuft.
 const MAX_TOTAL_SIZE: u64 = 500_000_000;
 
-/// Das Log-Plugin: Ortszeit mit Millisekunden; Grabmark selbst ab `debug`,
+/// Das Log-Plugin: Ortszeit mit Millisekunden; Nabshot selbst ab `debug`,
 /// fremde Bibliotheken ab `info`.
 pub fn plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let time_format =
@@ -29,7 +29,7 @@ pub fn plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri_plugin_log::Builder::new()
         .timezone_strategy(TimezoneStrategy::UseLocal)
         .level(log::LevelFilter::Debug)
-        .filter(|meta| meta.target().starts_with("grabmark") || meta.level() <= log::Level::Info)
+        .filter(|meta| meta.target().starts_with("nabshot") || meta.level() <= log::Level::Info)
         .format(move |out, message, record| {
             let now = TimezoneStrategy::UseLocal.get_now();
             out.finish(format_args!(
@@ -122,11 +122,11 @@ pub fn prune_now(app: &AppHandle) {
     }
 }
 
-/// Erste Zeilen nach dem Start: womit läuft Grabmark?
+/// Erste Zeilen nach dem Start: womit läuft Nabshot?
 pub fn log_startup(app: &AppHandle) {
     let info = app.package_info();
     log::info!(
-        "──── Grabmark {} gestartet · {} {} · {} · PID {}",
+        "──── Nabshot {} gestartet · {} {} · {} · PID {}",
         info.version,
         std::env::consts::OS,
         std::env::consts::ARCH,
@@ -168,7 +168,7 @@ pub enum FrontendLevel {
 #[tauri::command]
 #[specta::specta]
 pub fn log_frontend(window: tauri::Window, level: FrontendLevel, message: String) {
-    let target = format!("grabmark_frontend::{}", window.label());
+    let target = format!("nabshot_frontend::{}", window.label());
     let level = match level {
         FrontendLevel::Error => log::Level::Error,
         FrontendLevel::Warn => log::Level::Warn,
@@ -211,10 +211,10 @@ mod tests {
     fn alte_logs_werden_geloescht() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let current = dir.join("Grabmark.log");
+        let current = dir.join("Nabshot.log");
         touch(&current, 100, 10);
-        touch(&dir.join("Grabmark_2026-01-01_10-00-00.log"), 40, 10);
-        touch(&dir.join("Grabmark_2026-10-01_10-00-00.log"), 5, 10);
+        touch(&dir.join("Nabshot_2026-01-01_10-00-00.log"), 40, 10);
+        touch(&dir.join("Nabshot_2026-10-01_10-00-00.log"), 5, 10);
         touch(&dir.join("FMShot.log"), 400, 10);
         touch(&dir.join("notizen.txt"), 400, 10);
 
@@ -223,17 +223,17 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         removed.sort();
-        assert_eq!(removed, ["FMShot.log", "Grabmark_2026-01-01_10-00-00.log"]);
+        assert_eq!(removed, ["FMShot.log", "Nabshot_2026-01-01_10-00-00.log"]);
         // Aktuelle Datei bleibt, auch wenn sie alt ist; fremde Dateien auch.
         assert!(current.exists());
         assert!(dir.join("notizen.txt").exists());
-        assert!(dir.join("Grabmark_2026-10-01_10-00-00.log").exists());
+        assert!(dir.join("Nabshot_2026-10-01_10-00-00.log").exists());
     }
 
     #[test]
     fn fehlender_ordner_ist_kein_fehler() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("gibt-es-nicht");
-        assert!(prune(&dir, &dir.join("Grabmark.log"), 30, SystemTime::now()).is_empty());
+        assert!(prune(&dir, &dir.join("Nabshot.log"), 30, SystemTime::now()).is_empty());
     }
 }

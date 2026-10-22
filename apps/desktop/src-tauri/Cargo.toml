@@ -1,6 +1,6 @@
 [package]
-name = "grabmark-desktop"
-description = "Grabmark Desktop-App (Tauri)"
+name = "nabshot-desktop"
+description = "Nabshot Desktop-App (Tauri)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ workspace = true
 [lib]
 # Eigener Name für die Bibliothek, sonst kollidiert sie unter Windows mit dem
 # Programm, siehe https://github.com/rust-lang/cargo/issues/8519
-name = "grabmark_desktop_lib"
+name = "nabshot_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -29,19 +29,19 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 dirs = "6"
-grabmark-capture.workspace = true
-grabmark-clipboard.workspace = true
-grabmark-core = { workspace = true, features = ["specta"] }
-grabmark-hotkeys.workspace = true
-grabmark-library.workspace = true
-grabmark-media.workspace = true
-grabmark-video = { workspace = true, features = ["gpu", "gif", "layers"] }
-grabmark-ocr.workspace = true
-grabmark-overlay.workspace = true
-grabmark-render.workspace = true
-grabmark-settings = { workspace = true, features = ["specta"] }
-grabmark-stitch.workspace = true
-grabmark-vision.workspace = true
+nabshot-capture.workspace = true
+nabshot-clipboard.workspace = true
+nabshot-core = { workspace = true, features = ["specta"] }
+nabshot-hotkeys.workspace = true
+nabshot-library.workspace = true
+nabshot-media.workspace = true
+nabshot-video = { workspace = true, features = ["gpu", "gif", "layers"] }
+nabshot-ocr.workspace = true
+nabshot-overlay.workspace = true
+nabshot-render.workspace = true
+nabshot-settings = { workspace = true, features = ["specta"] }
+nabshot-stitch.workspace = true
+nabshot-vision.workspace = true
 log = "0.4"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 sys-locale = "0.3"
@@ -55,7 +55,7 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 
 # Bildinhalt-Erkennung mit ONNX Runtime – unter Linux vorerst aus (ADR 0010).
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-grabmark-vision = { workspace = true, features = ["onnx"] }
+nabshot-vision = { workspace = true, features = ["onnx"] }
 
 [dev-dependencies]
 tempfile = "3"

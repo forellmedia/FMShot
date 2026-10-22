@@ -67,7 +67,7 @@ pub fn t(key: &str, params: &[(&str, &str)]) -> String {
 
 /// Kürzel zur Anzeige: Symbole auf macOS, übersetzte Tastennamen sonst
 /// („Strg+Umschalt+2“) – nie ⌘ unter Windows oder Linux.
-pub fn shortcut_label(shortcut: &grabmark_hotkeys::Shortcut) -> String {
+pub fn shortcut_label(shortcut: &nabshot_hotkeys::Shortcut) -> String {
     let [ctrl, win, alt, shift, print_screen] = [
         "keys.ctrl",
         "keys.win",
@@ -77,8 +77,8 @@ pub fn shortcut_label(shortcut: &grabmark_hotkeys::Shortcut) -> String {
     ]
     .map(|k| t(k, &[]));
     shortcut.label_with(
-        grabmark_hotkeys::Platform::current(),
-        &grabmark_hotkeys::KeyNames {
+        nabshot_hotkeys::Platform::current(),
+        &nabshot_hotkeys::KeyNames {
             ctrl: &ctrl,
             win: &win,
             alt: &alt,

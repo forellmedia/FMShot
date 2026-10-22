@@ -10,7 +10,7 @@ pub struct AppInfo {
     pub arch: String,
 }
 
-/// Version und Plattform – für „Über Grabmark“ und „Fehler melden“.
+/// Version und Plattform – für „Über Nabshot“ und „Fehler melden“.
 #[tauri::command]
 #[specta::specta]
 pub fn app_info(app: tauri::AppHandle) -> AppInfo {

@@ -1,6 +1,6 @@
 // Video im Editor (ADR 0011, Etappe 4–6): Wiedergabe, Zeitleiste und
 // Bearbeiten. Die Rechnung (Lage, Zeitachse, Schnitte, Zoom, Zeiger) macht
-// `grabmark-video` als WASM (`VideoPreview`) – genau wie beim Export.
+// `nabshot-video` als WASM (`VideoPreview`) – genau wie beim Export.
 //
 // Alles im Dokument steht in Zeit der Aufnahme („Quelle“); Zeitleiste und
 // Wiedergabe zeigen das fertige Video ohne Schnitte („Ausgabe“).
@@ -8,7 +8,7 @@
 import { api, fileUrl, on, type CaptureInfo } from "$lib/api";
 import type { VideoDoc, VideoTracks, WebcamMode, ZoomSection } from "$lib/bindings";
 import { t } from "$lib/i18n";
-import { VideoPreview } from "$lib/wasm/grabmark_render";
+import { VideoPreview } from "$lib/wasm/nabshot_render";
 import { wasmModule } from "./renderer";
 import { editor } from "./state.svelte";
 import { computePeaks, type Peaks } from "./audioWave";
