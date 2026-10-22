@@ -108,6 +108,19 @@ export const commands = {
 	logFrontend: (level: FrontendLevel, message: string) => __TAURI_INVOKE<void>("log_frontend", { level, message }),
 	/**  Öffnet den Ordner mit den Log-Dateien. */
 	openLogFolder: () => typedError<null, string>(__TAURI_INVOKE("open_log_folder")),
+	/**  Für die Anzeige unten in der Bildliste. */
+	storageSummary: () => typedError<StorageSummary, string>(__TAURI_INVOKE("storage_summary")),
+	/**  Für das Aufräumen: alle Aufnahmen mit ihrem Platz. */
+	storageDetails: () => typedError<StorageDetails, string>(__TAURI_INVOKE("storage_details")),
+	/**
+	 *  Aufräumen: Aufnahmen aus der Bibliothek und/oder ihre exportierten
+	 *  Dateien löschen. Gibt die freigegebenen Bytes zurück.
+	 */
+	cleanup: (ids: string[], library: boolean, exported: boolean) => typedError<number | null, string>(__TAURI_INVOKE("cleanup", { ids, library, exported })),
+	/**  Öffnet den Ordner der Bibliothek bzw. des Auto-Exports. */
+	openStorageFolder: (exported: boolean) => typedError<null, string>(__TAURI_INVOKE("open_storage_folder", { exported })),
+	/**  Hat der Hintergrund-Job einen Hinweis hinterlegt? (Einmal abholen.) */
+	takeStorageWarning: () => __TAURI_INVOKE<boolean>("take_storage_warning"),
 	/**  Prüft, ob eine neuere Version veröffentlicht ist. */
 	checkForUpdate: () => typedError<{
 	version: string,
@@ -511,7 +524,9 @@ export type LineStyle = "solid" | "dashed" | "dotted" |
 "double";
 
 /**  Was das Tray-Fenster im Hauptfenster öffnen kann. */
-export type MainView = "editor" | "gallery" | "settings" | "library";
+export type MainView = "editor" | "gallery" | "settings" | "library" | 
+/**  Hauptfenster mit „Speicher aufräumen“. */
+"cleanup";
 
 /**  Ein Mikrofon für die Auswahl im Video-Tab. */
 export type Microphone = {
@@ -564,6 +579,8 @@ export type Settings = {
 	auto_export?: AutoExport,
 	/**  Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie. */
 	retention_days?: number | null,
+	/**  Ab welcher Grösse Grabmark zum Aufräumen auffordert. */
+	storage?: StorageLimits,
 	/**  Log-Dateien nach so vielen Tagen löschen (10, 30, 60 oder 360). */
 	log_retention_days?: number,
 	/**  Format beim Speichern aus dem Editor (⌘S). */
@@ -586,6 +603,39 @@ export type Shadow = {
 export type Size = {
 	width: number | null,
 	height: number | null,
+};
+
+export type StorageDetails = {
+	summary: StorageSummary,
+	items: StorageItem[],
+};
+
+/**  Eine Aufnahme in der Aufräum-Liste. */
+export type StorageItem = {
+	capture: CaptureInfo,
+	libraryBytes: number | null,
+	exportBytes: number | null,
+	exportPath: string | null,
+};
+
+/**  Warngrenzen für den Speicherplatz in GB; 0 = nie warnen. */
+export type StorageLimits = {
+	/**  Bibliothek (Aufnahmen, Videos, Index). */
+	library_gb?: number,
+	/**  Dateien, die der Auto-Export geschrieben hat. */
+	export_gb?: number,
+};
+
+/**  Belegter Platz und Grenzen (Bytes). */
+export type StorageSummary = {
+	libraryBytes: number | null,
+	exportBytes: number | null,
+	/**  `None` = keine Grenze. */
+	libraryLimit: number | null,
+	exportLimit: number | null,
+	libraryDir: string,
+	/**  Wohin der Auto-Export schreibt (auch wenn er gerade aus ist). */
+	exportDir: string,
 };
 
 export type Stroke = {

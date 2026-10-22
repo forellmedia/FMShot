@@ -153,6 +153,8 @@ export class Editor {
    *  des Fensters, etwa weil die Video-Zeitleiste erscheint, wird neu
    *  eingepasst statt abgeschnitten. */
   fitted = false;
+  /** Dialog „Speicher aufräumen“ offen. */
+  cleanupOpen = $state(false);
 
   get ratio(): number {
     return this.doc?.pixel_ratio ?? 1;
@@ -827,6 +829,21 @@ export class Editor {
     const index = this.captures.findIndex((c) => c.id === id);
     await api.deleteCapture(id);
     const wasCurrent = this.current?.id === id;
+    await this.refreshCaptures();
+    if (wasCurrent) {
+      this.current = null;
+      this.doc = null;
+      this.selectedIds = [];
+      const next = this.captures[Math.min(Math.max(index, 0), this.captures.length - 1)];
+      if (next) await this.open(next.id);
+    }
+  }
+
+  /** Nach dem Aufräumen: Liste neu laden; war die offene Aufnahme dabei,
+   *  die nächste zeigen. */
+  async afterCleanup(deleted: string[]) {
+    const index = this.captures.findIndex((c) => c.id === this.current?.id);
+    const wasCurrent = !!this.current && deleted.includes(this.current.id);
     await this.refreshCaptures();
     if (wasCurrent) {
       this.current = null;

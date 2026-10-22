@@ -407,6 +407,8 @@ pub enum MainView {
     Gallery,
     Settings,
     Library,
+    /// Hauptfenster mit „Speicher aufräumen“.
+    Cleanup,
 }
 
 #[tauri::command]
@@ -423,6 +425,7 @@ pub async fn open_main(app: AppHandle, view: MainView) {
         }
         MainView::Settings => open_settings(&app),
         MainView::Library => open_library(&app),
+        MainView::Cleanup => crate::storage::open_cleanup(&app),
     }
 }
 

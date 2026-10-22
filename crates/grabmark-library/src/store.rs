@@ -582,6 +582,83 @@ impl Library {
         Ok(ids.len())
     }
 
+    /// Wie viel Platz belegen Bibliothek und Auto-Export – gesamt und je
+    /// Aufnahme (fürs Aufräumen). Gezählt werden im Export-Ordner nur die
+    /// Dateien, die Grabmark selbst dorthin geschrieben hat.
+    pub fn storage_usage(&self) -> Result<StorageUsage> {
+        let started = Instant::now();
+        let records = index::recent(&self.lock(), &self.root, u32::MAX)?;
+        let exports: std::collections::HashMap<String, PathBuf> =
+            index::export_paths(&self.lock())?
+                .into_iter()
+                .map(|(id, p)| (id, PathBuf::from(p)))
+                .collect();
+        // Jeden Monatsordner einmal lesen und die Dateien den IDs zuordnen.
+        let mut by_id: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut dirs: Vec<&Path> = records.iter().map(|r| r.dir.as_path()).collect();
+        dirs.sort();
+        dirs.dedup();
+        for dir in dirs {
+            let entries = match fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!("{} nicht lesbar: {e}", dir.display());
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                *by_id.entry(capture_of(&name).to_string()).or_default() += len;
+            }
+        }
+        let captures: Vec<CaptureUsage> = records
+            .into_iter()
+            .map(|record| {
+                let export_path = exports.get(&record.id).cloned();
+                let export_bytes = export_path
+                    .as_ref()
+                    .and_then(|p| fs::metadata(p).ok())
+                    .map_or(0, |m| m.len());
+                CaptureUsage {
+                    library_bytes: by_id.get(&record.id).copied().unwrap_or(0),
+                    export_path: export_path.filter(|_| export_bytes > 0),
+                    export_bytes,
+                    record,
+                }
+            })
+            .collect();
+        let usage = StorageUsage {
+            library_bytes: dir_size(&self.root),
+            export_bytes: captures.iter().map(|c| c.export_bytes).sum(),
+            captures,
+        };
+        log::debug!(
+            "Speicher: Bibliothek {} MB, Export {} MB, {} Aufnahmen in {} ms",
+            usage.library_bytes / 1_000_000,
+            usage.export_bytes / 1_000_000,
+            usage.captures.len(),
+            started.elapsed().as_millis()
+        );
+        Ok(usage)
+    }
+
+    /// Löscht die automatisch exportierte Datei einer Aufnahme (die Aufnahme
+    /// in der Bibliothek bleibt). Gibt die freigegebenen Bytes zurück.
+    pub fn delete_export(&self, id: &str) -> Result<u64> {
+        let Some(path) = self.export_path(id)? else {
+            return Ok(0);
+        };
+        let len = fs::metadata(&path).map_or(0, |m| m.len());
+        match fs::remove_file(&path) {
+            Ok(()) => log::info!("Export von {id} gelöscht: {}", path.display()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        index::clear_export_path(&self.lock(), id)?;
+        Ok(len)
+    }
+
     pub fn set_starred(&self, id: &str, starred: bool) -> Result<()> {
         log::debug!("Aufnahme {id}: Stern={starred}");
         Ok(index::set_starred(&self.lock(), id, starred)?)
@@ -698,6 +775,49 @@ fn document_stamp(doc: &Document) -> Result<String> {
     Ok(format!("{hash:016x}"))
 }
 
+/// Platz einer Aufnahme bzw. aller Aufnahmen.
+#[derive(Debug, Clone)]
+pub struct CaptureUsage {
+    pub record: CaptureRecord,
+    /// Alle Dateien der Aufnahme in der Bibliothek.
+    pub library_bytes: u64,
+    /// Automatisch exportierte Datei, falls es sie noch gibt.
+    pub export_path: Option<PathBuf>,
+    pub export_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageUsage {
+    /// Ganzer Bibliotheksordner (auch Index und Reste).
+    pub library_bytes: u64,
+    pub export_bytes: u64,
+    /// Neueste zuerst.
+    pub captures: Vec<CaptureUsage>,
+}
+
+/// ID der Aufnahme, zu der eine Datei gehört (`<id>.json`, `<id>_…`).
+fn capture_of(name: &str) -> &str {
+    name.split_once('_')
+        .map(|(id, _)| id)
+        .or_else(|| name.strip_suffix(".json"))
+        .unwrap_or(name)
+}
+
+/// Grösse eines Ordners samt Unterordnern.
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(_) => e.metadata().map_or(0, |m| m.len()),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
 fn belongs_to(name: &str, id: &str) -> bool {
     name == document_file(id) || name.starts_with(&format!("{id}_"))
 }
@@ -778,6 +898,51 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn speicherplatz_je_aufnahme_und_export() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path().join("lib")).unwrap();
+        let a = lib.save_capture(&capture(1_792_172_712_083)).unwrap();
+        let b = lib.save_capture(&capture(1_792_172_799_000)).unwrap();
+        let export = tmp.path().join("Bild.png");
+        fs::write(&export, vec![0u8; 1234]).unwrap();
+        lib.set_export_path(&a.id, &export).unwrap();
+
+        let usage = lib.storage_usage().unwrap();
+        assert_eq!(usage.captures.len(), 2);
+        assert_eq!(usage.export_bytes, 1234);
+        let of = |id: &str| usage.captures.iter().find(|c| c.record.id == id).unwrap();
+        let own: u64 = fs::read_dir(&a.dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| belongs_to(&e.file_name().to_string_lossy(), &a.id))
+            .map(|e| e.metadata().unwrap().len())
+            .sum();
+        assert_eq!(of(&a.id).library_bytes, own);
+        assert_eq!(of(&a.id).export_path.as_deref(), Some(export.as_path()));
+        assert_eq!(of(&b.id).export_bytes, 0);
+        // Index und Reste zählen zur Bibliothek, gehören aber zu keiner Aufnahme.
+        assert!(usage.library_bytes > of(&a.id).library_bytes + of(&b.id).library_bytes);
+
+        assert_eq!(lib.delete_export(&a.id).unwrap(), 1234);
+        assert!(!export.exists());
+        assert_eq!(lib.export_path(&a.id).unwrap(), None);
+        assert!(lib.get(&a.id).is_ok());
+    }
+
+    #[test]
+    fn datei_gehoert_zur_aufnahme() {
+        assert_eq!(
+            capture_of("20261016-174512-083-3.json"),
+            "20261016-174512-083-3"
+        );
+        assert_eq!(
+            capture_of("20261016-174512-083-3_asset_ab.png"),
+            "20261016-174512-083-3"
+        );
+        assert_eq!(capture_of("index.sqlite"), "index.sqlite");
     }
 
     #[test]

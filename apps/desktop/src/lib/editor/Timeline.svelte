@@ -267,7 +267,8 @@
 
   // --- Blenden am Anfang und Ende ----------------------------------------------
 
-  type MenuItem = { label: string; checked?: boolean; action: () => void };
+  /** `checked` als Funktion bleibt aktuell, solange das Menü offen ist; `keep` lässt es offen. */
+  type MenuItem = { label: string; checked?: boolean | (() => boolean); keep?: boolean; action: () => void };
   let menu = $state<{ x: number; y: number; title: string; items: MenuItem[] } | null>(null);
 
   /** Mausposition relativ zur Zeitleiste: Ihr Glas-Effekt (`backdrop-filter`)
@@ -328,6 +329,112 @@
 
   function closeMenu(e: PointerEvent) {
     if (menu && !(e.target as HTMLElement | null)?.closest(".menu")) menu = null;
+  }
+
+  // --- Ansicht: Höhe, einklappen, Spuren zeigen --------------------------------
+
+  /** Gemerkt je Rechner (nicht im Dokument): Höhe, eingeklappt, versteckte Spuren. */
+  const VIEW_KEY = "grabmark.timeline";
+  type View = { height: number | null; collapsed: boolean; hidden: string[] };
+
+  function loadView(): View {
+    try {
+      const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
+      if (v && typeof v === "object") {
+        return {
+          height: typeof v.height === "number" ? v.height : null,
+          collapsed: !!v.collapsed,
+          hidden: Array.isArray(v.hidden) ? v.hidden.filter((k: unknown) => typeof k === "string") : [],
+        };
+      }
+    } catch {
+      // Kein Speicher (privat, gesperrt): Standard.
+    }
+    return { height: null, collapsed: false, hidden: [] };
+  }
+
+  let view = $state<View>(loadView());
+  /** Nur diese Spur zeigen (Klick auf ihren Namen); `null` = alle sichtbaren. */
+  let solo = $state<string | null>(null);
+
+  $effect(() => {
+    const json = JSON.stringify(view);
+    try {
+      localStorage.setItem(VIEW_KEY, json);
+    } catch {
+      // Nicht schlimm: Die Ansicht gilt dann nur bis zum Schliessen.
+    }
+  });
+
+  const shown = (key: string) => (solo ? solo === key : !view.hidden.includes(key));
+  const clicksLane = $derived(player.hasInput && !cameraOnly && (player.clicks.length > 0 || (video?.hidden_clicks?.length ?? 0) > 0));
+
+  /** Alle Spuren, die es in diesem Video gibt – für das Menü „Spuren“. */
+  const laneList = $derived.by(() => {
+    const out: { key: string; label: string }[] = [{ key: "video", label: t("video.track_video") }];
+    for (const n of audioLanes) out.push({ key: n, label: t(AUDIO_LABEL[n]) });
+    if (clicksLane) out.push({ key: "clicks", label: t("video.track_clicks") });
+    if (video?.webcam && !cameraOnly) out.push({ key: "webcam", label: t("video.webcam") });
+    if (!cameraOnly) out.push({ key: "zoom", label: t("video.track_zoom") });
+    for (const group of new Set(layerRows.map((r) => r.group))) {
+      out.push({ key: `layer:${group}`, label: t(LANE_LABEL[group]) });
+    }
+    return out;
+  });
+
+  function soloLane(e: PointerEvent, key: string) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    solo = solo === key ? null : key;
+  }
+
+  function toggleLane(key: string) {
+    view.hidden = view.hidden.includes(key) ? view.hidden.filter((k) => k !== key) : [...view.hidden, key];
+    solo = null;
+  }
+
+  function lanesMenu(e: MouseEvent) {
+    e.stopPropagation();
+    menu = {
+      ...menuAt(e),
+      title: t("video.lanes"),
+      items: [
+        ...laneList.map((l) => ({ label: l.label, checked: () => shown(l.key), keep: true, action: () => toggleLane(l.key) })),
+        {
+          label: t("video.lanes_all"),
+          action: () => {
+            view.hidden = [];
+            solo = null;
+          },
+        },
+      ],
+    };
+  }
+
+  // Höhe am oberen Rand ziehen; Doppelklick = wieder automatisch.
+  let wrap = $state<HTMLDivElement | null>(null);
+  let resize: { y0: number; h0: number } | null = null;
+
+  function resizeDown(e: PointerEvent) {
+    if (e.button !== 0 || !wrap) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resize = { y0: e.clientY, h0: view.collapsed ? 0 : wrap.clientHeight };
+    view.collapsed = false;
+  }
+
+  function resizeMove(e: PointerEvent) {
+    if (!resize) return;
+    const h = resize.h0 + resize.y0 - e.clientY;
+    if (h < 16) {
+      view.collapsed = true;
+      return;
+    }
+    view.collapsed = false;
+    view.height = Math.round(Math.min(window.innerHeight * 0.75, Math.max(24, h)));
+  }
+
+  function resizeUp() {
+    resize = null;
   }
 
   // --- Aktionen ----------------------------------------------------------------
@@ -448,8 +555,41 @@
 
 <svelte:window onkeydown={onKey} onpointerdown={closeMenu} />
 
+{#snippet laneName(key: string, label: string)}
+  <button
+    class="name"
+    class:solo={solo === key}
+    title={t(solo === key ? "video.lane_solo_off" : "video.lane_solo")}
+    onpointerdown={(e) => soloLane(e, key)}
+  >
+    {label}
+  </button>
+{/snippet}
+
 <section class="timeline" aria-label={t("video.timeline")} bind:this={root}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="resize"
+    title={t("video.resize_hint")}
+    onpointerdown={resizeDown}
+    onpointermove={resizeMove}
+    onpointerup={resizeUp}
+    onpointercancel={resizeUp}
+    ondblclick={() => {
+      view.height = null;
+      view.collapsed = false;
+    }}
+  ></div>
   <div class="bar">
+    <button
+      class="icon fold"
+      class:folded={view.collapsed}
+      title={t(view.collapsed ? "video.lanes_expand" : "video.lanes_collapse")}
+      aria-expanded={!view.collapsed}
+      onclick={() => (view.collapsed = !view.collapsed)}
+    >
+      <Icon name="caret" size={14} />
+    </button>
     <button class="play" title={t(player.playing ? "video.pause" : "video.play")} onclick={() => player.toggle()}>
       <Icon name={player.playing ? "pause" : "play"} />
     </button>
@@ -479,6 +619,9 @@
     {/if}
 
     <span class="grow"></span>
+    <button class="icon" class:on={!!solo || view.hidden.length > 0} title={t("video.lanes")} onclick={lanesMenu}>
+      <Icon name="layers" />
+    </button>
     <button class="icon" class:on={panel === "audio"} title={t("video.audio")} onclick={() => (panel = panel === "audio" ? null : "audio")}>
       <Icon name="speaker" />
     </button>
@@ -554,6 +697,12 @@
   {/if}
 
   <div
+    class="lanes-wrap"
+    class:collapsed={view.collapsed}
+    bind:this={wrap}
+    style:max-height={view.height != null ? `${view.height}px` : null}
+  >
+  <div
     class="lanes"
     bind:this={lanes}
     bind:clientWidth={width}
@@ -569,8 +718,9 @@
     onpointercancel={onUp}
     ondblclick={onDoubleClick}
   >
+    {#if shown("video")}
     <div class="lane clip">
-      <span class="name">{t("video.track_video")}</span>
+      {@render laneName("video", t("video.track_video"))}
       {#each cutMarks as m, i (i)}
         <span class="cutmark" style:left="{x(m)}px" title={t("video.cut_here")}></span>
       {/each}
@@ -592,9 +742,10 @@
         ></span>
       {/each}
     </div>
-    {#each audioLanes as n (n)}
+    {/if}
+    {#each audioLanes.filter((n) => shown(n)) as n (n)}
       <div class="lane audio">
-        <span class="name">{t(AUDIO_LABEL[n])}</span>
+        {@render laneName(n, t(AUDIO_LABEL[n]))}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="audio-area"
@@ -624,9 +775,9 @@
         </div>
       </div>
     {/each}
-    {#if player.hasInput && !cameraOnly && (player.clicks.length || hiddenClicks)}
+    {#if clicksLane && shown("clicks")}
       <div class="lane">
-        <span class="name">{t("video.track_clicks")}</span>
+        {@render laneName("clicks", t("video.track_clicks"))}
         {#each player.clicks as c, i (player.clickSources[i])}
           <button
             class="click"
@@ -639,9 +790,9 @@
         {/each}
       </div>
     {/if}
-    {#if video?.webcam && !cameraOnly}
+    {#if video?.webcam && !cameraOnly && shown("webcam")}
       <div class="lane">
-        <span class="name">{t("video.webcam")}</span>
+        {@render laneName("webcam", t("video.webcam"))}
         {#each webcamBlocks as b, i (i)}
           {#if b.mode !== "hidden" && b.end > b.start}
             <span class="block cam {b.mode}" style:left="{x(b.start)}px" style:width="{x(b.end) - x(b.start)}px">
@@ -651,9 +802,9 @@
         {/each}
       </div>
     {/if}
-    {#if !cameraOnly}
+    {#if !cameraOnly && shown("zoom")}
       <div class="lane" title={t("video.zoom_hint")}>
-        <span class="name">{t("video.track_zoom")}</span>
+        {@render laneName("zoom", t("video.track_zoom"))}
         {#each zoomBlocks as b, i (i)}
           <button
             class="block zoom"
@@ -670,10 +821,10 @@
         {/each}
       </div>
     {/if}
-    {#each layerRows as row, i (i)}
+    {#each layerRows.filter((r) => shown(`layer:${r.group}`)) as row, i (i)}
       <div class="lane layers" class:first={row.first}>
         {#if row.first}
-          <span class="name">{t(LANE_LABEL[row.group])}</span>
+          {@render laneName(`layer:${row.group}`, t(LANE_LABEL[row.group]))}
         {/if}
         {#each row.blocks as b (b.layer)}
           {@const r = blockRange(b)}
@@ -702,6 +853,7 @@
       <span class="selection" style:left="{GUTTER + x(sel.start)}px" style:width="{x(sel.end) - x(sel.start)}px"></span>
     {/if}
     <span class="playhead" style:left="{GUTTER + x(player.outputMs)}px"></span>
+  </div>
   </div>
 
   {#if zoom}
@@ -758,15 +910,16 @@
     <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
       <div class="menu-title">{menu.title}</div>
       {#each menu.items as item, i (i)}
+        {@const checked = typeof item.checked === "function" ? item.checked() : !!item.checked}
         <button
           role="menuitemradio"
-          aria-checked={!!item.checked}
+          aria-checked={checked}
           onclick={() => {
             item.action();
-            menu = null;
+            if (!item.keep) menu = null;
           }}
         >
-          <span class="check">{item.checked ? "✓" : ""}</span>{item.label}
+          <span class="check">{checked ? "✓" : ""}</span>{item.label}
         </button>
       {/each}
     </div>
@@ -880,12 +1033,66 @@
     position: absolute;
     left: calc(4px - var(--gutter));
     width: calc(var(--gutter) - 10px);
-    top: 3px;
+    top: 1px;
+    padding: 1px 4px;
+    border: none;
+    border-radius: 4px;
+    background: none;
     color: var(--text-muted);
-    pointer-events: none;
+    font: inherit;
+    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
+  }
+  .name:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .name.solo {
+    background: var(--active);
+    color: var(--on-active);
+  }
+  .resize {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: -4px;
+    height: 8px;
+    cursor: ns-resize;
+    z-index: 5;
+  }
+  .resize::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 2px;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--border);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .timeline:hover .resize::after {
+    opacity: 1;
+  }
+  .lanes-wrap {
+    max-height: 40vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+  }
+  .lanes-wrap.collapsed {
+    display: none;
+  }
+  .fold :global(svg) {
+    transition: transform 0.15s;
+  }
+  .fold.folded :global(svg) {
+    transform: rotate(-90deg);
   }
   .block {
     position: absolute;

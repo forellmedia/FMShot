@@ -20,10 +20,13 @@ import {
   type Settings,
   type VideoSettings,
   type VideoTracks,
+  type StorageDetails,
+  type StorageSummary,
+  type StorageItem,
 } from "$lib/bindings";
 import { fromBackend, type Doc } from "$lib/editor/model";
 
-export type { AssetInfo, Camera, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Microphone, Settings, VideoSettings };
+export type { AssetInfo, Camera, CaptureInfo, ContentSearchStatus, Diagnostics, GalleryItem, GalleryQuery, GalleryResult, HotkeyInfo, Microphone, Settings, StorageDetails, StorageItem, StorageSummary, VideoSettings };
 
 /** Erkannter Textblock in Pixeln der Originalaufnahme. */
 export type OcrBlock = { text: string; x: number; y: number; width: number; height: number };
@@ -120,6 +123,15 @@ export const api = {
     isTauri ? unwrap(commands.contentSearchStatus()) : Promise.resolve({ available: true, done: 3, total: 4 }),
   reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
   openLogFolder: (): Promise<null> => (isTauri ? unwrap(commands.openLogFolder()) : Promise.resolve(null)),
+  storageSummary: (): Promise<StorageSummary> =>
+    isTauri ? unwrap(commands.storageSummary()) : mock.storageDetails().then((d) => d.summary),
+  storageDetails: (): Promise<StorageDetails> => (isTauri ? unwrap(commands.storageDetails()) : mock.storageDetails()),
+  /** Aufnahmen aus der Bibliothek und/oder ihre exportierten Dateien löschen; gibt freigegebene Bytes zurück. */
+  cleanup: (ids: string[], library: boolean, exported: boolean): Promise<number> =>
+    isTauri ? unwrap(commands.cleanup(ids, library, exported)).then((n) => n ?? 0) : mock.cleanup(ids, library),
+  openStorageFolder: (exported: boolean): Promise<null> =>
+    isTauri ? unwrap(commands.openStorageFolder(exported)) : Promise.resolve(null),
+  takeStorageWarning: (): Promise<boolean> => (isTauri ? commands.takeStorageWarning() : Promise.resolve(false)),
   videoTracks: (id: string): Promise<VideoTracks> =>
     isTauri
       ? unwrap(commands.videoTracks(id))
@@ -243,7 +255,8 @@ const mock = (() => {
       hotkeys: {},
       replace_mac_system_shortcuts: false,
       auto_export: { enabled: false, folder: null, pattern: "Grabmark {date} {time}", format: "png" },
-      retention_days: null,
+      retention_days: 90,
+      storage: { library_gb: 10, export_gb: 10 },
       log_retention_days: 30,
       save_format: "png",
       content_search: true,
@@ -415,6 +428,32 @@ const mock = (() => {
         width: Math.min(c.width - 48, 640),
         height: 24,
       })).concat([{ text: "Kontakt: max.muster@example.com, IBAN CH93 0076 2011 6238 5295 7", x: 24, y: 620, width: 700, height: 24 }]);
+    },
+    /** Beispielgrössen: Videos gross, Bilder klein; jede zweite exportiert. */
+    async storageDetails(): Promise<StorageDetails> {
+      ensure();
+      const items: StorageItem[] = captures.map((c, i) => ({
+        capture: c,
+        libraryBytes: c.videoPath ? 2_400_000_000 : 380_000 * (i + 1),
+        exportBytes: i % 2 ? 0 : 290_000 * (i + 1),
+        exportPath: i % 2 ? null : `/Users/beispiel/Desktop/Grabmark ${c.id}.png`,
+      }));
+      const sum = (f: (x: StorageItem) => number) => items.reduce((a, x) => a + f(x), 0);
+      return {
+        summary: {
+          libraryBytes: sum((x) => x.libraryBytes ?? 0) * 4.6,
+          exportBytes: sum((x) => x.exportBytes ?? 0),
+          libraryLimit: 10_000_000_000,
+          exportLimit: 10_000_000_000,
+          libraryDir: "~/Library/Application Support/Grabmark/Library",
+          exportDir: "~/Desktop",
+        },
+        items,
+      };
+    },
+    async cleanup(ids: string[], library: boolean) {
+      if (library) for (const id of ids) await this.deleteCapture(id);
+      return ids.length * 1_000_000;
     },
     async deleteCapture(id: string) {
       const i = captures.findIndex((c) => c.id === id);

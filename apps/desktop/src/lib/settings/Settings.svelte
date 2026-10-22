@@ -338,6 +338,28 @@
             </select>
           </label>
           <p class="hint">{t("settings.retention_hint")}</p>
+          <h2>{t("settings.storage_limits")}</h2>
+          {#each [["library_gb", "settings.storage_library"], ["export_gb", "settings.storage_export"]] as const as [field, label] (field)}
+            <label class="row">
+              <span>{t(label)}</span>
+              <select
+                value={settings.storage?.[field] ?? 10}
+                onchange={(e) => {
+                  settings!.storage = { library_gb: 10, export_gb: 10, ...settings!.storage, [field]: +e.currentTarget.value };
+                  save();
+                }}
+              >
+                <option value={0}>{t("settings.storage_never")}</option>
+                {#each [1, 2, 5, 10, 20, 50, 100] as n (n)}
+                  <option value={n}>{t("settings.gb", { n: String(n) })}</option>
+                {/each}
+              </select>
+            </label>
+          {/each}
+          <div class="buttons">
+            <button onclick={() => api.openMain("cleanup")}>{t("storage.title")} …</button>
+          </div>
+          <p class="hint">{t("settings.storage_hint")}</p>
           <label class="row check">
             <input
               type="checkbox"

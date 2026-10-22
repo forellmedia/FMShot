@@ -195,6 +195,37 @@ impl Default for AutoExport {
     }
 }
 
+/// Warngrenzen für den Speicherplatz in GB; 0 = nie warnen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(default)]
+pub struct StorageLimits {
+    /// Bibliothek (Aufnahmen, Videos, Index).
+    pub library_gb: u32,
+    /// Dateien, die der Auto-Export geschrieben hat.
+    pub export_gb: u32,
+}
+
+impl Default for StorageLimits {
+    fn default() -> Self {
+        Self {
+            library_gb: 10,
+            export_gb: 10,
+        }
+    }
+}
+
+impl StorageLimits {
+    /// Grenze in Bytes; `None` = keine.
+    pub fn library_bytes(&self) -> Option<u64> {
+        (self.library_gb > 0).then(|| u64::from(self.library_gb) * 1_000_000_000)
+    }
+
+    pub fn export_bytes(&self) -> Option<u64> {
+        (self.export_gb > 0).then(|| u64::from(self.export_gb) * 1_000_000_000)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(default)]
@@ -213,6 +244,8 @@ pub struct Settings {
     pub auto_export: AutoExport,
     /// Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie.
     pub retention_days: Option<u32>,
+    /// Ab welcher Grösse Grabmark zum Aufräumen auffordert.
+    pub storage: StorageLimits,
     /// Log-Dateien nach so vielen Tagen löschen (10, 30, 60 oder 360).
     pub log_retention_days: u32,
     /// Format beim Speichern aus dem Editor (⌘S).
@@ -234,7 +267,8 @@ impl Default for Settings {
             hotkeys: BTreeMap::new(),
             replace_mac_system_shortcuts: false,
             auto_export: AutoExport::default(),
-            retention_days: None,
+            retention_days: Some(90),
+            storage: StorageLimits::default(),
             log_retention_days: 30,
             save_format: ImageFormat::Png,
             content_search: true,
@@ -373,6 +407,18 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"after_capture":"editor"}"#).unwrap();
         assert_eq!(s.after_capture, AfterCapture::Editor);
         assert!(s.copy_to_clipboard);
+        assert_eq!(s.retention_days, Some(90));
+        assert_eq!(s.storage.library_bytes(), Some(10_000_000_000));
+    }
+
+    #[test]
+    fn speichergrenze_null_heisst_nie() {
+        let limits = StorageLimits {
+            library_gb: 0,
+            export_gb: 2,
+        };
+        assert_eq!(limits.library_bytes(), None);
+        assert_eq!(limits.export_bytes(), Some(2_000_000_000));
     }
 
     #[test]

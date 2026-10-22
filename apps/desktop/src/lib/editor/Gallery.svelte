@@ -10,6 +10,7 @@
   import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
+  import StorageMeter from "./StorageMeter.svelte";
 
   /** Höchstens so viele auf einmal – sonst Filter eingrenzen. */
   const LIMIT = 1000;
@@ -287,6 +288,9 @@
       {#if !loading}<p class="empty">{t("gallery.none")}</p>{/if}
     {/each}
   </div>
+  <footer class="storage">
+    <StorageMeter />
+  </footer>
 </div>
 
 {#if tagPop}
@@ -312,8 +316,15 @@
     inset: 0;
     z-index: 20;
     display: grid;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto 1fr auto;
     background: var(--bg, var(--surface));
+  }
+  footer.storage {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px var(--space-4);
+    border-top: 1px solid var(--border);
+    background: var(--surface);
   }
   header {
     display: flex;

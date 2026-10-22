@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use encode::{encode_jpeg, encode_png, thumbnail};
 pub use index::{CaptureQuery, CaptureRecord};
-pub use store::{Library, LibraryError, NewCapture, VideoSlot};
+pub use store::{CaptureUsage, Library, LibraryError, NewCapture, StorageUsage, VideoSlot};
 
 /// Längste Kante der Vorschaubilder in Pixeln.
 pub const THUMBNAIL_MAX: u32 = 320;

@@ -390,6 +390,19 @@ pub(crate) fn export_path(conn: &Connection, id: &str) -> rusqlite::Result<Optio
     )
 }
 
+/// Alle bekannten Export-Pfade: `(id, pfad)`.
+pub(crate) fn export_paths(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt =
+        conn.prepare("SELECT id, export_path FROM captures WHERE export_path IS NOT NULL")?;
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect()
+}
+
+pub(crate) fn clear_export_path(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE captures SET export_path = NULL WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 /// IDs älter als `before_ms`, ohne Stern.
 pub(crate) fn expired(conn: &Connection, before_ms: i64) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT id FROM captures WHERE created_at < ?1 AND starred = 0")?;

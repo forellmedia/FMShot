@@ -12,6 +12,7 @@ mod paths;
 mod scroll;
 mod services;
 mod settings;
+mod storage;
 mod tray;
 mod updater;
 mod video;
@@ -74,6 +75,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         services::report_bug,
         logs::log_frontend,
         logs::open_log_folder,
+        storage::storage_summary,
+        storage::storage_details,
+        storage::cleanup,
+        storage::open_storage_folder,
+        storage::take_storage_warning,
         updater::check_for_update,
         updater::install_update,
         vision::content_search_status,
@@ -162,6 +168,7 @@ pub fn run() {
             app.manage(video_edit::VideoEditState::default());
             app.manage(tray::PopoverState::default());
             app.manage(services::Services::new());
+            app.manage(storage::StorageState::default());
             let t = Instant::now();
             app.manage(vision::VisionState::new(app.handle()));
             step("Bildinhalt vorbereiten", t);

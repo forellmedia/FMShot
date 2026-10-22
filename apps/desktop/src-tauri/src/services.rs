@@ -72,6 +72,7 @@ pub fn start(app: &AppHandle) {
         loop {
             purge(&purge_app);
             crate::logs::prune_now(&purge_app);
+            crate::storage::check(&purge_app);
             std::thread::sleep(Duration::from_secs(6 * 3600));
         }
     });
@@ -201,6 +202,12 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
         log::error!("Auto-Export: {e}");
     }
     index_capture(app, rec);
+    // Speicher prüfen, wenn die Vorschau wieder weg ist.
+    let check_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(10));
+        crate::storage::check(&check_app);
+    });
 
     // Scroll-Aufnahmen will man fast immer gleich ansehen.
     let after = if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {

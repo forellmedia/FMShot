@@ -1363,6 +1363,12 @@ fn disk_state(free: u64) -> DiskState {
     }
 }
 
+/// Wird gerade aufgenommen oder ein Video gesichert?
+pub fn is_active(app: &AppHandle) -> bool {
+    let state = app.state::<VideoState>();
+    state.active.load(Ordering::Acquire) || state.starting.load(Ordering::Acquire)
+}
+
 /// Läuft eine Aufnahme (bis das Video gesichert ist)? Setzt beim Ende zurück.
 struct Active(AppHandle);
 

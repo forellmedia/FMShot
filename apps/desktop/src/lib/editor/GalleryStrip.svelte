@@ -1,11 +1,13 @@
 <script lang="ts">
   // Bildliste rechts neben der Leinwand: Suche oben (bleibt stehen), darunter
   // die Aufnahmen nach Tagen, neueste zuerst. Nur die Liste scrollt.
-  import { tick } from "svelte";
-  import { fileUrl, type CaptureInfo } from "$lib/api";
+  import { onMount, tick } from "svelte";
+  import { api, fileUrl, on, type CaptureInfo } from "$lib/api";
   import { locale, t } from "$lib/i18n";
   import { groupByDay } from "./gallery";
+  import Cleanup from "./Cleanup.svelte";
   import Icon from "./Icon.svelte";
+  import StorageMeter from "./StorageMeter.svelte";
   import { editor } from "./state.svelte";
 
   const MODES = ["region", "window", "screen", "scroll", "video"] as const;
@@ -41,6 +43,18 @@
       const r = thumb.getBoundingClientRect();
       if (r.top < box.top || r.bottom > box.bottom) thumb.scrollIntoView({ block: "nearest" });
     });
+  });
+
+  // Der Hintergrund-Job meldet „zu voll“: Aufräumen öffnen (auch wenn das
+  // Fenster erst dafür geöffnet wurde und die Meldung schon wartet).
+  onMount(() => {
+    const take = async () => {
+      if (await api.takeStorageWarning()) editor.cleanupOpen = true;
+    };
+    void take();
+    let stop: (() => void) | undefined;
+    void on("storage-warning", take).then((f) => (stop = f));
+    return () => stop?.();
   });
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,7 +104,12 @@
       <p class="empty">{t("gallery.empty", { shortcut: editor.hotkey("capture_region") })}</p>
     {/each}
   </div>
+  <StorageMeter compact />
 </aside>
+
+{#if editor.cleanupOpen}
+  <Cleanup />
+{/if}
 
 <style>
   .side {
