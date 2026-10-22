@@ -42,7 +42,18 @@ impl GifSink {
     /// `source` = Grösse der Bilder, die ankommen.
     pub fn create(path: &Path, source: (u32, u32)) -> Result<Self, String> {
         let size = gif_size(source);
-        let file = File::create(path).map_err(|e| e.to_string())?;
+        log::debug!(
+            "GIF {}: {}×{} → {}×{}, {GIF_FPS} fps",
+            path.display(),
+            source.0,
+            source.1,
+            size.0,
+            size.1
+        );
+        let file = File::create(path).map_err(|e| {
+            log::error!("GIF {} anlegen fehlgeschlagen: {e}", path.display());
+            e.to_string()
+        })?;
         let mut encoder =
             ::gif::Encoder::new(BufWriter::new(file), size.0 as u16, size.1 as u16, &[])
                 .map_err(|e| e.to_string())?;
@@ -70,7 +81,10 @@ impl GifSink {
             QUANT_SPEED,
         );
         frame.delay = (delay.as_millis() / 10).clamp(2, u16::MAX as u128) as u16;
-        encoder.write_frame(&frame).map_err(|e| e.to_string())
+        encoder.write_frame(&frame).map_err(|e| {
+            log::error!("GIF-Bild schreiben fehlgeschlagen: {e}");
+            e.to_string()
+        })
     }
 }
 
@@ -133,12 +147,17 @@ impl FrameSink for GifSink {
         }
         // Encoder schliessen = Datei abschliessen.
         drop(self.encoder.take());
+        log::debug!("GIF {} abgeschlossen", self.path.display());
         Ok(())
     }
 
     fn cancel(&mut self) {
         drop(self.encoder.take());
-        let _ = std::fs::remove_file(&self.path);
+        if let Err(e) = std::fs::remove_file(&self.path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("GIF {} löschen fehlgeschlagen: {e}", self.path.display());
+        }
     }
 }
 

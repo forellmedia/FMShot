@@ -275,7 +275,7 @@
       }
       cache.invalidate();
       editor.viewport = { width, height };
-      if (first) editor.fit();
+      if (first || editor.fitted) editor.fit();
       else editor.setPan(editor.panX, editor.panY);
       renderNow();
     });

@@ -40,6 +40,11 @@ impl LayerOverlay {
         if doc.layers.iter().all(|l| !l.visible) {
             return None;
         }
+        log::debug!(
+            "Ebenen über dem Video: {} ({} Bilder)",
+            doc.layers.len(),
+            assets.len()
+        );
         Some(Self {
             renderer: Renderer::new(),
             doc,

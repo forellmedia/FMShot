@@ -18,6 +18,7 @@
 
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::time::Instant;
 
 use grabmark_core::{Rect, RgbaImage};
 use windows::Wdk::System::SystemServices::RtlGetVersion;
@@ -84,7 +85,21 @@ impl WindowsCapturer {
 impl ScreenCapturer for WindowsCapturer {
     fn displays(&self) -> Result<Vec<Display>> {
         let _dpi = DpiGuard::new();
-        Ok(monitors()
+        let monitors = monitors();
+        log::debug!("{} Monitor(e)", monitors.len());
+        for m in &monitors {
+            log::debug!(
+                "Monitor {}: {}×{} bei ({}, {}), Skalierung {}, Hauptmonitor={}",
+                m.id,
+                m.rect.right - m.rect.left,
+                m.rect.bottom - m.rect.top,
+                m.rect.left,
+                m.rect.top,
+                m.scale,
+                m.primary
+            );
+        }
+        Ok(monitors
             .iter()
             .map(|m| Display {
                 id: m.id,
@@ -111,6 +126,8 @@ impl ScreenCapturer for WindowsCapturer {
 
     fn windows(&self, own: OwnWindows) -> Result<Vec<WindowInfo>> {
         let _dpi = DpiGuard::new();
+        let started = Instant::now();
+        let mode = own;
         let own = (own == OwnWindows::Hidden).then(|| unsafe { GetCurrentProcessId() });
         let mut result = Vec::new();
         for hwnd in top_level_windows() {
@@ -118,13 +135,20 @@ impl ScreenCapturer for WindowsCapturer {
                 result.push(info);
             }
         }
+        log::debug!(
+            "{} Fenster aufgelistet ({mode:?}) in {} ms",
+            result.len(),
+            started.elapsed().as_millis()
+        );
         Ok(result)
     }
 
     fn capture_window(&self, window_id: u32) -> Result<Frame> {
         let _dpi = DpiGuard::new();
+        let started = Instant::now();
         let hwnd = hwnd_from_id(window_id);
         if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            log::warn!("Fenster {window_id} zum Aufnehmen nicht gefunden");
             return Err(CaptureError::Backend(format!(
                 "Fenster {window_id} nicht gefunden"
             )));
@@ -132,16 +156,25 @@ impl ScreenCapturer for WindowsCapturer {
         let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
         let info = monitor_info(monitor);
         let frame = frame_bounds(hwnd)?;
-        let mut image = print_window(hwnd, &frame).or_else(|_| {
-            // Manche Programme zeichnen sich nicht für PrintWindow – dann den
-            // sichtbaren Bereich vom Bildschirm nehmen.
-            let _hidden = HiddenOwnWindows::hide();
-            blit_screen(&frame)
-        })?;
+        let mut image = print_window(hwnd, &frame)
+            .or_else(|e| {
+                // Manche Programme zeichnen sich nicht für PrintWindow – dann den
+                // sichtbaren Bereich vom Bildschirm nehmen.
+                log::debug!("Fenster {window_id}: {e} – nehme Bildschirmbereich");
+                let _hidden = HiddenOwnWindows::hide();
+                blit_screen(&frame)
+            })
+            .inspect_err(|e| log::error!("Fenster {window_id} aufnehmen fehlgeschlagen: {e}"))?;
         if has_rounded_corners(hwnd) {
             let radius = 8.0 * info.as_ref().map_or(1.0, |m| m.scale);
             round_corners(&mut image, radius);
         }
+        log::info!(
+            "Fenster {window_id} aufgenommen: {}×{} px in {} ms",
+            image.width(),
+            image.height(),
+            started.elapsed().as_millis()
+        );
         Ok(Frame {
             display_id: info.as_ref().map_or(0, |m| m.id),
             scale_factor: info.as_ref().map_or(1.0, |m| m.scale),
@@ -218,12 +251,14 @@ impl ScreenCapturer for WindowsCapturer {
 
     fn capture_all(&self, own: OwnWindows) -> Result<Vec<Frame>> {
         let _dpi = DpiGuard::new();
+        let started = Instant::now();
         let monitors = monitors();
         if monitors.is_empty() {
+            log::error!("Keine Monitore gefunden");
             return Err(CaptureError::Backend("Keine Monitore gefunden".into()));
         }
         let _hidden = (own == OwnWindows::Hidden).then(HiddenOwnWindows::hide);
-        monitors
+        let frames = monitors
             .iter()
             .map(|m| {
                 Ok(Frame {
@@ -232,7 +267,14 @@ impl ScreenCapturer for WindowsCapturer {
                     image: blit_screen(&m.rect)?,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()
+            .inspect_err(|e| log::error!("Monitore aufnehmen fehlgeschlagen: {e}"))?;
+        log::info!(
+            "{} Monitor(e) aufgenommen ({own:?}) in {} ms",
+            frames.len(),
+            started.elapsed().as_millis()
+        );
+        Ok(frames)
     }
 }
 
@@ -283,7 +325,9 @@ fn monitor_info(h: HMONITOR) -> Option<Monitor> {
         .as_bool()
         .then_some(())?;
     let (mut dx, mut dy) = (96u32, 96u32);
-    let _ = unsafe { GetDpiForMonitor(h, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) };
+    if let Err(e) = unsafe { GetDpiForMonitor(h, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) } {
+        log::debug!("DPI des Monitors unbekannt, nehme 96: {}", e.message());
+    }
     let device = wide_to_string(&info.szDevice);
     Some(Monitor {
         id: monitor_id(h),
@@ -487,6 +531,10 @@ impl HiddenOwnWindows {
             }
         }
         if !hidden.is_empty() {
+            log::debug!(
+                "{} eigene(s) Fenster für die Aufnahme ausgeblendet",
+                hidden.len()
+            );
             // Warten, bis der Desktop Window Manager ohne die Fenster gezeichnet hat.
             let _ = unsafe { DwmFlush() };
         }
@@ -497,7 +545,12 @@ impl HiddenOwnWindows {
 impl Drop for HiddenOwnWindows {
     fn drop(&mut self) {
         for &hwnd in &self.0 {
-            let _ = unsafe { SetWindowDisplayAffinity(hwnd, WDA_NONE) };
+            if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, WDA_NONE) } {
+                log::warn!(
+                    "Eigenes Fenster wieder einblenden fehlgeschlagen: {}",
+                    e.message()
+                );
+            }
         }
     }
 }

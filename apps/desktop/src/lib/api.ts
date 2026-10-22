@@ -33,7 +33,10 @@ export const isTauri =
 
 async function unwrap<T>(p: Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>) {
   const r = await p;
-  if (r.status === "error") throw new Error(r.error);
+  if (r.status === "error") {
+    logToBackend("warn", `Befehl fehlgeschlagen: ${r.error}`);
+    throw new Error(r.error);
+  }
   return r.data;
 }
 
@@ -48,6 +51,13 @@ export async function fileBytes(path: string): Promise<Uint8Array> {
   const res = await fetch(await fileUrl(path));
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
+}
+
+/** Meldung ins Log der App schreiben (im Browser: nur Konsole). Darf selbst
+ *  nie werfen, sonst entsteht beim Melden eines Fehlers ein neuer. */
+export function logToBackend(level: "error" | "warn" | "info" | "debug", message: string) {
+  if (!isTauri) return;
+  commands.logFrontend(level, message).catch(() => {});
 }
 
 export const api = {
@@ -109,10 +119,11 @@ export const api = {
   contentSearchStatus: (): Promise<ContentSearchStatus> =>
     isTauri ? unwrap(commands.contentSearchStatus()) : Promise.resolve({ available: true, done: 3, total: 4 }),
   reportBug: (): Promise<null> => (isTauri ? unwrap(commands.reportBug()) : Promise.resolve(null)),
+  openLogFolder: (): Promise<null> => (isTauri ? unwrap(commands.openLogFolder()) : Promise.resolve(null)),
   videoTracks: (id: string): Promise<VideoTracks> =>
     isTauri
       ? unwrap(commands.videoTracks(id))
-      : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: null, input: null, faces: null }),
+      : Promise.resolve({ screen: `mock://${id}`, webcam: null, systemAudio: null, microphone: MOCK_MIC, input: null, faces: null }),
   exportVideo: (id: string): Promise<CaptureInfo> =>
     isTauri ? unwrap(commands.exportVideo(id)) : mock.getCapture(id),
   videoIsCurrent: (id: string): Promise<boolean> => (isTauri ? commands.videoIsCurrent(id) : Promise.resolve(true)),
@@ -233,6 +244,7 @@ const mock = (() => {
       replace_mac_system_shortcuts: false,
       auto_export: { enabled: false, folder: null, pattern: "Grabmark {date} {time}", format: "png" },
       retention_days: null,
+      log_retention_days: 30,
       save_format: "png",
       content_search: true,
       video: {
@@ -304,6 +316,7 @@ const mock = (() => {
       return captures.filter((c) => !query || c.id.includes(query) || "lorem fehler".includes(query.toLowerCase()));
     },
     fileUrl: (path: string) => {
+      if (path === MOCK_MIC) return mockMicUrl();
       const asset = /_asset_(.+)\.png$/.exec(path);
       return (asset ? images.get(`mock/${asset[1]}`) : images.get(path)) ?? path;
     },
@@ -415,3 +428,33 @@ const mock = (() => {
     },
   };
 })();
+
+/** Beispiel-Tonspur: Sprechpausen als an- und abschwellender Ton (WAV). */
+const MOCK_MIC = "mock://mic.wav";
+let mockMic: string | null = null;
+function mockMicUrl(): string {
+  if (mockMic) return mockMic;
+  const rate = 8000;
+  const n = rate * 83;
+  const view = new DataView(new ArrayBuffer(44 + n * 2));
+  const text = (o: number, v: string) => [...v].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  view.setUint32(4, 36 + n * 2, true);
+  text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, "data");
+  view.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const speech = Math.max(0, Math.sin(t * 1.3) * Math.sin(t * 7.1));
+    view.setInt16(44 + i * 2, Math.sin(t * 2 * Math.PI * 220) * speech * 12000, true);
+  }
+  mockMic = URL.createObjectURL(new Blob([view.buffer], { type: "audio/wav" }));
+  return mockMic;
+}

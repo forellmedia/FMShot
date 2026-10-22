@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use grabmark_capture::PixelRect;
 use grabmark_overlay::{ScrollAction, ScrollUi, Selection};
@@ -45,6 +45,7 @@ pub fn finish_running(app: &AppHandle) -> bool {
     let state = app.state::<ScrollState>();
     let guard = state.session.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(flags) = guard.as_ref() {
+        log::debug!("Scroll-Aufnahme: Fertig per Tastenkürzel");
         flags.finish.store(true, Ordering::Release);
         true
     } else {
@@ -54,6 +55,13 @@ pub fn finish_running(app: &AppHandle) -> bool {
 
 /// Wird nach der Bereichsauswahl aufgerufen.
 pub fn begin(app: &AppHandle, sel: Selection, scale: f32, auto: bool) {
+    log::info!(
+        "Scroll-Aufnahme Start: {}×{} auf Monitor {}, Massstab {scale}, {}",
+        sel.width,
+        sel.height,
+        sel.display_id,
+        if auto { "automatisch" } else { "von Hand" }
+    );
     let flags = Flags {
         finish: Arc::new(AtomicBool::new(false)),
         cancel: Arc::new(AtomicBool::new(false)),
@@ -71,14 +79,17 @@ pub fn begin(app: &AppHandle, sel: Selection, scale: f32, auto: bool) {
         t("scroll.hint", &[])
     };
     let (finish_label, cancel_label) = (t("scroll.finish", &[]), t("scroll.cancel", &[]));
-    let _ = app.run_on_main_thread(move || {
+    let opened = app.run_on_main_thread(move || {
         let ui = grabmark_overlay::open_scroll_ui(
             sel.display_id,
             rect,
             (&status, &finish_label, &cancel_label),
-            Box::new(move |action| match action {
-                ScrollAction::Finish => ui_flags.finish.store(true, Ordering::Release),
-                ScrollAction::Cancel => ui_flags.cancel.store(true, Ordering::Release),
+            Box::new(move |action| {
+                log::debug!("Scroll-Leiste: {action:?}");
+                match action {
+                    ScrollAction::Finish => ui_flags.finish.store(true, Ordering::Release),
+                    ScrollAction::Cancel => ui_flags.cancel.store(true, Ordering::Release),
+                }
             }),
         );
         match ui {
@@ -86,12 +97,16 @@ pub fn begin(app: &AppHandle, sel: Selection, scale: f32, auto: bool) {
             Err(e) => log::error!("Scroll-Leiste: {e}"),
         }
     });
+    if let Err(e) = opened {
+        log::error!("Scroll-Leiste: Haupt-Thread nicht erreichbar: {e}");
+    }
 
     let app = app.clone();
     std::thread::spawn(move || run(&app, sel, scale, auto, flags));
 }
 
 fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
+    let started = Instant::now();
     let state = app.state::<CaptureState>();
     let rect = PixelRect {
         x: sel.x,
@@ -100,7 +115,12 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
         height: sel.height,
     };
     // Mitte des Bereichs in globalen Punkten – dort wird automatisch gescrollt.
-    let center = state.capturer.displays().ok().and_then(|ds| {
+    let displays = state
+        .capturer
+        .displays()
+        .inspect_err(|e| log::warn!("Scroll-Aufnahme: Monitore: {e}"))
+        .ok();
+    let center = displays.and_then(|ds| {
         let d = ds.into_iter().find(|d| d.id == sel.display_id)?;
         let s = d.scale_factor.max(1.0);
         Some((
@@ -110,10 +130,21 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
     });
     // Ein Schritt ≈ 70 % der sichtbaren Höhe, damit sich Bilder überlappen.
     let step = ((sel.height as f32 / scale.max(1.0)) * 0.7).round() as i32;
+    if auto {
+        log::debug!("Scroll-Aufnahme: Schritt {step} Punkte, Mitte {center:?}");
+        if center.is_none() {
+            log::warn!(
+                "Scroll-Aufnahme: Monitor {} nicht gefunden – kein automatisches Scrollen",
+                sel.display_id
+            );
+        }
+    }
 
     let mut stitcher = Stitcher::new(MAX_HEIGHT);
     let mut unchanged = 0;
     let mut error = None;
+    // Zähler für die Zusammenfassung am Ende (nicht je Bild ins Log).
+    let (mut frames, mut no_match) = (0u32, 0u32);
     // Kurz warten, bis das Overlay verschwunden ist.
     std::thread::sleep(Duration::from_millis(120));
     while !flags.finish.load(Ordering::Acquire) && !flags.cancel.load(Ordering::Acquire) {
@@ -125,6 +156,10 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
             }
         };
         let result = stitcher.push(frame.image);
+        frames += 1;
+        if result == Push::NoMatch {
+            no_match += 1;
+        }
         let height = stitcher.height();
         let status = match result {
             Push::NoMatch => t("scroll.too_fast", &[]),
@@ -139,6 +174,7 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
             })
         });
         if stitcher.is_full() {
+            log::warn!("Scroll-Aufnahme: Höchsthöhe {MAX_HEIGHT} px erreicht");
             break;
         }
         if auto {
@@ -148,6 +184,7 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
                 0
             };
             if unchanged >= AUTO_END_AFTER {
+                log::debug!("Scroll-Aufnahme: Seitenende erreicht");
                 break;
             }
             if let Some(c) = center
@@ -166,23 +203,41 @@ fn run(app: &AppHandle, sel: Selection, scale: f32, auto: bool, flags: Flags) {
         .session
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
-    let _ = app.run_on_main_thread(|| {
+    if let Err(e) = app.run_on_main_thread(|| {
         UI.with(|u| {
             if let Some(ui) = u.borrow_mut().take() {
                 ui.close();
             }
         })
-    });
+    }) {
+        log::warn!("Scroll-Leiste schliessen: {e}");
+    }
 
+    let cancelled = flags.cancel.load(Ordering::Acquire);
+    log::info!(
+        "Scroll-Aufnahme Ende: {frames} Bilder ({no_match} ohne Anschluss), Höhe {} px, {:.1} s{}",
+        stitcher.height(),
+        started.elapsed().as_secs_f64(),
+        if cancelled { ", abgebrochen" } else { "" }
+    );
     if let Some(e) = error {
         capture::show_error(app, &e);
         return;
     }
-    if flags.cancel.load(Ordering::Acquire) {
+    if cancelled {
         return;
     }
+    let stitch = Instant::now();
     match stitcher.finish() {
-        Some(image) => capture::finish_scroll(app, image, scale),
+        Some(image) => {
+            log::info!(
+                "Scroll-Bild zusammengesetzt: {}×{} ({:.0} ms)",
+                image.width(),
+                image.height(),
+                stitch.elapsed().as_secs_f64() * 1000.0
+            );
+            capture::finish_scroll(app, image, scale, started);
+        }
         None => log::warn!("Scroll-Aufnahme ohne Bild"),
     }
 }

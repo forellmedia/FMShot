@@ -91,16 +91,30 @@ impl VisionState {
         });
         let cached = file
             .as_ref()
-            .and_then(|f| std::fs::read(f).ok())
-            .and_then(|b| Tagger::from_bytes(&b).ok());
+            // Fehlt beim ersten Start oder nach neuer Begriffsliste – normal.
+            .and_then(|f| {
+                std::fs::read(f)
+                    .inspect_err(|e| log::debug!("Begriffe-Zwischenspeicher: {e}"))
+                    .ok()
+            })
+            .and_then(|b| {
+                Tagger::from_bytes(&b)
+                    .inspect_err(|e| log::warn!("Begriffe-Zwischenspeicher unlesbar: {e}"))
+                    .ok()
+            });
         let tagger = match cached {
-            Some(t) => t,
+            Some(t) => {
+                log::debug!("Begriffe aus dem Zwischenspeicher");
+                t
+            }
             None => {
                 let start = Instant::now();
                 let t = Tagger::build(&*self.text_encoder(dir)?).map_err(|e| e.to_string())?;
                 log::info!("Begriffe berechnen: {:?}", start.elapsed());
                 if let Some(f) = &file {
-                    let _ = f.parent().map(std::fs::create_dir_all);
+                    if let Some(Err(e)) = f.parent().map(std::fs::create_dir_all) {
+                        log::warn!("Begriffe zwischenspeichern: {e}");
+                    }
                     if let Err(e) = std::fs::write(f, t.to_bytes()) {
                         log::warn!("Begriffe zwischenspeichern: {e}");
                     }
@@ -117,12 +131,28 @@ impl VisionState {
         let generation = self.generation.load(Ordering::Acquire);
         let mut cache = lock(&self.vectors);
         if cache.0 != generation {
-            let all = library
+            let start = Instant::now();
+            let mut broken = 0;
+            let all: Vec<(String, Embedding)> = library
                 .embeddings(MODEL_ID)
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .filter_map(|(id, b)| ImageVectors::from_bytes(&b).ok().map(|v| (id, v.whole)))
+                .filter_map(|(id, b)| match ImageVectors::from_bytes(&b) {
+                    Ok(v) => Some((id, v.whole)),
+                    Err(_) => {
+                        broken += 1;
+                        None
+                    }
+                })
                 .collect();
+            if broken > 0 {
+                log::warn!("Bildvektoren: {broken} unlesbar");
+            }
+            log::debug!(
+                "Bildvektoren geladen: {} in {:?}",
+                all.len(),
+                start.elapsed()
+            );
             *cache = (generation, Arc::new(all));
         }
         Ok(cache.1.clone())
@@ -172,12 +202,13 @@ pub fn start(app: &AppHandle) {
     };
     let app = app.clone();
     std::thread::spawn(move || {
+        log::debug!("Bildinhalt: Hintergrund-Thread läuft");
         let mut encoder: Option<(ImageEncoder, Instant)> = None;
         loop {
             if settings::get(&app).content_search {
                 index_pending(&app, &dir, &mut encoder);
-            } else {
-                encoder = None;
+            } else if encoder.take().is_some() {
+                log::info!("Bildmodell freigegeben (Erkennung aus)");
             }
             // Auf neue Aufnahmen warten; zwischendurch Unbenutztes freigeben.
             match rx.recv_timeout(Duration::from_secs(60)) {
@@ -203,8 +234,10 @@ pub fn start(app: &AppHandle) {
 
 /// Neue Aufnahme oder geänderte Einstellung: nachsehen, ob es Arbeit gibt.
 pub fn wake(app: &AppHandle) {
-    if let Some(tx) = lock(&app.state::<VisionState>().wakeup).as_ref() {
-        let _ = tx.send(());
+    if let Some(tx) = lock(&app.state::<VisionState>().wakeup).as_ref()
+        && let Err(e) = tx.send(())
+    {
+        log::debug!("Bildinhalt wecken: {e}");
     }
 }
 
@@ -212,6 +245,8 @@ fn index_pending(app: &AppHandle, dir: &Path, encoder: &mut Option<(ImageEncoder
     let library = app.state::<CaptureState>().library.clone();
     let state = app.state::<VisionState>();
     let mut changed = false;
+    let started = Instant::now();
+    let (mut done, mut failed) = (0u32, 0u32);
     loop {
         if !settings::get(app).content_search {
             break;
@@ -235,15 +270,22 @@ fn index_pending(app: &AppHandle, dir: &Path, encoder: &mut Option<(ImageEncoder
             }
             crate::services::timing(app, format!("Bildmodell laden: {:?}", start.elapsed()));
         }
+        log::debug!("Bildinhalt: {} Aufnahmen in diesem Durchgang", ids.len());
         let Some((enc, used)) = encoder.as_mut() else {
             return;
         };
         for id in ids {
+            let one = Instant::now();
             let vector = match embed(&library, enc, &id) {
-                Ok(v) => v,
+                Ok(v) => {
+                    log::debug!("Bildinhalt {id}: {:?}", one.elapsed());
+                    done += 1;
+                    v
+                }
                 Err(e) => {
                     // Leerer Vektor: nicht immer wieder versuchen.
                     log::warn!("Bildinhalt {id}: {e}");
+                    failed += 1;
                     Vec::new()
                 }
             };
@@ -260,6 +302,12 @@ fn index_pending(app: &AppHandle, dir: &Path, encoder: &mut Option<(ImageEncoder
     if changed {
         state.generation.fetch_add(1, Ordering::Release);
     }
+    if done > 0 || failed > 0 {
+        log::info!(
+            "Bildinhalt: {done} Aufnahmen erkannt, {failed} fehlgeschlagen ({:.1} s)",
+            started.elapsed().as_secs_f64()
+        );
+    }
     tag_pending(app, &library, dir);
 }
 
@@ -267,6 +315,7 @@ fn index_pending(app: &AppHandle, dir: &Path, encoder: &mut Option<(ImageEncoder
 fn tag_pending(app: &AppHandle, library: &Library, dir: &Path) {
     let version = tags_version();
     let mut tagged = 0;
+    let started = Instant::now();
     loop {
         let pending = match library.pending_tags(MODEL_ID, &version, 100) {
             Ok(p) if !p.is_empty() => p,
@@ -286,7 +335,10 @@ fn tag_pending(app: &AppHandle, library: &Library, dir: &Path) {
         for (id, bytes) in pending {
             let tags = ImageVectors::from_bytes(&bytes)
                 .map(|v| tagger.tags(&v))
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    log::warn!("Stichwörter {id}: Vektor unlesbar: {e}");
+                    Vec::new()
+                });
             if let Err(e) = library.set_tags(&id, &version, &tags) {
                 log::error!("Stichwörter {id}: {e}");
                 return;
@@ -295,21 +347,32 @@ fn tag_pending(app: &AppHandle, library: &Library, dir: &Path) {
         }
     }
     if tagged > 0 {
-        log::info!("Stichwörter für {tagged} Aufnahmen");
-        let _ = app.emit("library-changed", ());
+        log::info!(
+            "Stichwörter für {tagged} Aufnahmen ({:?})",
+            started.elapsed()
+        );
+        if let Err(e) = app.emit("library-changed", ()) {
+            log::debug!("Ereignis library-changed: {e}");
+        }
     }
 }
 
 fn progress(app: &AppHandle, library: &Library) {
-    if let Ok((done, total)) = library.embedding_progress(MODEL_ID) {
-        let _ = app.emit(
-            "content-index-progress",
-            ContentSearchStatus {
-                available: true,
-                done,
-                total,
-            },
-        );
+    match library.embedding_progress(MODEL_ID) {
+        Ok((done, total)) => {
+            log::debug!("Bildinhalt: {done} von {total}");
+            if let Err(e) = app.emit(
+                "content-index-progress",
+                ContentSearchStatus {
+                    available: true,
+                    done,
+                    total,
+                },
+            ) {
+                log::debug!("Ereignis content-index-progress: {e}");
+            }
+        }
+        Err(e) => log::warn!("Bildinhalt-Fortschritt: {e}"),
     }
 }
 
@@ -350,9 +413,11 @@ pub fn search(app: &AppHandle, text: &str) -> Vec<String> {
             .map_err(|e| e.to_string())?;
         let vectors = state.vectors(&app.state::<CaptureState>().library)?;
         let hits = tagger.search(&query, vectors.iter().map(|(id, e)| (id.as_str(), e)));
+        // Ohne Suchtext – der ist privat.
         log::debug!(
-            "Suche nach Bildinhalt „{text}“: {} Treffer, {:?}",
+            "Suche nach Bildinhalt: {} Treffer in {} Bildern, {:?}",
             hits.len(),
+            vectors.len(),
             start.elapsed()
         );
         Ok(hits
@@ -442,6 +507,7 @@ pub fn content_search_status(app: AppHandle) -> Result<ContentSearchStatus, Stri
         .state::<CaptureState>()
         .library
         .embedding_progress(MODEL_ID)
+        .inspect_err(|e| log::error!("Bildinhalt-Stand: {e}"))
         .map_err(|e| e.to_string())?;
     Ok(ContentSearchStatus {
         available,

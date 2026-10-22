@@ -25,6 +25,10 @@ pub fn recovered(
     has_screen: bool,
     has_webcam: bool,
 ) -> Recovered {
+    log::debug!(
+        "Video wiederherstellen: Zwischenstand={}, {duration_ms} ms, Bildschirm={has_screen}, Webcam={has_webcam}",
+        checkpoint.is_some()
+    );
     let cp = checkpoint.unwrap_or(fallback);
     // Ohne Bildschirm-Spur war es „nur Webcam“.
     let camera_only = (!has_screen).then(|| cp.camera_only.unwrap_or_default());

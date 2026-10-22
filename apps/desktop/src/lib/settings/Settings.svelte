@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
   import type { DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
+  import { DEFAULT_FPS, FPS_CHOICES } from "$lib/fps";
   import { t, type MessageKey } from "$lib/i18n";
   import { currentPlatform, formatShortcut } from "$lib/shortcuts";
 
@@ -398,14 +399,15 @@
           <label class="row">
             <span>{t("video.fps")}</span>
             <select
-              value={String(settings.video?.fps ?? 30)}
+              value={String(settings.video?.fps ?? DEFAULT_FPS)}
               onchange={(e) => {
                 settings!.video = { ...settings!.video, fps: Number(e.currentTarget.value) };
                 save();
               }}
             >
-              <option value="30">30</option>
-              <option value="60">60</option>
+              {#each FPS_CHOICES as fps (fps)}
+                <option value={String(fps)}>{fps}</option>
+              {/each}
             </select>
           </label>
           <p class="hint">{t("settings.video_hint")}</p>
@@ -435,6 +437,24 @@
             <button onclick={() => api.reportBug()}>{t("settings.report_bug")}</button>
           </div>
           <p class="hint">{t("settings.report_hint")}</p>
+          <label class="row">
+            <span>{t("settings.log_retention")}</span>
+            <select
+              value={settings.log_retention_days ?? 30}
+              onchange={(e) => {
+                settings!.log_retention_days = +e.currentTarget.value;
+                save();
+              }}
+            >
+              {#each [10, 30, 60, 360] as n (n)}
+                <option value={n}>{t("settings.days", { n: String(n) })}</option>
+              {/each}
+            </select>
+          </label>
+          <div class="buttons">
+            <button onclick={() => api.openLogFolder()}>{t("settings.open_logs")}</button>
+          </div>
+          <p class="hint">{t("settings.log_hint")}</p>
           {#if diagnostics}
             <h2>{t("settings.diagnostics")}</h2>
             <p class="hint">{diagnostics.platform} · {diagnostics.library}</p>

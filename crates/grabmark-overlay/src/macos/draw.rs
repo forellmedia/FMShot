@@ -283,7 +283,10 @@ pub(crate) fn open(
     let screen = screens
         .iter()
         .find(|s| screen_number(s) == Some(display_id))
-        .or_else(|| screens.firstObject())
+        .or_else(|| {
+            log::warn!("Zeichenfläche: Monitor {display_id} nicht gefunden – nehme den ersten");
+            screens.firstObject()
+        })
         .ok_or(OverlayError::NoScreens)?;
     let sf = screen.frame();
     let vf = screen.visibleFrame();

@@ -7,6 +7,7 @@
 //! kennt nur die Schnittstellen [`FrameSource`] und [`FrameSink`]. So lässt
 //! sich der Export ohne Bildschirm und ohne Videodateien testen.
 
+pub mod audio;
 pub mod cursor;
 pub mod edit;
 pub mod head;

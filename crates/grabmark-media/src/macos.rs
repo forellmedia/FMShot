@@ -18,13 +18,13 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 
 pub(crate) mod codec;
 mod live;
 pub(crate) mod vision;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
@@ -121,6 +121,8 @@ struct Track {
     input: SendRetained<AVAssetWriterInput>,
     path: PathBuf,
     samples: u64,
+    /// Ausgelassene Proben (Schreiber nicht bereit) – nur fürs Protokoll.
+    dropped: u64,
 }
 
 /// Wie eine Spur nach `Track::finish` dasteht.
@@ -165,27 +167,55 @@ impl Track {
         let writer = &self.writer.0;
         unsafe {
             if self.samples > 0 && writer.status() == AVAssetWriterStatus::Failed {
+                log::warn!(
+                    "Spur {} unvollständig: {}",
+                    self.path.display(),
+                    writer_error_detail(writer)
+                );
                 return Ok(Finished::Partial);
             }
             if writer.status() != AVAssetWriterStatus::Writing || self.samples == 0 {
+                log::debug!(
+                    "Spur {} leer (Status {:?}) – verworfen",
+                    self.path.display(),
+                    writer.status()
+                );
                 writer.cancelWriting();
-                let _ = std::fs::remove_file(&self.path);
+                remove_quietly(&self.path);
                 return Ok(Finished::Empty);
             }
             writer.endSessionAtSourceTime(end);
             self.input.0.markAsFinished();
         }
+        let started = Instant::now();
         let (tx, rx) = mpsc::sync_channel(1);
         let block = RcBlock::new(move || {
             let _ = tx.send(());
         });
         unsafe { writer.finishWritingWithCompletionHandler(&block) };
-        rx.recv_timeout(FINISH_TIMEOUT)
-            .map_err(|_| "Datei abschliessen dauert zu lange".to_string())?;
+        rx.recv_timeout(FINISH_TIMEOUT).map_err(|_| {
+            log::error!(
+                "Spur {} nach {} s nicht abgeschlossen",
+                self.path.display(),
+                FINISH_TIMEOUT.as_secs()
+            );
+            "Datei abschliessen dauert zu lange".to_string()
+        })?;
         unsafe {
             if writer.status() == AVAssetWriterStatus::Completed {
+                log::debug!(
+                    "Spur {} abgeschlossen in {} ms ({})",
+                    self.path.display(),
+                    started.elapsed().as_millis(),
+                    self.stats()
+                );
                 Ok(Finished::Complete)
             } else {
+                log::error!(
+                    "Spur {} abschliessen fehlgeschlagen: {}",
+                    self.path.display(),
+                    writer_error_detail(writer)
+                );
                 Err(writer
                     .error()
                     .map(|e| e.localizedDescription().to_string())
@@ -196,7 +226,33 @@ impl Track {
 
     fn cancel(&self) {
         unsafe { self.writer.0.cancelWriting() };
-        let _ = std::fs::remove_file(&self.path);
+        remove_quietly(&self.path);
+    }
+
+    /// Zählerstand fürs Protokoll.
+    fn stats(&self) -> String {
+        format!("{} Proben, {} ausgelassen", self.samples, self.dropped)
+    }
+}
+
+/// Fehler des Schreibers mit Domäne und Code (fürs Protokoll).
+fn writer_error_detail(writer: &AVAssetWriter) -> String {
+    unsafe { writer.error() }
+        .map(|e| error_detail(&e))
+        .unwrap_or_else(|| format!("Status {:?}", unsafe { writer.status() }))
+}
+
+/// Fehlertext mit Domäne und Code, z. B. „… (AVFoundationErrorDomain -11800)“.
+pub(crate) fn error_detail(e: &NSError) -> String {
+    format!("{} ({} {})", e.localizedDescription(), e.domain(), e.code())
+}
+
+/// Löscht eine Datei; fehlt sie schon, ist das kein Fehler.
+pub(crate) fn remove_quietly(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("{} löschen fehlgeschlagen: {e}", path.display());
     }
 }
 
@@ -224,6 +280,8 @@ struct Shared {
     /// Bits eines f32 – bei positiven Zahlen ist die Bit-Reihenfolge die der Werte.
     system_peak: AtomicU32,
     mic_peak: AtomicU32,
+    /// Bildschirmbilder ohne Änderung (nur gezählt, fürs Protokoll).
+    idle_frames: AtomicU64,
 }
 
 impl Shared {
@@ -382,6 +440,7 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
         }
         Source::Screen => {
             if !is_complete_frame(sample) {
+                shared.idle_frames.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
@@ -400,6 +459,7 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
         return;
     }
     let offset = st.offset;
+    let already_failed = st.failure.is_some();
     let track = match source {
         Source::Screen => st.screen.as_mut(),
         Source::System => st.system.as_mut(),
@@ -414,11 +474,19 @@ fn on_sample(shared: &Shared, source: Source, sample: &CMSampleBuffer) {
     };
     if ok {
         track.samples += 1;
-    } else if let Some(e) = track.failure()
-        && st.failure.is_none()
-    {
-        // Die App sieht das über `failure()` und sichert, was da ist.
-        st.failure = Some(e);
+    } else if let Some(e) = track.failure() {
+        if !already_failed {
+            // Einmal je Aufnahme: Danach schreibt die Spur nichts mehr.
+            log::error!(
+                "Schreiben von {} fehlgeschlagen: {}",
+                track.path.display(),
+                writer_error_detail(&track.writer.0)
+            );
+            // Die App sieht das über `failure()` und sichert, was da ist.
+            st.failure = Some(e);
+        }
+    } else {
+        track.dropped += 1;
     }
 }
 
@@ -460,7 +528,13 @@ define_class!(
         fn did_stop(&self, _stream: &SCStream, error: &NSError) {
             let mut st = self.ivars().shared.lock();
             if st.phase != Phase::Stopped {
+                log::error!(
+                    "Bildschirm-Stream unerwartet beendet: {}",
+                    error_detail(error)
+                );
                 st.failure = Some(error.localizedDescription().to_string());
+            } else {
+                log::debug!("Bildschirm-Stream beendet: {}", error_detail(error));
             }
         }
     }
@@ -571,9 +645,20 @@ unsafe impl Send for SendQueue {}
 unsafe impl Sync for SendQueue {}
 
 pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
+    let started = Instant::now();
+    log::info!(
+        "Aufnahme vorbereiten: Ziel {:?}, {} fps, Systemton={}, Mikrofon={}, Webcam-Datei={}, Mauszeiger={}",
+        options.target,
+        options.fps,
+        options.files.system_audio.is_some(),
+        options.files.microphone.is_some(),
+        options.files.webcam.is_some(),
+        options.show_cursor
+    );
     let screen_setup = match options.target {
         Some(target) => {
             if !CGPreflightScreenCaptureAccess() {
+                log::warn!("Bildschirmaufnahme nicht freigegeben");
                 return Err(MediaError::PermissionDenied);
             }
             let content = fetch_shareable_content()?;
@@ -601,6 +686,7 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
             screen_bitrate(*width, *height, fps),
         )?),
         (Some(_), None) => {
+            log::error!("Keine Datei für den Bildschirm");
             return Err(MediaError::Backend("Keine Datei für den Bildschirm".into()));
         }
         (None, _) => None,
@@ -630,6 +716,7 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
         }),
         system_peak: AtomicU32::new(0),
         mic_peak: AtomicU32::new(0),
+        idle_frames: AtomicU64::new(0),
     });
 
     let output = StreamOutput::new(shared.clone());
@@ -637,6 +724,10 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
     let audio_queue = DispatchQueue::new("ch.forellmedia.fmshot.audio", None);
     let stream = match screen_setup {
         Some((filter, width, height, source_rect)) => {
+            log::debug!(
+                "Bildschirm-Stream: {width}×{height}, {fps} fps, Ausschnitt {source_rect:?}, Systemton={}",
+                system_audio.is_some()
+            );
             let config = unsafe { SCStreamConfiguration::new() };
             unsafe {
                 config.setWidth(width as usize);
@@ -700,16 +791,27 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
     if let Some(stream) = &stream {
         let (tx, rx) = mpsc::sync_channel(1);
         let block = RcBlock::new(move |error: *mut NSError| {
+            // SAFETY: null oder gültiges NSError.
+            if let Some(e) = unsafe { Retained::retain(error) } {
+                log::error!("Bildschirm-Stream startet nicht: {}", error_detail(&e));
+            }
             let _ = tx.send(error_text_opt(error));
         });
         unsafe { stream.startCaptureWithCompletionHandler(Some(&block)) };
         match rx.recv_timeout(TIMEOUT) {
-            Ok(None) => {}
+            Ok(None) => log::debug!(
+                "Bildschirm-Stream läuft nach {} ms",
+                started.elapsed().as_millis()
+            ),
             Ok(Some(e)) => {
                 cancel_tracks(&shared);
                 return Err(MediaError::Backend(e));
             }
             Err(_) => {
+                log::error!(
+                    "Bildschirm-Stream: keine Antwort nach {} s",
+                    TIMEOUT.as_secs()
+                );
                 cancel_tracks(&shared);
                 return Err(MediaError::Backend(
                     "ScreenCaptureKit antwortet nicht".into(),
@@ -718,6 +820,7 @@ pub(crate) fn start_recording(options: RecordOptions) -> Result<MacRecording> {
         }
     }
 
+    log::info!("Aufnahme bereit in {} ms", started.elapsed().as_millis());
     Ok(MacRecording {
         shared,
         stream: stream.map(SendRetained),
@@ -755,13 +858,23 @@ fn cancel_tracks(shared: &Shared) {
 impl MacRecording {
     /// Stoppt Stream und Mikrofon; danach kommen keine Proben mehr.
     fn stop_sources(&self) {
+        let started = Instant::now();
         if let Some(stream) = &self.stream {
             let (tx, rx) = mpsc::sync_channel(1);
-            let block = RcBlock::new(move |_error: *mut NSError| {
+            let block = RcBlock::new(move |error: *mut NSError| {
+                // SAFETY: null oder gültiges NSError.
+                if let Some(e) = unsafe { Retained::retain(error) } {
+                    log::warn!("Bildschirm-Stream stoppen: {}", error_detail(&e));
+                }
                 let _ = tx.send(());
             });
             unsafe { stream.0.stopCaptureWithCompletionHandler(Some(&block)) };
-            let _ = rx.recv_timeout(TIMEOUT);
+            if rx.recv_timeout(TIMEOUT).is_err() {
+                log::warn!(
+                    "Bildschirm-Stream: Stopp nach {} s nicht bestätigt",
+                    TIMEOUT.as_secs()
+                );
+            }
         }
         if let Some(session) = &self.mic_session {
             unsafe { session.0.stopRunning() };
@@ -772,6 +885,7 @@ impl MacRecording {
             unsafe { cam.session.0.stopRunning() };
             cam.running = false;
         }
+        log::debug!("Quellen gestoppt in {} ms", started.elapsed().as_millis());
     }
 
     /// Erkannte Gesichter nach `<id>_faces.json` (nur wenn die Webcam lief).
@@ -781,6 +895,7 @@ impl MacRecording {
         if samples.is_empty() {
             return;
         }
+        log::debug!("{} Gesichtsproben nach {}", samples.len(), path.display());
         let result = serde_json::to_vec(&FaceTrack { samples })
             .map_err(|e| e.to_string())
             .and_then(|bytes| std::fs::write(path, bytes).map_err(|e| e.to_string()));
@@ -795,10 +910,10 @@ impl MacRecording {
 
     /// Kamera anlegen und Spur dafür öffnen (beim ersten Einschalten).
     fn open_webcam(&self) -> Result<Webcam> {
-        let path = self
-            .webcam_file
-            .as_ref()
-            .ok_or_else(|| MediaError::Backend("Keine Datei für die Webcam".into()))?;
+        let path = self.webcam_file.as_ref().ok_or_else(|| {
+            log::error!("Keine Datei für die Webcam");
+            MediaError::Backend("Keine Datei für die Webcam".into())
+        })?;
         let delegate = WebcamOutput::new(self.shared.clone(), self.vision.clone());
         let (session, output, (width, height)) =
             start_camera(self.camera_id.as_deref(), &delegate, &self.webcam_queue.0)?;
@@ -832,6 +947,7 @@ impl Recording for MacRecording {
         let t0 = host_now();
         st.t0 = t0;
         st.phase = Phase::Recording;
+        log::info!("Aufnahme läuft");
         let tracks = [
             st.screen.as_ref(),
             st.system.as_ref(),
@@ -851,6 +967,8 @@ impl Recording for MacRecording {
                 screen.samples += 1;
             }
             st.last_frame = Some(frame);
+        } else if st.screen.is_some() {
+            log::debug!("Noch kein Bildschirmbild beim Start");
         }
     }
 
@@ -859,6 +977,7 @@ impl Recording for MacRecording {
         if st.phase == Phase::Recording {
             st.phase = Phase::Paused;
             st.pause_started = host_now();
+            log::info!("Aufnahme pausiert");
         }
     }
 
@@ -868,6 +987,9 @@ impl Recording for MacRecording {
             let paused = unsafe { host_now().subtract(st.pause_started) };
             st.offset = unsafe { st.offset.add(paused) };
             st.phase = Phase::Recording;
+            log::info!("Aufnahme fortgesetzt nach {:.1} s Pause", unsafe {
+                paused.seconds()
+            });
         }
     }
 
@@ -898,6 +1020,7 @@ impl Recording for MacRecording {
     }
 
     fn stop(&self) -> Result<RecordSummary> {
+        let stop_started = Instant::now();
         let duration = self.elapsed();
         let end = {
             let mut st = self.shared.lock();
@@ -909,6 +1032,7 @@ impl Recording for MacRecording {
             st.phase = Phase::Stopped;
             if !started {
                 drop(st);
+                log::info!("Aufnahme vor dem Start beendet – nichts geschrieben");
                 self.stop_sources();
                 cancel_tracks(&self.shared);
                 return Err(MediaError::Empty);
@@ -919,6 +1043,23 @@ impl Recording for MacRecording {
         self.write_faces();
         let st = self.shared.lock();
         let end = unsafe { end.subtract(st.offset) };
+        // Zählerstände aller Spuren, einmal je Aufnahme.
+        for (name, track) in [
+            ("Bildschirm", st.screen.as_ref()),
+            ("Systemton", st.system.as_ref()),
+            ("Mikrofon", st.mic.as_ref()),
+            ("Webcam", st.webcam.as_ref()),
+        ] {
+            if let Some(track) = track {
+                log::info!("Spur {name}: {}", track.stats());
+            }
+        }
+        if st.screen.is_some() {
+            log::info!(
+                "Bildschirm: {} unveränderte Bilder übersprungen",
+                self.shared.idle_frames.load(Ordering::Relaxed)
+            );
+        }
         // Die Hauptspur entscheidet, ob etwas aufgenommen wurde.
         let (main, others) = match &st.screen {
             Some(screen) => (
@@ -926,12 +1067,16 @@ impl Recording for MacRecording {
                 [st.system.as_ref(), st.mic.as_ref(), st.webcam.as_ref()],
             ),
             None => (
-                st.webcam.as_ref().ok_or(MediaError::Empty)?,
+                st.webcam.as_ref().ok_or_else(|| {
+                    log::warn!("Nur Webcam, aber die Webcam war nie an");
+                    MediaError::Empty
+                })?,
                 [st.system.as_ref(), st.mic.as_ref(), None],
             ),
         };
         let main_state = main.finish(end).map_err(MediaError::Backend)?;
         if main_state == Finished::Empty {
+            log::warn!("Hauptspur leer – Aufnahme verworfen");
             for track in others.into_iter().flatten() {
                 track.cancel();
             }
@@ -947,6 +1092,13 @@ impl Recording for MacRecording {
                 log::warn!("Spur {}: {e}", track.path.display());
             }
         }
+        log::info!(
+            "Aufnahme beendet: {:.1} s, {}×{}, {main_state:?}, abgeschlossen in {} ms",
+            duration.as_secs_f64(),
+            st.size.0,
+            st.size.1,
+            stop_started.elapsed().as_millis()
+        );
         Ok(RecordSummary {
             duration,
             width: st.size.0,
@@ -955,6 +1107,7 @@ impl Recording for MacRecording {
     }
 
     fn cancel(&self) {
+        log::info!("Aufnahme abgebrochen");
         self.shared.lock().phase = Phase::Stopped;
         self.stop_sources();
         self.vision.finish();
@@ -976,6 +1129,7 @@ impl Recording for MacRecording {
             return Ok(());
         };
         if cam.running != on {
+            let started = Instant::now();
             // startRunning/stopRunning blockieren, bis die Kamera läuft bzw. steht.
             unsafe {
                 if on {
@@ -985,6 +1139,14 @@ impl Recording for MacRecording {
                 }
             }
             cam.running = on;
+            log::info!(
+                "Webcam {} in {} ms",
+                if on { "an" } else { "aus" },
+                started.elapsed().as_millis()
+            );
+            if on && !unsafe { cam.session.0.isRunning() } {
+                log::warn!("Webcam-Sitzung läuft nach dem Start nicht");
+            }
         }
         Ok(())
     }
@@ -1036,6 +1198,7 @@ fn file_url(path: &Path) -> Retained<NSURL> {
 }
 
 fn backend(e: &NSError) -> MediaError {
+    log::warn!("Medienfehler: {}", error_detail(e));
     MediaError::Backend(e.localizedDescription().to_string())
 }
 
@@ -1056,9 +1219,12 @@ fn dict(pairs: &[(&NSString, &AnyObject)]) -> Retained<NSDictionary<NSString, An
 }
 
 fn new_writer(path: &Path, file_type: &NSString) -> Result<Retained<AVAssetWriter>> {
-    let _ = std::fs::remove_file(path);
+    remove_quietly(path);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| MediaError::Backend(e.to_string()))?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            log::error!("Ordner {} anlegen fehlgeschlagen: {e}", dir.display());
+            MediaError::Backend(e.to_string())
+        })?;
     }
     unsafe {
         AVAssetWriter::initWithURL_fileType_error(
@@ -1074,12 +1240,14 @@ fn add_and_start(writer: &AVAssetWriter, input: &AVAssetWriterInput) -> Result<(
     unsafe {
         input.setExpectsMediaDataInRealTime(true);
         if !writer.canAddInput(input) {
+            log::error!("Schreiber nimmt die Spur nicht an");
             return Err(MediaError::Backend(
                 "Spur kann nicht angelegt werden".into(),
             ));
         }
         writer.addInput(input);
         if !writer.startWriting() {
+            log::error!("Schreiben startet nicht: {}", writer_error_detail(writer));
             return Err(writer.error().map(|e| backend(&e)).unwrap_or_else(|| {
                 MediaError::Backend("Datei kann nicht geschrieben werden".into())
             }));
@@ -1128,11 +1296,17 @@ fn video_track(path: &Path, width: u32, height: u32, fps: u32, bitrate: u32) -> 
         )
     };
     add_and_start(&writer, &input)?;
+    log::debug!(
+        "Videospur {}: HEVC {width}×{height}, {fps} fps, {} bit/s",
+        path.display(),
+        bitrate.unsignedIntValue()
+    );
     Ok(Track {
         writer: SendRetained(writer),
         input: SendRetained(input),
         path: path.to_path_buf(),
         samples: 0,
+        dropped: 0,
     })
 }
 
@@ -1164,11 +1338,17 @@ fn audio_track(path: &Path, channels: u32) -> Result<Track> {
         )
     };
     add_and_start(&writer, &input)?;
+    log::debug!(
+        "Tonspur {}: AAC, {channels} Kanal/Kanäle, {SAMPLE_RATE} Hz, {} bit/s",
+        path.display(),
+        bitrate.unsignedIntValue()
+    );
     Ok(Track {
         writer: SendRetained(writer),
         input: SendRetained(input),
         path: path.to_path_buf(),
         samples: 0,
+        dropped: 0,
     })
 }
 
@@ -1184,15 +1364,25 @@ fn video_media_type() -> Result<&'static NSString> {
 
 fn devices(media: Result<&'static NSString>) -> Vec<Device> {
     let Ok(media) = media else {
+        log::warn!("Medientyp nicht verfügbar – keine Geräte");
         return Vec::new();
     };
-    unsafe { AVCaptureDevice::devicesWithMediaType(media) }
+    let list: Vec<Device> = unsafe { AVCaptureDevice::devicesWithMediaType(media) }
         .iter()
         .map(|d| Device {
             id: unsafe { d.uniqueID() }.to_string(),
             name: unsafe { d.localizedName() }.to_string(),
         })
-        .collect()
+        .collect();
+    log::debug!(
+        "{} Gerät(e) für {media}: {}",
+        list.len(),
+        list.iter()
+            .map(|d| format!("{} [{}]", d.name, d.id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    list
 }
 
 pub(crate) fn microphones() -> Vec<Device> {
@@ -1240,7 +1430,14 @@ fn request_permission(media: Result<&'static NSString>) -> bool {
     });
     unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(media, &block) };
     // Der Nutzer darf sich Zeit lassen.
-    rx.recv_timeout(Duration::from_secs(300)).unwrap_or(false)
+    let granted = rx
+        .recv_timeout(Duration::from_secs(300))
+        .unwrap_or_else(|_| {
+            log::warn!("Freigabe für {media}: keine Antwort nach 300 s");
+            false
+        });
+    log::info!("Freigabe für {media} angefragt: erteilt={granted}");
+    granted
 }
 
 fn start_microphone(
@@ -1248,11 +1445,12 @@ fn start_microphone(
     output: &StreamOutput,
     queue: &DispatchQueue,
 ) -> Result<Retained<AVCaptureSession>> {
+    let started = Instant::now();
     let media = audio_media_type()?;
-    let device = id
-        .and_then(|id| unsafe { AVCaptureDevice::deviceWithUniqueID(&NSString::from_str(id)) })
-        .or_else(|| unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) })
-        .ok_or_else(|| MediaError::Backend("Kein Mikrofon gefunden".into()))?;
+    let device = pick_device(id, media, "Mikrofon").ok_or_else(|| {
+        log::error!("Kein Mikrofon gefunden");
+        MediaError::Backend("Kein Mikrofon gefunden".into())
+    })?;
     let input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&device) }
         .map_err(|e| backend(&e))?;
     let session = unsafe { AVCaptureSession::new() };
@@ -1260,6 +1458,7 @@ fn start_microphone(
     unsafe {
         session.beginConfiguration();
         if !session.canAddInput(&input) || !session.canAddOutput(&data) {
+            log::error!("Mikrofon lässt sich nicht in die Sitzung einbinden");
             session.commitConfiguration();
             return Err(MediaError::Backend(
                 "Mikrofon kann nicht verwendet werden".into(),
@@ -1270,8 +1469,35 @@ fn start_microphone(
         session.addOutput(&data);
         session.commitConfiguration();
         session.startRunning();
+        if !session.isRunning() {
+            log::warn!("Mikrofon-Sitzung läuft nach dem Start nicht");
+        }
     }
+    log::info!("Mikrofon läuft nach {} ms", started.elapsed().as_millis());
     Ok(session)
+}
+
+/// Gewünschtes Gerät oder das Standardgerät des Systems.
+fn pick_device(
+    id: Option<&str>,
+    media: &NSString,
+    what: &str,
+) -> Option<Retained<AVCaptureDevice>> {
+    let wanted = id.and_then(|id| {
+        let device = unsafe { AVCaptureDevice::deviceWithUniqueID(&NSString::from_str(id)) };
+        if device.is_none() {
+            log::warn!("{what} {id} nicht gefunden – nehme Standardgerät");
+        }
+        device
+    });
+    let device =
+        wanted.or_else(|| unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) })?;
+    log::info!(
+        "{what}: {} [{}]",
+        unsafe { device.localizedName() },
+        unsafe { device.uniqueID() }
+    );
+    Some(device)
 }
 
 // --- Webcam -----------------------------------------------------------------------
@@ -1290,10 +1516,10 @@ fn start_camera(
     queue: &DispatchQueue,
 ) -> Result<Camera> {
     let media = video_media_type()?;
-    let device = id
-        .and_then(|id| unsafe { AVCaptureDevice::deviceWithUniqueID(&NSString::from_str(id)) })
-        .or_else(|| unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) })
-        .ok_or_else(|| MediaError::Backend("Keine Kamera gefunden".into()))?;
+    let device = pick_device(id, media, "Kamera").ok_or_else(|| {
+        log::error!("Keine Kamera gefunden");
+        MediaError::Backend("Keine Kamera gefunden".into())
+    })?;
     let input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&device) }
         .map_err(|e| backend(&e))?;
     let session = unsafe { AVCaptureSession::new() };
@@ -1306,10 +1532,12 @@ fn start_camera(
         ] {
             if session.canSetSessionPreset(preset) {
                 session.setSessionPreset(preset);
+                log::debug!("Kamera-Voreinstellung {preset}");
                 break;
             }
         }
         if !session.canAddInput(&input) || !session.canAddOutput(&output) {
+            log::error!("Kamera lässt sich nicht in die Sitzung einbinden");
             session.commitConfiguration();
             return Err(MediaError::Backend(
                 "Kamera kann nicht verwendet werden".into(),
@@ -1340,6 +1568,11 @@ fn start_camera(
         output.setAlwaysDiscardsLateVideoFrames(true);
         output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(delegate)), Some(queue));
     }
+    log::debug!(
+        "Kamera eingerichtet: {width}×{height} (Format {}×{})",
+        dims.width,
+        dims.height
+    );
     Ok((session, output, (width, height)))
 }
 
@@ -1368,13 +1601,17 @@ fn make_filter(
         unsafe { content.displays() }
             .iter()
             .find(|d| unsafe { d.displayID() } == id)
-            .ok_or(MediaError::TargetNotFound)
+            .ok_or_else(|| {
+                log::warn!("Monitor {id} für die Aufnahme nicht gefunden");
+                MediaError::TargetNotFound
+            })
     };
     match target {
         RecordTarget::Display { display_id } => {
             let display = find_display(display_id)?;
             let (w, h) = pixel_size(&display);
             let k = record_ratio(display_id);
+            log::debug!("Monitor {display_id}: {w}×{h} Pufferpixel, Verhältnis {k:.3}");
             Ok((display_filter(&display), shrink(w, k), shrink(h, k), None))
         }
         RecordTarget::Region {
@@ -1391,6 +1628,9 @@ fn make_filter(
                 CGSize::new(width as f64 / scale, height as f64 / scale),
             );
             let k = record_ratio(display_id);
+            log::debug!(
+                "Ausschnitt auf Monitor {display_id}: Skalierung {scale}, Verhältnis {k:.3}"
+            );
             Ok((
                 display_filter(&display),
                 shrink(width, k),
@@ -1402,7 +1642,10 @@ fn make_filter(
             let window = unsafe { content.windows() }
                 .iter()
                 .find(|w| unsafe { w.windowID() } == window_id)
-                .ok_or(MediaError::TargetNotFound)?;
+                .ok_or_else(|| {
+                    log::warn!("Fenster {window_id} für die Aufnahme nicht gefunden");
+                    MediaError::TargetNotFound
+                })?;
             let frame = unsafe { window.frame() };
             let center = (
                 frame.origin.x + frame.size.width / 2.0,
@@ -1418,7 +1661,11 @@ fn make_filter(
                         && center.1 < f.origin.y + f.size.height
                 })
                 .map(|d| scale_of(&d) * record_ratio(unsafe { d.displayID() }))
-                .unwrap_or(2.0);
+                .unwrap_or_else(|| {
+                    log::debug!("Fenster {window_id} auf keinem Monitor – Skalierung 2");
+                    2.0
+                });
+            log::debug!("Fenster {window_id}: Skalierung {scale:.3}");
             let filter = unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             };
@@ -1495,6 +1742,7 @@ fn scale_of(d: &SCDisplay) -> f64 {
 }
 
 fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
+    let started = Instant::now();
     let (tx, rx) = mpsc::sync_channel::<std::result::Result<SendRetained<_>, String>>(1);
     let block = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -1508,11 +1756,26 @@ fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
     );
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
     match rx.recv_timeout(TIMEOUT) {
-        Ok(Ok(content)) => Ok(content.0),
-        Ok(Err(e)) => Err(MediaError::Backend(e)),
-        Err(_) => Err(MediaError::Backend(
-            "ScreenCaptureKit antwortet nicht".into(),
-        )),
+        Ok(Ok(content)) => {
+            log::debug!(
+                "Bildschirminhalt abgefragt in {} ms",
+                started.elapsed().as_millis()
+            );
+            Ok(content.0)
+        }
+        Ok(Err(e)) => {
+            log::error!("Bildschirminhalt abfragen fehlgeschlagen: {e}");
+            Err(MediaError::Backend(e))
+        }
+        Err(_) => {
+            log::error!(
+                "Bildschirminhalt: keine Antwort nach {} s",
+                TIMEOUT.as_secs()
+            );
+            Err(MediaError::Backend(
+                "ScreenCaptureKit antwortet nicht".into(),
+            ))
+        }
     }
 }
 
@@ -1532,6 +1795,8 @@ fn error_text_opt(error: *mut NSError) -> Option<String> {
 // --- Zusammenführen und Einzelbilder -------------------------------------------------
 
 pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
+    let started = Instant::now();
+    log::info!("MP4 zusammenführen nach {}", output.display());
     let video = unsafe { AVMediaTypeVideo }.ok_or(MediaError::NotImplemented)?;
     let audio = audio_media_type()?;
     let composition = unsafe { AVMutableComposition::composition() };
@@ -1545,10 +1810,16 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
     let screen = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(main), None) };
     let source = unsafe { screen.tracksWithMediaType(video) }
         .firstObject()
-        .ok_or(MediaError::Empty)?;
+        .ok_or_else(|| {
+            log::warn!("{} enthält keine Videospur", main.display());
+            MediaError::Empty
+        })?;
     let range = unsafe { source.timeRange() };
     let track = unsafe { composition.addMutableTrackWithMediaType_preferredTrackID(video, 0) }
-        .ok_or_else(|| MediaError::Backend("Videospur".into()))?;
+        .ok_or_else(|| {
+            log::error!("Videospur in der Komposition nicht anlegbar");
+            MediaError::Backend("Videospur".into())
+        })?;
     unsafe { track.insertTimeRange_ofTrack_atTime_error(range, &source, range.start) }
         .map_err(|e| backend(&e))?;
 
@@ -1557,26 +1828,32 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
         .flatten()
     {
         if !path.exists() {
+            log::debug!("Tonspur {} fehlt – übersprungen", path.display());
             continue;
         }
         let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) };
         let Some(source) = unsafe { asset.tracksWithMediaType(audio) }.firstObject() else {
+            log::warn!("{} enthält keine Tonspur – übersprungen", path.display());
             continue;
         };
         let range = unsafe { source.timeRange() };
         let Some(track) =
             (unsafe { composition.addMutableTrackWithMediaType_preferredTrackID(audio, 0) })
         else {
+            log::warn!(
+                "Tonspur für {} nicht anlegbar – übersprungen",
+                path.display()
+            );
             continue;
         };
         if let Err(e) =
             unsafe { track.insertTimeRange_ofTrack_atTime_error(range, &source, range.start) }
         {
-            log::warn!("Tonspur {}: {}", path.display(), e.localizedDescription());
+            log::warn!("Tonspur {}: {}", path.display(), error_detail(&e));
         }
     }
 
-    let _ = std::fs::remove_file(output);
+    remove_quietly(output);
     let session = unsafe {
         AVAssetExportSession::initWithAsset_presetName(
             AVAssetExportSession::alloc(),
@@ -1584,7 +1861,10 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
             AVAssetExportPresetHighestQuality,
         )
     }
-    .ok_or_else(|| MediaError::Backend("Export nicht möglich".into()))?;
+    .ok_or_else(|| {
+        log::error!("Export-Sitzung nicht anlegbar");
+        MediaError::Backend("Export nicht möglich".into())
+    })?;
     let file_type = unsafe { AVFileTypeMPEG4 }.ok_or(MediaError::NotImplemented)?;
     unsafe {
         session.setOutputURL(Some(&file_url(output)));
@@ -1601,13 +1881,24 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
         let _ = tx.send(());
     });
     unsafe { session.exportAsynchronouslyWithCompletionHandler(&block) };
-    rx.recv()
-        .map_err(|_| MediaError::Backend("Export abgebrochen".into()))?;
+    rx.recv().map_err(|_| {
+        log::error!("Export abgebrochen (keine Rückmeldung)");
+        MediaError::Backend("Export abgebrochen".into())
+    })?;
     match unsafe { session.status() } {
-        AVAssetExportSessionStatus::Completed => Ok(()),
-        _ => Err(unsafe { session.error() }
-            .map(|e| backend(&e))
-            .unwrap_or_else(|| MediaError::Backend("Export fehlgeschlagen".into()))),
+        AVAssetExportSessionStatus::Completed => {
+            log::info!(
+                "MP4 zusammengeführt in {} ms",
+                started.elapsed().as_millis()
+            );
+            Ok(())
+        }
+        status => {
+            log::error!("MP4 zusammenführen fehlgeschlagen, Status {status:?}");
+            Err(unsafe { session.error() }
+                .map(|e| backend(&e))
+                .unwrap_or_else(|| MediaError::Backend("Export fehlgeschlagen".into())))
+        }
     }
 }
 
@@ -1616,9 +1907,21 @@ pub(crate) fn export_mp4(files: &RecordFiles, output: &Path) -> Result<()> {
 pub(crate) fn free_space(path: &Path) -> Option<u64> {
     let url = file_url(path);
     let key = unsafe { objc2_foundation::NSURLVolumeAvailableCapacityForImportantUsageKey };
-    let values = url
-        .resourceValuesForKeys_error(&NSArray::from_slice(&[key]))
-        .ok()?;
+    let values = match url.resourceValuesForKeys_error(&NSArray::from_slice(&[key])) {
+        Ok(v) => v,
+        Err(e) => {
+            // Wird regelmässig abgefragt – nur einmal melden.
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "Freier Platz für {} unbekannt: {}",
+                    path.display(),
+                    error_detail(&e)
+                );
+            }
+            return None;
+        }
+    };
     let value = values.objectForKey(key)?;
     let number = value.downcast::<NSNumber>().ok()?;
     Some(number.longLongValue().max(0) as u64)
@@ -1629,6 +1932,7 @@ pub(crate) fn file_duration(path: &Path) -> Result<Duration> {
     let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) };
     let secs = unsafe { asset.duration().seconds() };
     if !secs.is_finite() || secs <= 0.0 {
+        log::debug!("{}: keine lesbare Länge", path.display());
         return Err(MediaError::Empty);
     }
     Ok(Duration::from_secs_f64(secs))

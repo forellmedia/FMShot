@@ -9,15 +9,18 @@ use crate::capture;
 use crate::tray::show_main_window;
 
 pub fn unregister_all(app: &AppHandle) {
-    if let Err(e) = app.global_shortcut().unregister_all() {
-        log::warn!("Tastenkürzel abmelden: {e}");
+    match app.global_shortcut().unregister_all() {
+        Ok(()) => log::debug!("Tastenkürzel abgemeldet"),
+        Err(e) => log::warn!("Tastenkürzel abmelden: {e}"),
     }
 }
 
 /// Registriert die Kürzel aus den Einstellungen (vorher alle abmelden).
 pub fn register(app: &AppHandle) {
+    let start = std::time::Instant::now();
     unregister_all(app);
     let platform = Platform::current();
+    let (mut ok, mut failed) = (0, 0);
     for (action, shortcut) in crate::settings::get(app).effective_hotkeys(platform) {
         let accelerator = shortcut.accelerator(platform);
         let result = app.global_shortcut().on_shortcut(
@@ -29,15 +32,26 @@ pub fn register(app: &AppHandle) {
             },
         );
         match result {
-            Ok(()) => log::info!("Tastenkürzel {} → {action:?}", shortcut.label(platform)),
-            Err(e) => log::warn!("Tastenkürzel {accelerator} nicht registriert: {e}"),
+            Ok(()) => {
+                ok += 1;
+                log::info!("Tastenkürzel {} → {action:?}", shortcut.label(platform));
+            }
+            Err(e) => {
+                failed += 1;
+                log::warn!("Tastenkürzel {accelerator} nicht registriert: {e}");
+            }
         }
     }
+    log::debug!(
+        "Tastenkürzel: {ok} registriert, {failed} fehlgeschlagen ({:.0} ms)",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 /// Führt ein Tastenkürzel aus. Offene Fenster von Grabmark bleiben dabei im
 /// Bild – so lässt sich Grabmark selbst fotografieren.
 pub fn run(app: &AppHandle, action: Action) {
+    log::info!("Tastenkürzel ausgelöst: {action:?}");
     let start = |mode| capture::start_with(app, mode, OwnWindows::Shown);
     match action {
         Action::CaptureRegion => start(capture::Mode::Region),
@@ -50,7 +64,9 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::RecordPause => crate::video::toggle(app, crate::video::Toggle::Pause),
         Action::OpenGallery => {
             show_main_window(app);
-            let _ = app.emit("open-gallery", ());
+            if let Err(e) = app.emit("open-gallery", ()) {
+                log::debug!("Ereignis open-gallery: {e}");
+            }
         }
         Action::CaptureScroll => start(capture::Mode::scroll(app)),
     }

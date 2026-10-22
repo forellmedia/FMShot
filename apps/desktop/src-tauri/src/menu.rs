@@ -26,13 +26,21 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         app_menu.append(&item("quit_app", "tray.quit", None)?)?;
     }
     app.set_menu(menu)?;
+    log::debug!("App-Menü angelegt");
     Ok(())
 }
 
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
-        "close_editor" => crate::tray::hide_main_window(app),
-        "quit_app" => crate::video::quit(app),
-        _ => {}
+        "close_editor" => {
+            log::info!("App-Menü: Editor schliessen");
+            crate::tray::hide_main_window(app)
+        }
+        "quit_app" => {
+            log::info!("App-Menü: Beenden");
+            crate::video::quit(app)
+        }
+        // Tray-Menü und Standard-Einträge (Kopieren, Einsetzen …) landen auch hier.
+        other => log::debug!("Menü: {other}"),
     }
 }

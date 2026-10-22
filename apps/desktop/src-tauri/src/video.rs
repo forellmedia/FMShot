@@ -106,6 +106,7 @@ pub fn stop_running(app: &AppHandle) -> bool {
     let guard = state.session.lock().unwrap_or_else(|e| e.into_inner());
     match guard.as_ref() {
         Some(flags) => {
+            log::info!("Video: Stopp angefordert");
             flags.stop.store(true, Ordering::Release);
             true
         }
@@ -126,6 +127,7 @@ pub fn toggle(app: &AppHandle, what: Toggle) {
     let state = app.state::<VideoState>();
     let guard = state.session.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(flags) = guard.as_ref() {
+        log::debug!("Video: Kürzel {what:?}");
         let flag = match what {
             Toggle::Draw => &flags.toggle_draw,
             Toggle::Pause => &flags.toggle_pause,
@@ -137,20 +139,26 @@ pub fn toggle(app: &AppHandle, what: Toggle) {
 /// Startet eine Video-Aufnahme mit dem Ziel aus den Einstellungen bzw.
 /// `target`. Die Bildschirm-Freigabe hat `capture::start` schon geprüft.
 pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
+    let requested = Instant::now();
     let state = app.state::<VideoState>();
     if state.starting.swap(true, Ordering::AcqRel) {
+        log::debug!("Video: Start läuft schon – ignoriert");
         return;
     }
     let settings = crate::settings::get(app).video;
     let target = target.unwrap_or(settings.target);
+    log_start(&format!("{target:?}"), &settings);
     let app = app.clone();
     std::thread::spawn(move || {
         let microphone = settings.microphone
             && match grabmark_media::microphone_permission() {
                 Permission::Granted => true,
                 // Systemfenster; ohne Zustimmung ohne Mikrofon weiter.
-                Permission::NotDetermined => grabmark_media::request_microphone_permission(),
+                Permission::NotDetermined => {
+                    asked("Mikrofon", grabmark_media::request_microphone_permission())
+                }
                 Permission::Denied => {
+                    log::warn!("Video: Mikrofon-Freigabe fehlt – Systemeinstellungen");
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Microphone);
                     return;
@@ -160,63 +168,110 @@ pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
             && !grabmark_media::cameras().is_empty()
             && match grabmark_media::camera_permission() {
                 Permission::Granted => true,
-                Permission::NotDetermined => grabmark_media::request_camera_permission(),
+                Permission::NotDetermined => {
+                    asked("Kamera", grabmark_media::request_camera_permission())
+                }
                 Permission::Denied => {
+                    log::warn!("Video: Kamera-Freigabe fehlt – Systemeinstellungen");
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Camera);
                     return;
                 }
             };
+        if settings.webcam && !webcam {
+            log::info!("Video: ohne Webcam (keine Kamera oder Freigabe)");
+        }
         select(&app, target, move |app, choice| {
             let app = app.clone();
-            std::thread::spawn(move || run(&app, choice, microphone, webcam, settings));
+            std::thread::spawn(move || run(&app, choice, microphone, webcam, settings, requested));
         });
     });
+}
+
+/// Start mit den Einstellungen festhalten (ohne Gerätenamen).
+fn log_start(target: &str, settings: &VideoSettings) {
+    log::info!(
+        "Video: Start angefordert – Ziel {target}, {} fps, Mikrofon {}, Systemton {}, \
+         Webcam {}, Countdown {}, Zeichnen {:?}, {:?}",
+        settings.fps,
+        settings.microphone,
+        settings.system_audio,
+        settings.webcam,
+        settings.countdown,
+        settings.draw_mode,
+        settings.encoding
+    );
+    log::debug!(
+        "Video: Mikrofon-ID {:?}, Kamera-ID {:?}",
+        settings.microphone_id,
+        settings.camera_id
+    );
+}
+
+/// Antwort auf die Freigabe-Frage des Systems festhalten.
+fn asked(what: &str, granted: bool) -> bool {
+    log::info!("Video: {what}-Freigabe erfragt – erteilt: {granted}");
+    granted
 }
 
 /// Startet eine Aufnahme nur mit der Webcam (Tab *Webcam*). Die Blase
 /// erscheint mitten auf dem Bildschirm unter der Maus.
 pub fn start_webcam(app: &AppHandle) {
+    let requested = Instant::now();
     let state = app.state::<VideoState>();
     if state.starting.swap(true, Ordering::AcqRel) {
+        log::debug!("Video: Start läuft schon – ignoriert");
         return;
     }
     let settings = crate::settings::get(app).video;
+    log_start(
+        &format!("nur Webcam {:?}", settings.camera.format),
+        &settings,
+    );
     let app = app.clone();
     std::thread::spawn(move || {
         if grabmark_media::cameras().is_empty() {
+            log::warn!("Video: keine Kamera gefunden");
             done_starting(&app);
             capture::show_error(&app, &t("video.no_camera", &[]));
             return;
         }
         let camera = match grabmark_media::camera_permission() {
             Permission::Granted => true,
-            Permission::NotDetermined => grabmark_media::request_camera_permission(),
+            Permission::NotDetermined => {
+                asked("Kamera", grabmark_media::request_camera_permission())
+            }
             Permission::Denied => {
+                log::warn!("Video: Kamera-Freigabe fehlt – Systemeinstellungen");
                 done_starting(&app);
                 capture::open_privacy_settings(&app, PrivacyPane::Camera);
                 return;
             }
         };
         if !camera {
+            log::info!("Video: ohne Kamera-Freigabe – kein Start");
             done_starting(&app);
             return;
         }
         let microphone = settings.microphone
             && match grabmark_media::microphone_permission() {
                 Permission::Granted => true,
-                Permission::NotDetermined => grabmark_media::request_microphone_permission(),
+                Permission::NotDetermined => {
+                    asked("Mikrofon", grabmark_media::request_microphone_permission())
+                }
                 Permission::Denied => {
+                    log::warn!("Video: Mikrofon-Freigabe fehlt – Systemeinstellungen");
                     done_starting(&app);
                     capture::open_privacy_settings(&app, PrivacyPane::Microphone);
                     return;
                 }
             };
         let Some(choice) = camera_choice(&app, settings.camera.format) else {
+            log::error!("Video: kein Monitor für die Webcam-Blase");
             done_starting(&app);
             return;
         };
-        run(&app, choice, microphone, true, settings);
+        run(&app, choice, microphone, true, settings, requested);
     });
 }
 
@@ -232,7 +287,11 @@ fn camera_bubble_points(format: CameraFormat) -> (f32, f32) {
 /// „Nur Webcam“: Monitor unter der Maus, Blase in seiner Mitte.
 fn camera_choice(app: &AppHandle, format: CameraFormat) -> Option<Choice> {
     let state = app.state::<CaptureState>();
-    let displays = state.capturer.displays().ok()?;
+    let displays = state
+        .capturer
+        .displays()
+        .map_err(|e| log::error!("Video: Monitore: {e}"))
+        .ok()?;
     let display = state
         .capturer
         .cursor_position()
@@ -269,6 +328,7 @@ fn select(
     let displays = match state.capturer.displays() {
         Ok(d) => d,
         Err(e) => {
+            log::error!("Video: Monitore: {e}");
             done_starting(app);
             capture::show_error(app, &e.to_string());
             return;
@@ -291,6 +351,7 @@ fn select(
                 .and_then(|c| display_at(&displays, c))
                 .or_else(|| displays.iter().find(|d| d.is_primary))
             else {
+                log::error!("Video: kein Monitor gefunden");
                 done_starting(app);
                 return;
             };
@@ -313,18 +374,20 @@ fn select(
                 ratio: grabmark_media::record_ratio(display.id),
             };
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || then(&a, choice));
+            main_thread(app, "Ziel", move || then(&a, choice));
         }
         VideoTarget::Region => {
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || {
+            main_thread(app, "Auswahl", move || {
                 let app_done = a.clone();
+                log::debug!("Video: Auswahl-Overlay (Bereich) geöffnet");
                 let result = grabmark_overlay::open(
                     OverlayMode::Region,
                     Vec::new(),
                     Box::new(move |result| {
                         OVERLAY.with(|o| o.borrow_mut().take());
                         let OverlayResult::Selected(sel) = result else {
+                            log::info!("Video: Auswahl abgebrochen");
                             done_starting(&app_done);
                             return;
                         };
@@ -354,6 +417,7 @@ fn select(
             let windows = match state.capturer.windows(grabmark_capture::OwnWindows::Hidden) {
                 Ok(w) => w,
                 Err(e) => {
+                    log::error!("Video: Fenster: {e}");
                     done_starting(app);
                     capture::show_error(app, &e.to_string());
                     return;
@@ -372,18 +436,24 @@ fn select(
                 })
                 .collect();
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || {
+            main_thread(app, "Auswahl", move || {
                 let app_done = a.clone();
+                log::debug!(
+                    "Video: Auswahl-Overlay (Fenster, {}) geöffnet",
+                    targets.len()
+                );
                 let result = grabmark_overlay::open(
                     OverlayMode::Window,
                     targets,
                     Box::new(move |result| {
                         OVERLAY.with(|o| o.borrow_mut().take());
                         let OverlayResult::Window(id) = result else {
+                            log::info!("Video: Auswahl abgebrochen");
                             done_starting(&app_done);
                             return;
                         };
                         let Some(w) = windows.iter().find(|w| w.id == id) else {
+                            log::warn!("Video: gewähltes Fenster {id} nicht mehr in der Liste");
                             done_starting(&app_done);
                             return;
                         };
@@ -393,7 +463,10 @@ fn select(
                             .or_else(|| displays.iter().find(|d| d.is_primary));
                         let (display_id, scale, rect) = match display {
                             Some(d) => (d.id, d.scale_factor, Some(window_pixels(b, d))),
-                            None => (0, 2.0, None),
+                            None => {
+                                log::warn!("Video: Fenster {id} auf keinem Monitor – ohne Rahmen");
+                                (0, 2.0, None)
+                            }
                         };
                         then(
                             &app_done,
@@ -434,18 +507,42 @@ fn open_result(app: &AppHandle, result: Result<OverlayHandle, grabmark_overlay::
     match result {
         Ok(handle) => OVERLAY.with(|o| *o.borrow_mut() = Some(handle)),
         Err(e) => {
+            log::error!("Video: Auswahl-Overlay: {e}");
             done_starting(app);
             capture::show_error(app, &e.to_string());
         }
     }
 }
 
-fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings: VideoSettings) {
+/// `requested` = Zeitpunkt des Tastendrucks (für die Zeit bis zum Start).
+fn run(
+    app: &AppHandle,
+    choice: Choice,
+    microphone: bool,
+    webcam: bool,
+    settings: VideoSettings,
+    requested: Instant,
+) {
     let _active = Active::start(app);
+    let (x, y, w, h) = choice.area;
+    match choice.target {
+        Some(target) => log::info!(
+            "Video: Ziel {target:?}, Monitor {}, Fläche {w}×{h} bei {x},{y}, Skalierung {}, Verhältnis {:.2}",
+            choice.display_id,
+            choice.scale,
+            choice.ratio
+        ),
+        None => log::info!(
+            "Video: nur Webcam, Monitor {}, Blase {w}×{h}, Skalierung {}",
+            choice.display_id,
+            choice.scale
+        ),
+    }
     let library = app.state::<CaptureState>().library.clone();
     let slot = match library.reserve_video(now_ms()) {
         Ok(s) => s,
         Err(e) => {
+            log::error!("Video: Platz in der Bibliothek: {e}");
             done_starting(app);
             capture::show_error(app, &e.to_string());
             return;
@@ -461,8 +558,17 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         webcam: has_camera.then(|| slot.webcam_path()),
         faces: has_camera.then(|| slot.faces_path()),
     };
+    log::debug!(
+        "Video: {} – Spuren: Bildschirm {}, Systemton {}, Mikrofon {}, Webcam {}",
+        slot.id,
+        files.screen.is_some(),
+        files.system_audio.is_some(),
+        files.microphone.is_some(),
+        files.webcam.is_some()
+    );
     // Kurz warten, bis das Auswahl-Overlay verschwunden ist.
     std::thread::sleep(Duration::from_millis(80));
+    let opening = Instant::now();
     let recording = grabmark_media::start_recording(RecordOptions {
         target: choice.target,
         files: files.clone(),
@@ -474,8 +580,15 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     });
     done_starting(app);
     let recording: Arc<dyn Recording> = match recording {
-        Ok(r) => Arc::from(r),
+        Ok(r) => {
+            log::debug!(
+                "Video: Aufnahme bereit in {} ms",
+                opening.elapsed().as_millis()
+            );
+            Arc::from(r)
+        }
         Err(e) => {
+            log::error!("Video: Aufnahme starten: {e}");
             library.discard_video(&slot);
             let message = match e {
                 MediaError::NotImplemented => t("video.unavailable", &[]),
@@ -499,6 +612,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     let mut cam = WebcamControl {
         on: false,
         starting: None,
+        since: Instant::now(),
         large: false,
         log: SectionLog::new(),
         bubble_rect: bubble_rect(&layout, &choice),
@@ -560,6 +674,10 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     if !flags.cancel.load(Ordering::Acquire) {
         recording.begin();
         cam.log.set(0, cam.mode());
+        log::info!(
+            "Video: Aufnahme gestartet ({} ms nach dem Kürzel)",
+            requested.elapsed().as_millis()
+        );
     }
     let mouse =
         (!camera_only).then(|| MouseLog::start(app, &recording, &choice, slot.input_log_path()));
@@ -573,6 +691,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             .state::<CaptureState>()
             .capturer
             .displays()
+            .map_err(|e| log::warn!("Video: Monitore: {e} – Rahmen folgt dem Fenster nicht"))
             .ok()
             .and_then(|ds| ds.into_iter().find(|d| d.id == choice.display_id))
             .map(|d| (window_id, d)),
@@ -582,23 +701,27 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     let mut failure = recording.failure();
     let mut disk = DiskState::Ok;
     let mut ticks = 0u32;
+    let mut moves = 0u32;
     while failure.is_none()
         && !flags.stop.load(Ordering::Acquire)
         && !flags.cancel.load(Ordering::Acquire)
     {
         if flags.toggle_pause.swap(false, Ordering::AcqRel) {
+            let at = format_duration(recording.elapsed());
             let label = if recording.is_paused() {
                 recording.resume();
+                log::info!("Video: fortgesetzt bei {at}");
                 t("video.pause", &[])
             } else {
                 recording.pause();
+                log::info!("Video: Pause bei {at}");
                 t("video.resume", &[])
             };
             set_label(app, RecordAction::Pause, label);
         }
         if let Some(sketch) = &sketch {
             if flags.toggle_draw.swap(false, Ordering::AcqRel) {
-                let _ = app.run_on_main_thread(|| {
+                main_thread(app, "Zeichnen", || {
                     with_surface(|s| set_drawing(s, !s.is_active()));
                 });
             }
@@ -611,7 +734,15 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             break;
         }
         if ticks.is_multiple_of(DISK_TICKS) {
-            disk = grabmark_media::free_space(&slot.dir).map_or(DiskState::Ok, disk_state);
+            let free = grabmark_media::free_space(&slot.dir);
+            let was = disk;
+            disk = free.map_or(DiskState::Ok, disk_state);
+            if disk != was {
+                log::warn!(
+                    "Video: Speicher {disk:?} ({} MB frei)",
+                    free.unwrap_or(0) / 1_000_000
+                );
+            }
             if disk == DiskState::Critical {
                 failure = Some(t("video.disk_full", &[]));
                 break;
@@ -624,6 +755,7 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
             let rect = window_pixels(bounds, display);
             if frame != Some(rect) {
                 frame = Some(rect);
+                moves += 1;
                 set_rect(app, rect);
             }
         }
@@ -644,8 +776,17 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
     // Abgebrochen: Bis hierher ist alles gesichert – das zeigt die Leiste,
     // während das Video zusammengesetzt wird.
     let saved_until = format_duration(recording.elapsed());
-    if failure.is_some() {
+    let ending = Instant::now();
+    if let Some(e) = &failure {
+        log::error!("Video: Aufnahme fehlgeschlagen nach {saved_until}: {e}");
         set_failed(app, t("video.failed", &[("time", &saved_until)]));
+    } else if flags.cancel.load(Ordering::Acquire) {
+        log::info!("Video: abgebrochen nach {saved_until}");
+    } else {
+        log::info!("Video: gestoppt nach {saved_until}");
+    }
+    if moves > 0 {
+        log::debug!("Video: Rahmen folgte dem Fenster {moves}×");
     }
 
     *app.state::<VideoState>()
@@ -660,18 +801,33 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
         close_ui(app);
         recording.cancel();
         library.discard_video(&slot);
+        log::info!("Video: {} verworfen", slot.id);
         return;
     }
     let samples = mouse.map(MouseLog::finish);
+    let stopping = Instant::now();
     let stopped = recording.stop();
+    let stop_ms = stopping.elapsed().as_millis();
     match stopped {
         Ok(summary) => {
+            log::info!(
+                "Video: {} aufgenommen, {}×{}, Stopp {stop_ms} ms",
+                format_duration(summary.duration),
+                summary.width,
+                summary.height
+            );
             if let Some(samples) = samples {
+                log::debug!("Video: Mausspur {} Proben", samples.len());
                 write_json(&slot.input_path(), &InputTrack { samples });
             }
             if let Some(e) = &failure {
                 log::warn!("Video endete vorzeitig: {e}");
             }
+            log::debug!(
+                "Video: {} Zeichnungen, Webcam-Abschnitte {}",
+                drawings.len(),
+                cam.log.clone().into_sections().len()
+            );
             let webcam_file = files.webcam.as_deref().filter(|p| p.exists());
             let webcam = if camera_only {
                 webcam_file.map(|_| WebcamTrack {
@@ -714,23 +870,38 @@ fn run(app: &AppHandle, choice: Choice, microphone: bool, webcam: bool, settings
                 drawings,
                 Origin::Live,
             );
+            if ok {
+                log::info!(
+                    "Video: fertig {} ms nach dem Stopp",
+                    ending.elapsed().as_millis()
+                );
+            }
             if ok && failure.is_some() {
                 let msg = t("video.failed_saved", &[("time", &saved)]);
-                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+                main_thread(app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
             }
         }
         Err(MediaError::Empty) => {
+            log::warn!("Video: leer – verworfen");
             library.discard_video(&slot);
             if let Some(e) = failure {
                 capture::show_error(app, &e);
             }
         }
         Err(e) => {
+            log::error!("Video: Aufnahme beenden: {e}");
             library.discard_video(&slot);
             capture::show_error(app, &e.to_string());
         }
     }
     close_ui(app);
+}
+
+/// Im Haupt-Thread ausführen; klappt das nicht (App endet), festhalten.
+fn main_thread(app: &AppHandle, what: &str, f: impl FnOnce() + Send + 'static) {
+    if let Err(e) = app.run_on_main_thread(f) {
+        log::warn!("Video: {what}: {e}");
+    }
 }
 
 /// Live zeichnen (ADR 0011): Die Maus kommt im Haupt-Thread an, das
@@ -783,7 +954,7 @@ impl Sketch {
             once,
         });
         let (s, display_id, area) = (sketch.clone(), choice.display_id, choice.area);
-        let _ = app.run_on_main_thread(move || {
+        main_thread(app, "Zeichenfläche", move || {
             let tools: Vec<DrawTool<'_>> = SketchTool::ALL
                 .iter()
                 .map(|t| DrawTool {
@@ -811,6 +982,7 @@ impl Sketch {
                 Box::new(move |e| handler.on_event(e)),
             ) {
                 Ok(surface) => {
+                    log::debug!("Video: Zeichenfläche geöffnet ({}×{})", area.2, area.3);
                     surface.set_selected(0, 0);
                     SURFACE.with(|x| *x.borrow_mut() = Some(surface));
                 }
@@ -882,7 +1054,9 @@ impl Sketch {
     fn tick(&self, app: &AppHandle) {
         let changed = self.lock().tick(self.clock());
         if changed {
-            let _ = app.run_on_main_thread(|| with_surface(|s| s.set_image(None)));
+            main_thread(app, "Zeichenfläche", || {
+                with_surface(|s| s.set_image(None))
+            });
         }
     }
 
@@ -903,15 +1077,19 @@ impl Sketch {
     /// Fläche schliessen und die Zeichnungen als Ebenen zurückgeben.
     fn close(&self, app: &AppHandle) -> Vec<SketchItem> {
         let (tx, rx) = mpsc::sync_channel(1);
-        let _ = app.run_on_main_thread(move || {
+        main_thread(app, "Zeichenfläche", move || {
             SURFACE.with(|s| {
                 if let Some(surface) = s.borrow_mut().take() {
                     surface.close();
+                    log::debug!("Video: Zeichenfläche geschlossen");
                 }
             });
+            // Wartet keiner mehr (Zeitüberschreitung), ist das egal.
             let _ = tx.send(());
         });
-        let _ = rx.recv_timeout(Duration::from_secs(2));
+        if let Err(e) = rx.recv_timeout(Duration::from_secs(2)) {
+            log::warn!("Video: Zeichenfläche schliessen: {e}");
+        }
         let end = self.clock().rec_ms;
         self.lock().finish(end)
     }
@@ -927,6 +1105,9 @@ fn with_surface(f: impl FnOnce(&DrawSurface)) {
 
 /// Zeichnen ein/aus und den Knopf in der Leiste nachführen (Haupt-Thread).
 fn set_drawing(surface: &DrawSurface, on: bool) {
+    if surface.is_active() != on {
+        log::info!("Video: Zeichnen {}", if on { "an" } else { "aus" });
+    }
     surface.set_active(on);
     let label = DRAW_SHORTCUT.with(|s| draw_label(on, &s.borrow()));
     UI.with(|u| {
@@ -961,7 +1142,7 @@ impl MouseLog {
     ) -> Self {
         let own_clicks = Arc::new(Mutex::new(Vec::new()));
         let (rec, own) = (recording.clone(), own_clicks.clone());
-        let _ = app.run_on_main_thread(move || {
+        main_thread(app, "Klick-Wächter", move || {
             let watch = grabmark_overlay::watch_own_clicks(Box::new(move || {
                 let at = rec.elapsed().as_millis().min(u32::MAX as u128) as u32;
                 own.lock().unwrap_or_else(|e| e.into_inner()).push(at);
@@ -975,6 +1156,7 @@ impl MouseLog {
         let thread = std::thread::spawn(move || {
             let mut samples = Vec::new();
             let Some((ax, ay, aw, ah)) = area else {
+                log::warn!("Video: Fläche unbekannt – keine Mausspur");
                 return samples;
             };
             let capturer = &app.state::<CaptureState>().capturer;
@@ -1016,19 +1198,28 @@ impl MouseLog {
 
     fn finish(mut self) -> Vec<InputSample> {
         self.stop();
-        let mut samples = self
-            .thread
-            .take()
-            .and_then(|t| t.join().ok())
-            .unwrap_or_default();
+        let mut samples = match self.thread.take().map(|t| t.join()) {
+            Some(Ok(samples)) => samples,
+            Some(Err(_)) => {
+                log::error!("Video: Mausspur abgestürzt");
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
         let own = self.own_clicks.lock().unwrap_or_else(|e| e.into_inner());
+        let before = samples.len();
         grabmark_video::cursor::remove_own_clicks(&mut samples, &own);
+        log::debug!(
+            "Video: {} Klicks in Grabmark, {} Proben entfernt",
+            own.len(),
+            before - samples.len()
+        );
         samples
     }
 
     fn stop(&self) {
         self.running.store(false, Ordering::Release);
-        let _ = self.app.run_on_main_thread(|| {
+        main_thread(&self.app, "Klick-Wächter", || {
             OWN_CLICKS.with(|w| w.borrow_mut().take());
         });
     }
@@ -1039,6 +1230,8 @@ struct InputLog {
     file: Option<std::io::BufWriter<std::fs::File>>,
     /// So viele Proben stehen schon in der Datei.
     written: usize,
+    /// Schreibfehler nur einmal festhalten.
+    failed: bool,
 }
 
 impl InputLog {
@@ -1050,7 +1243,11 @@ impl InputLog {
             .map_err(|e| log::warn!("{}: {e}", path.display()))
             .ok()
             .map(std::io::BufWriter::new);
-        Self { file, written: 0 }
+        Self {
+            file,
+            written: 0,
+            failed: false,
+        }
     }
 
     fn append(&mut self, samples: &[InputSample]) {
@@ -1058,26 +1255,45 @@ impl InputLog {
         let Some(file) = self.file.as_mut() else {
             return;
         };
+        let mut result = Ok(());
         for sample in &samples[self.written.min(samples.len())..] {
             if let Ok(line) = serde_json::to_string(sample) {
-                let _ = writeln!(file, "{line}");
+                result = result.and(writeln!(file, "{line}"));
             }
         }
         self.written = samples.len();
-        let _ = file.flush();
+        if let Err(e) = result.and(file.flush())
+            && !self.failed
+        {
+            self.failed = true;
+            log::warn!("Video: Mausspur sichern: {e}");
+        }
     }
 }
 
 /// Mausspur aus `<id>_input.jsonl` (nach einem Absturz). Kaputte letzte
 /// Zeile wird übersprungen.
 fn read_input_log(path: &Path) -> Vec<InputSample> {
-    std::fs::read_to_string(path)
-        .map(|text| {
-            text.lines()
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let lines = text.lines().count();
+            let samples: Vec<InputSample> = text
+                .lines()
                 .filter_map(|l| serde_json::from_str(l).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+                .collect();
+            log::debug!(
+                "Video: Mausspur {} Proben, {} Zeilen unlesbar",
+                samples.len(),
+                lines - samples.len()
+            );
+            samples
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            log::warn!("{}: {e}", path.display());
+            Vec::new()
+        }
+    }
 }
 
 /// Zwischenstand der Aufnahme (`<id>_recording.json`), nur bei Änderung
@@ -1101,8 +1317,12 @@ impl Checkpoint {
 
     fn update(&mut self, change: impl FnOnce(&mut RecordingCheckpoint)) {
         change(&mut self.state);
-        let Ok(json) = serde_json::to_string(&self.state) else {
-            return;
+        let json = match serde_json::to_string(&self.state) {
+            Ok(json) => json,
+            Err(e) => {
+                log::warn!("Video: Zwischenstand: {e}");
+                return;
+            }
         };
         if self.written.as_deref() == Some(json.as_str()) {
             return;
@@ -1110,7 +1330,14 @@ impl Checkpoint {
         // Erst daneben schreiben, dann umbenennen: nie eine halbe Datei.
         let temp = self.path.with_extension("json.tmp");
         match std::fs::write(&temp, &json).and_then(|()| std::fs::rename(&temp, &self.path)) {
-            Ok(()) => self.written = Some(json),
+            Ok(()) => {
+                log::debug!(
+                    "Video: Zwischenstand gesichert ({} Webcam-Abschnitte, {} Zeichnungen)",
+                    self.state.webcam_sections.len(),
+                    self.state.drawings.len()
+                );
+                self.written = Some(json);
+            }
             Err(e) => log::warn!("{}: {e}", self.path.display()),
         }
     }
@@ -1165,13 +1392,23 @@ pub fn quit(app: &AppHandle) {
         app.exit(0);
         return;
     }
+    log::info!("Beenden: wartet, bis das Video gesichert ist");
     stop_running(app);
     let app = app.clone();
     std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(600);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(600);
         while app.state::<VideoState>().active.load(Ordering::Acquire) && Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(100));
+        }
+        if app.state::<VideoState>().active.load(Ordering::Acquire) {
+            log::warn!("Beenden: Video nach 10 min nicht gesichert – beendet trotzdem");
+        } else {
+            log::info!(
+                "Beenden: Video gesichert nach {} ms",
+                started.elapsed().as_millis()
+            );
         }
         app.exit(0);
     });
@@ -1186,7 +1423,12 @@ impl Drop for MouseLog {
 
 /// Aufgenommene Fläche in globalen Punkten (x, y, Breite, Höhe).
 fn area_points(app: &AppHandle, choice: &Choice) -> Option<(f32, f32, f32, f32)> {
-    let displays = app.state::<CaptureState>().capturer.displays().ok()?;
+    let displays = app
+        .state::<CaptureState>()
+        .capturer
+        .displays()
+        .map_err(|e| log::warn!("Video: Monitore: {e}"))
+        .ok()?;
     let d = displays.iter().find(|d| d.id == choice.display_id)?;
     let s = d.scale_factor.max(1.0);
     let (x, y, w, h) = choice.area;
@@ -1214,6 +1456,8 @@ struct WebcamControl {
     on: bool,
     /// Kamera läuft gerade an (im Hintergrund).
     starting: Option<std::thread::JoinHandle<grabmark_media::Result<()>>>,
+    /// Seit wann die Kamera anläuft.
+    since: Instant,
     large: bool,
     log: SectionLog,
     layout: WebcamLayout,
@@ -1232,6 +1476,8 @@ impl WebcamControl {
 
     /// Kamera im Hintergrund einschalten; [`Self::handle`] zeigt danach die Blase.
     fn start(&mut self, recording: &Arc<dyn Recording>) {
+        log::debug!("Webcam: startet");
+        self.since = Instant::now();
         let recording = recording.clone();
         self.starting = Some(std::thread::spawn(move || recording.set_webcam(true)));
     }
@@ -1251,6 +1497,7 @@ impl WebcamControl {
         {
             match handle.join() {
                 Ok(Ok(())) => {
+                    log::info!("Webcam: an ({} ms)", self.since.elapsed().as_millis());
                     self.on = true;
                     show_bubble(app, recording, choice, self);
                 }
@@ -1265,6 +1512,7 @@ impl WebcamControl {
         // Während die Kamera anläuft, wartet ein Klick, bis sie läuft.
         if self.starting.is_none() && flags.toggle_webcam.swap(false, Ordering::AcqRel) {
             if self.on {
+                log::info!("Webcam: aus");
                 if let Err(e) = recording.set_webcam(false) {
                     log::warn!("Webcam: {e}");
                 }
@@ -1272,12 +1520,16 @@ impl WebcamControl {
                 hide_bubble(app);
                 set_label(app, RecordAction::Webcam, t("video.webcam_on", &[]));
             } else if camera_allowed(app) {
+                log::info!("Webcam: einschalten");
                 set_label(app, RecordAction::Webcam, t("video.webcam_off", &[]));
                 self.start(recording);
+            } else {
+                log::info!("Webcam: keine Freigabe");
             }
         }
         if flags.toggle_large.swap(false, Ordering::AcqRel) && self.on {
             self.large = !self.large;
+            log::info!("Webcam: {}", if self.large { "gross" } else { "klein" });
             let key = if self.large {
                 "video.webcam_small"
             } else {
@@ -1295,8 +1547,9 @@ impl WebcamControl {
 fn camera_allowed(app: &AppHandle) -> bool {
     match grabmark_media::camera_permission() {
         Permission::Granted => true,
-        Permission::NotDetermined => grabmark_media::request_camera_permission(),
+        Permission::NotDetermined => asked("Kamera", grabmark_media::request_camera_permission()),
         Permission::Denied => {
+            log::warn!("Webcam: Kamera-Freigabe fehlt – Systemeinstellungen");
             capture::open_privacy_settings(app, PrivacyPane::Camera);
             false
         }
@@ -1393,7 +1646,7 @@ fn show_bubble(
     let (recording, display_id, rect) = (recording.clone(), choice.display_id, cam.bubble_rect);
     let style = bubble_style(&cam.layout, choice.target.is_none());
     let layout = cam.layout;
-    let _ = app.run_on_main_thread(move || {
+    main_thread(app, "Webcam-Blase", move || {
         BUBBLE.with(|b| {
             let mut b = b.borrow_mut();
             if let Some(bubble) = b.as_ref() {
@@ -1401,6 +1654,7 @@ fn show_bubble(
                 return;
             }
             let Some(preview) = recording.webcam_preview(&layout) else {
+                log::warn!("Webcam-Blase: keine Vorschau");
                 return;
             };
             // SAFETY: `preview` ist eine gültige Ebene von grabmark-media; die
@@ -1408,7 +1662,10 @@ fn show_bubble(
             match unsafe {
                 grabmark_overlay::open_webcam_bubble(display_id, rect, style, preview.as_ptr())
             } {
-                Ok(bubble) => *b = Some(bubble),
+                Ok(bubble) => {
+                    log::debug!("Webcam-Blase geöffnet ({:.0}×{:.0})", rect.2, rect.3);
+                    *b = Some(bubble);
+                }
                 Err(e) => log::error!("Webcam-Blase: {e}"),
             }
         })
@@ -1416,7 +1673,7 @@ fn show_bubble(
 }
 
 fn hide_bubble(app: &AppHandle) {
-    let _ = app.run_on_main_thread(|| {
+    main_thread(app, "Webcam-Blase", || {
         BUBBLE.with(|b| {
             if let Some(bubble) = b.borrow().as_ref() {
                 bubble.set_visible(false);
@@ -1428,24 +1685,30 @@ fn hide_bubble(app: &AppHandle) {
 /// Schliesst die Blase und gibt ihre letzte Lage zurück.
 fn close_bubble(app: &AppHandle) -> Option<(f64, f64, f64, f64)> {
     let (tx, rx) = mpsc::sync_channel(1);
-    let _ = app.run_on_main_thread(move || {
+    main_thread(app, "Webcam-Blase", move || {
         let frame = BUBBLE.with(|b| {
             b.borrow_mut().take().map(|bubble| {
                 let frame = bubble.frame();
                 bubble.close();
+                log::debug!("Webcam-Blase geschlossen");
                 frame
             })
         });
+        // Wartet keiner mehr (Zeitüberschreitung), ist das egal.
         let _ = tx.send(frame);
     });
-    rx.recv_timeout(Duration::from_secs(2)).ok().flatten()
+    rx.recv_timeout(Duration::from_secs(2))
+        .map_err(|e| log::warn!("Webcam-Blase schliessen: {e}"))
+        .ok()
+        .flatten()
 }
 
 fn close_ui(app: &AppHandle) {
-    let _ = app.run_on_main_thread(|| {
+    main_thread(app, "Video-Leiste", || {
         UI.with(|u| {
             if let Some(ui) = u.borrow_mut().take() {
                 ui.close();
+                log::debug!("Video-Leiste geschlossen");
             }
         })
     });
@@ -1510,7 +1773,7 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
     let shortcut = draw_shortcut(app);
     let draw = choice.target.map(|_| draw_label(false, &shortcut));
     let (display_id, rect, flags) = (choice.display_id, choice.rect, flags.clone());
-    let _ = app.run_on_main_thread(move || {
+    main_thread(app, "Video-Leiste", move || {
         DRAW_SHORTCUT.with(|s| *s.borrow_mut() = shortcut);
         let ui = grabmark_overlay::open_record_ui(
             display_id,
@@ -1525,6 +1788,7 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
                 cancel: &cancel,
             },
             Box::new(move |action| {
+                log::debug!("Video-Leiste: {action:?}");
                 let flag = match action {
                     RecordAction::Pause => &flags.toggle_pause,
                     RecordAction::Draw => &flags.toggle_draw,
@@ -1537,7 +1801,10 @@ fn open_ui(app: &AppHandle, choice: &Choice, flags: &Flags, countdown: bool, web
             }),
         );
         match ui {
-            Ok(ui) => UI.with(|u| *u.borrow_mut() = Some(ui)),
+            Ok(ui) => {
+                log::debug!("Video-Leiste geöffnet");
+                UI.with(|u| *u.borrow_mut() = Some(ui));
+            }
             Err(e) => log::error!("Video-Leiste: {e}"),
         }
     });
@@ -1653,8 +1920,12 @@ fn finish(
     // Das Dokument bezieht sich auf die volle Grösse, auch wenn das fertige
     // Video kleiner ist (Einstellung *Auflösung*). Live Gezeichnetes wird zu
     // Ebenen mit Zeitbereich.
-    let frame = crate::video_edit::frame_size(files, &video_doc)
-        .unwrap_or((summary.width.max(2), summary.height.max(2)));
+    let started = Instant::now();
+    let frame = crate::video_edit::frame_size(files, &video_doc).unwrap_or_else(|e| {
+        log::warn!("Video: Grösse aus den Spuren: {e} – nehme Aufnahmegrösse");
+        (summary.width.max(2), summary.height.max(2))
+    });
+    let drawing_count = drawings.len();
     let mut doc = Document::from_capture_scaled(frame.0, frame.1, scale);
     let mut video_doc = video_doc;
     for item in drawings {
@@ -1672,26 +1943,43 @@ fn finish(
     // Das fertige Video entsteht erst auf Wunsch (Kopieren, Sichern …) – der
     // Editor spielt die Spuren direkt ab. Standbild aus der Hauptspur.
     let Some(main) = files.screen.as_ref().or(files.webcam.as_ref()) else {
+        log::error!("Video {}: keine Spur zum Sichern", slot.id);
         return false;
     };
     let poster = match grabmark_media::frame_at(main, Duration::ZERO) {
         Ok(p) => p,
         Err(e) => {
+            log::error!("Video {}: Standbild: {e}", slot.id);
             capture::show_error(app, &e.to_string());
             return false;
         }
     };
+    let poster_ms = started.elapsed().as_millis();
     let library = app.state::<CaptureState>().library.clone();
     let rec = match library.save_video(slot, &poster, scale, doc) {
         Ok(r) => r,
         Err(e) => {
+            log::error!("Video {}: sichern: {e}", slot.id);
             capture::show_error(app, &e.to_string());
             return false;
         }
     };
     // Gesichert: Zwischenstände werden nicht mehr gebraucht.
-    let _ = std::fs::remove_file(slot.checkpoint_path());
-    let _ = std::fs::remove_file(slot.input_log_path());
+    for path in [slot.checkpoint_path(), slot.input_log_path()] {
+        if let Err(e) = std::fs::remove_file(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("{}: {e}", path.display());
+        }
+    }
+    log::info!(
+        "Video: gesichert als {} ({}×{}, {} Zeichnungen, {origin:?}) in {} ms (Standbild {poster_ms} ms)",
+        rec.id,
+        frame.0,
+        frame.1,
+        drawing_count,
+        started.elapsed().as_millis()
+    );
     crate::services::index_capture(app, &rec);
     if origin == Origin::Live {
         open_in_editor(app, &rec.id, crate::settings::get(app).copy_to_clipboard);
@@ -1707,9 +1995,14 @@ fn open_in_editor(app: &AppHandle, id: &str, copy: bool) {
         id: &'a str,
         copy: bool,
     }
-    let _ = app.emit("open-video", OpenVideo { id, copy });
+    log::debug!("Video: {id} im Editor öffnen (kopieren: {copy})");
+    if let Err(e) = app.emit("open-video", OpenVideo { id, copy }) {
+        log::warn!("open-video: {e}");
+    }
     let a = app.clone();
-    let _ = app.run_on_main_thread(move || crate::tray::show_main_window(&a));
+    main_thread(app, "Hauptfenster", move || {
+        crate::tray::show_main_window(&a)
+    });
 }
 
 /// Nach dem Start: Aufnahmen, die nie fertig wurden (Absturz), anbieten
@@ -1722,9 +2015,16 @@ pub fn offer_recovery(app: &AppHandle) {
             .unfinished_videos()
             .into_iter()
             .filter_map(|slot| {
-                let main = [slot.screen_path(), slot.webcam_path()]
+                let Some(main) = [slot.screen_path(), slot.webcam_path()]
                     .into_iter()
-                    .find(|p| p.exists())?;
+                    .find(|p| p.exists())
+                else {
+                    log::debug!(
+                        "Abgebrochene Aufnahme {}: ohne Spur – übersprungen",
+                        slot.id
+                    );
+                    return None;
+                };
                 match grabmark_media::duration(&main) {
                     Ok(d) => Some((slot, d)),
                     Err(e) => {
@@ -1739,6 +2039,10 @@ pub fn offer_recovery(app: &AppHandle) {
         if slots.is_empty() {
             return;
         }
+        log::info!(
+            "Wiederherstellung: {} abgebrochene Aufnahme(n) angeboten",
+            slots.len()
+        );
         let durations: Vec<String> = slots.iter().map(|(_, d)| format_duration(*d)).collect();
         let message = if slots.len() == 1 {
             t("video.recover_one", &[("duration", &durations[0])])
@@ -1771,18 +2075,38 @@ pub fn offer_recovery(app: &AppHandle) {
             // Später (oder Fenster geschlossen): beim nächsten Start wieder fragen.
             _ => None,
         };
+        log::info!(
+            "Wiederherstellung: {}",
+            match choice {
+                Some(true) => "angenommen",
+                Some(false) => "verworfen",
+                None => "später",
+            }
+        );
         for (slot, duration) in slots {
             match choice {
                 Some(true) => {
+                    let started = Instant::now();
                     if recover_slot(&app, &slot, duration) {
+                        log::info!(
+                            "Wiederherstellung: {} ({}) gesichert in {} ms",
+                            slot.id,
+                            format_duration(duration),
+                            started.elapsed().as_millis()
+                        );
                         let msg = t(
                             "video.recovered",
                             &[("duration", &format_duration(duration))],
                         );
-                        let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+                        main_thread(&app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
+                    } else {
+                        log::error!("Wiederherstellung: {} fehlgeschlagen", slot.id);
                     }
                 }
-                Some(false) => library.discard_video(&slot),
+                Some(false) => {
+                    log::info!("Wiederherstellung: {} verworfen", slot.id);
+                    library.discard_video(&slot);
+                }
                 None => {}
             }
         }
@@ -1806,15 +2130,29 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
             write_json(&slot.input_path(), &InputTrack { samples });
         }
     }
-    let checkpoint = std::fs::read(slot.checkpoint_path())
-        .ok()
-        .and_then(|b| serde_json::from_slice::<RecordingCheckpoint>(&b).ok());
+    let checkpoint = match std::fs::read(slot.checkpoint_path()) {
+        Ok(b) => serde_json::from_slice::<RecordingCheckpoint>(&b)
+            .map_err(|e| log::warn!("Wiederherstellung {}: Zwischenstand: {e}", slot.id))
+            .ok(),
+        Err(e) => {
+            log::warn!("Wiederherstellung {}: ohne Zwischenstand ({e})", slot.id);
+            None
+        }
+    };
+    log::debug!(
+        "Wiederherstellung {}: Bildschirm {}, Webcam {}, Zwischenstand {}",
+        slot.id,
+        files.screen.is_some(),
+        files.webcam.is_some(),
+        checkpoint.is_some()
+    );
     let settings = crate::settings::get(app).video;
     let camera_only = files.screen.is_none();
     let scale = app
         .state::<CaptureState>()
         .capturer
         .displays()
+        .map_err(|e| log::warn!("Wiederherstellung: Monitore: {e}"))
         .ok()
         .and_then(|ds| ds.into_iter().find(|d| d.is_primary))
         .map_or(2.0, |d| d.scale_factor * grabmark_media::record_ratio(d.id));
@@ -1848,7 +2186,11 @@ fn recover_slot(app: &AppHandle, slot: &VideoSlot, duration: Duration) -> bool {
         .collect();
     let main = files.screen.as_ref().or(files.webcam.as_ref());
     let (width, height) = main
-        .and_then(|p| grabmark_media::open_video(p).ok())
+        .and_then(|p| {
+            grabmark_media::open_video(p)
+                .map_err(|e| log::warn!("Wiederherstellung {}: {e}", slot.id))
+                .ok()
+        })
         .map_or((0, 0), |source| source.size());
     let summary = RecordSummary {
         duration,

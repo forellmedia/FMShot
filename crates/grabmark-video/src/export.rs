@@ -10,6 +10,7 @@ use grabmark_core::{Size, VideoDoc};
 
 use grabmark_core::Rect;
 
+use crate::audio::fade_at;
 use crate::cursor::{CursorTrack, arrow_image, ring_image};
 use crate::gpu::{Compositor, IN_FLIGHT, Readback, Ticket};
 use crate::head::HeadPath;
@@ -251,6 +252,18 @@ pub fn export_with(
 ) -> Result<ExportStats, VideoError> {
     let started = Instant::now();
     let (w, h) = extras.size.unwrap_or_else(|| output_size(screen.size()));
+    log::debug!(
+        "Export zusammensetzen: Bildschirm {}×{} → {w}×{h}, {} fps, {} ms, Webcam={}, Kopf={}, Freistellen={}, Zeiger={}, Ebenen={}",
+        screen.size().0,
+        screen.size().1,
+        doc.fps,
+        output_duration(doc),
+        webcam.is_some(),
+        extras.head.is_some(),
+        extras.segmenter.is_some(),
+        extras.cursor.is_some(),
+        extras.overlay.is_some()
+    );
     let mut compositor = Compositor::new(w, h)?;
     let mut times = ExportTimes {
         setup: started.elapsed(),
@@ -269,8 +282,15 @@ pub fn export_with(
     match result {
         Ok(frames) => {
             let finishing = Instant::now();
-            sink.finish().map_err(VideoError::Sink)?;
+            sink.finish().map_err(|e| {
+                log::error!("Export abschliessen fehlgeschlagen: {e}");
+                VideoError::Sink(e)
+            })?;
             times.finish = finishing.elapsed();
+            log::debug!(
+                "Export zusammengesetzt: {frames} Bilder in {} ms",
+                started.elapsed().as_millis()
+            );
             Ok(ExportStats {
                 frames,
                 elapsed: started.elapsed(),
@@ -279,6 +299,13 @@ pub fn export_with(
             })
         }
         Err(e) => {
+            match &e {
+                VideoError::Cancelled => log::info!(
+                    "Export abgebrochen nach {} ms",
+                    started.elapsed().as_millis()
+                ),
+                e => log::error!("Export fehlgeschlagen: {e}"),
+            }
             sink.cancel();
             Err(e)
         }
@@ -310,6 +337,9 @@ fn run(
         .is_some_and(|t| t.layout.background != grabmark_core::WebcamBackground::Original);
     let segmenter = extras.segmenter.take().filter(|_| needs_mask);
     let mut screen = Track::spawn(screen, None);
+    if webcam.is_some() && !shows_webcam {
+        log::debug!("Webcam-Spur vorhanden, aber nirgends sichtbar – nicht dekodiert");
+    }
     let mut webcam = webcam
         .filter(|_| shows_webcam)
         .map(|w| Track::spawn(w, segmenter));
@@ -404,6 +434,13 @@ fn run(
                         Source::Overlay,
                         Placement::plain(Rect::new(0.0, 0.0, frame.width, frame.height)),
                     ));
+                }
+                // Ein- und Ausblenden: alles über dem schwarzen Grund wird blasser.
+                let fade = fade_at(doc, t.as_secs_f64() * 1000.0);
+                if fade < 1.0 {
+                    for (_, p) in &mut scene.layers {
+                        p.opacity *= fade;
+                    }
                 }
                 // Freier Puffer: Ist keiner da, kodiert der andere Thread noch.
                 let waiting = Instant::now();

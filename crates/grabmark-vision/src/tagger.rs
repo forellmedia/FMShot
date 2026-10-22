@@ -63,6 +63,7 @@ pub struct Tagger {
 
 impl Tagger {
     pub fn build(text: &TextEncoder) -> Result<Self, VisionError> {
+        let started = std::time::Instant::now();
         let terms = TERMS
             .iter()
             .map(|t| text.embed(t.prompt))
@@ -73,6 +74,12 @@ impl Tagger {
                 *s += v;
             }
         }
+        log::debug!(
+            "Begriffe berechnet: {} + {} Füllwörter in {} ms",
+            terms.len(),
+            NEUTRAL.len(),
+            started.elapsed().as_millis()
+        );
         Ok(Tagger {
             terms,
             neutral: Embedding::normalized(sum)?,
@@ -127,8 +134,10 @@ impl Tagger {
         query: &Embedding,
         images: impl IntoIterator<Item = (&'a str, &'a Embedding)>,
     ) -> Vec<(&'a str, f32)> {
+        let mut candidates = 0usize;
         let mut hits: Vec<(&'a str, f32)> = images
             .into_iter()
+            .inspect(|_| candidates += 1)
             .filter_map(|(id, image)| {
                 let l = logit(query, image);
                 let above = l - logit(&self.neutral, image);
@@ -138,6 +147,10 @@ impl Tagger {
         hits.sort_by(|a, b| b.1.total_cmp(&a.1));
         let best = hits.first().map_or(0.0, |h| h.1);
         hits.retain(|h| h.1 >= best - SEARCH_SPREAD);
+        log::debug!(
+            "Bildinhalt-Suche: {} von {candidates} Bildern passen",
+            hits.len()
+        );
         hits
     }
 
@@ -151,6 +164,11 @@ impl Tagger {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, VisionError> {
         let size = DIM * 4;
         if bytes.len() != size * (TERMS.len() + 1) {
+            // Erwartet nach einer neuen Begriffsliste: Dann wird neu gerechnet.
+            log::debug!(
+                "Zwischengespeicherte Begriffe passen nicht ({} Bytes)",
+                bytes.len()
+            );
             return Err(VisionError::Bytes(bytes.len()));
         }
         let mut all = bytes

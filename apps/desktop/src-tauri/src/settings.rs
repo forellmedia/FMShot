@@ -21,6 +21,18 @@ impl SettingsState {
             log::error!("{e} – nehme Standardwerte");
             Settings::default()
         });
+        // Das Log-Plugin läuft hier schon; die Abweichungen vom Standard
+        // zeigen, womit Grabmark startet.
+        let custom = changed_fields(&Settings::default(), &current);
+        log::debug!(
+            "Einstellungen geladen: {} – abweichend vom Standard: {}",
+            path.display(),
+            if custom.is_empty() {
+                "nichts".to_string()
+            } else {
+                custom.join(", ")
+            }
+        );
         Self {
             path,
             current: RwLock::new(current),
@@ -63,12 +75,22 @@ pub fn get_settings(app: AppHandle) -> Settings {
 #[tauri::command]
 #[specta::specta]
 pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    let start = std::time::Instant::now();
     let state = app.state::<SettingsState>();
-    settings.save(&state.path).map_err(|e| e.to_string())?;
+    settings.save(&state.path).map_err(|e| {
+        log::error!("Einstellungen speichern: {e}");
+        e.to_string()
+    })?;
     let previous = std::mem::replace(
         &mut *state.current.write().unwrap_or_else(|e| e.into_inner()),
         settings.clone(),
     );
+    let changed = changed_fields(&previous, &settings);
+    if changed.is_empty() {
+        log::debug!("Einstellungen gespeichert, unverändert");
+    } else {
+        log::info!("Einstellungen geändert: {}", changed.join(", "));
+    }
     crate::i18n::set_language(settings.language.as_deref());
     // Alle Fenster laden in der neuen Sprache neu.
     if previous.language != settings.language {
@@ -82,7 +104,53 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
         log::error!("App-Menü: {e}");
     }
     crate::vision::wake(&app);
+    log::debug!(
+        "Einstellungen angewendet ({:.0} ms)",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(())
+}
+
+/// Geänderte Felder, z. B. `video.fps: 30 → 60`. Ordner und Geräte nur mit
+/// Namen, ohne Wert.
+fn changed_fields(old: &Settings, new: &Settings) -> Vec<String> {
+    let (Ok(a), Ok(b)) = (serde_json::to_value(old), serde_json::to_value(new)) else {
+        log::warn!("Einstellungen vergleichen: nicht serialisierbar");
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    diff("", &a, &b, &mut out);
+    out
+}
+
+fn diff(path: &str, a: &serde_json::Value, b: &serde_json::Value, out: &mut Vec<String>) {
+    use serde_json::Value;
+    if a == b {
+        return;
+    }
+    if let (Value::Object(x), Value::Object(y)) = (a, b) {
+        let keys: std::collections::BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+        for key in keys {
+            let sub = if path.is_empty() {
+                key.clone()
+            } else {
+                format!("{path}.{key}")
+            };
+            diff(
+                &sub,
+                x.get(key).unwrap_or(&Value::Null),
+                y.get(key).unwrap_or(&Value::Null),
+                out,
+            );
+        }
+        return;
+    }
+    const PRIVATE: [&str; 3] = ["folder", "microphone_id", "camera_id"];
+    if PRIVATE.iter().any(|k| path.rsplit('.').next() == Some(k)) {
+        out.push(path.to_string());
+    } else {
+        out.push(format!("{path}: {a} → {b}"));
+    }
 }
 
 /// Aktuelle Belegung inklusive Konflikten.
@@ -122,6 +190,7 @@ pub fn shortcut_label(shortcut: String) -> Result<String, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn pause_hotkeys(app: AppHandle, paused: bool) {
+    log::debug!("Tastenkürzel pausiert: {paused}");
     if paused {
         crate::hotkeys::unregister_all(&app);
     } else {
@@ -142,9 +211,11 @@ pub fn system_shortcuts_active() -> Option<bool> {
 #[specta::specta]
 pub fn open_shortcut_settings(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    log::info!("Systemeinstellungen für Tastenkürzel öffnen");
     let url = grabmark_hotkeys::system::shortcut_settings_url().ok_or("nicht verfügbar")?;
     app.opener()
         .open_url(url, None::<&str>)
+        .inspect_err(|e| log::error!("Systemeinstellungen öffnen: {e}"))
         .map_err(|e| e.to_string())
 }
 
@@ -153,13 +224,41 @@ pub fn open_shortcut_settings(app: AppHandle) -> Result<(), String> {
 #[specta::specta]
 pub async fn choose_folder(app: AppHandle) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
+        let folder = app
+            .dialog()
             .file()
             .blocking_pick_folder()
-            .and_then(|p| p.into_path().ok())
-            .map(|p| p.to_string_lossy().into_owned())
+            .and_then(|p| {
+                p.into_path()
+                    .inspect_err(|e| log::warn!("Ordner wählen: {e}"))
+                    .ok()
+            })
+            .map(|p| p.to_string_lossy().into_owned());
+        log::info!("Ordner gewählt: {}", folder.is_some());
+        folder
     })
     .await
+    .inspect_err(|e| log::warn!("Ordner wählen: {e}"))
     .ok()
     .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geaenderte_felder() {
+        let old = Settings::default();
+        let mut new = old.clone();
+        new.content_search = !old.content_search;
+        new.auto_export.folder = Some("/Users/x/Bilder".into());
+        new.video.fps = old.video.fps + 1;
+        let changed = changed_fields(&old, &new);
+        assert_eq!(changed.len(), 3, "{changed:?}");
+        assert!(changed.contains(&"auto_export.folder".to_string()));
+        assert!(changed.iter().any(|c| c.starts_with("content_search: ")));
+        assert!(changed.iter().any(|c| c.starts_with("video.fps: ")));
+        assert!(changed_fields(&old, &old).is_empty());
+    }
 }

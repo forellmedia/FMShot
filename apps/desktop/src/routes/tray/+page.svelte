@@ -19,6 +19,7 @@
   } from "$lib/bindings";
   import Icon from "$lib/editor/Icon.svelte";
   import type { IconName } from "$lib/icons";
+  import { DEFAULT_FPS, nextFps } from "$lib/fps";
   import { t, type MessageKey } from "$lib/i18n";
 
   type Tab = "image" | "screen" | "webcam" | "settings";
@@ -241,8 +242,11 @@
         {@render chip(t("tray.chip_countdown"), "timer", video.countdown ?? true, () =>
           setVideo({ countdown: !(video.countdown ?? true) }),
         )}
-        {@render chip(t("tray.chip_fps60"), "play", (video.fps ?? 30) === 60, () =>
-          setVideo({ fps: (video.fps ?? 30) === 60 ? 30 : 60 }),
+        {@render chip(
+          t("tray.chip_fps", { n: String(video.fps ?? DEFAULT_FPS) }),
+          "play",
+          (video.fps ?? DEFAULT_FPS) !== DEFAULT_FPS,
+          () => setVideo({ fps: nextFps(video.fps ?? DEFAULT_FPS) }),
         )}
       </div>
 

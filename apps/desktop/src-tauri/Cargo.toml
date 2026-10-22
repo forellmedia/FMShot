@@ -43,6 +43,7 @@ grabmark-settings = { workspace = true, features = ["specta"] }
 grabmark-stitch.workspace = true
 grabmark-vision.workspace = true
 log = "0.4"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 sys-locale = "0.3"
 tauri-plugin-updater = "2"
 serde.workspace = true

@@ -246,6 +246,20 @@ pub fn open_video(path: &Path) -> Result<Box<dyn grabmark_video::FrameSource>> {
 pub struct AudioInput {
     pub path: PathBuf,
     pub volume: f32,
+    /// Lautstärke über die Zeit des fertigen Videos (Punkte, Blenden); leer
+    /// = überall `volume`. Sonst gilt nur sie.
+    pub ramps: Vec<grabmark_video::audio::VolumeRamp>,
+}
+
+impl AudioInput {
+    /// Ist die Spur irgendwo zu hören?
+    pub fn audible(&self) -> bool {
+        if self.ramps.is_empty() {
+            self.volume > 0.0
+        } else {
+            self.ramps.iter().any(|r| r.from > 0.0 || r.to > 0.0)
+        }
+    }
 }
 
 /// Legt ein MP4 (H.264 bzw. HEVC nach `encoding`, Ton AAC) an, das die

@@ -178,6 +178,10 @@
     {/if}
   {/each}
   <canvas bind:this={overlay} class="pointer" style:z-index={player.scene.layers.length + 2}></canvas>
+  {#if player.fade < 1}
+    <!-- Ein-/Ausblenden: wie im Export über Schwarz. -->
+    <div class="fade" style:opacity={1 - player.fade} style:z-index={player.scene.layers.length + 3}></div>
+  {/if}
   {#if player.urls.system}
     <audio bind:this={systemEl} src={player.urls.system} preload="auto"></audio>
   {/if}
@@ -207,6 +211,12 @@
     position: absolute;
     inset: 0;
     border-radius: inherit;
+    pointer-events: none;
+  }
+  .fade {
+    position: absolute;
+    inset: 0;
+    background: #000;
     pointer-events: none;
   }
   .pointer {

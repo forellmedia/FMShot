@@ -67,10 +67,13 @@ pub(crate) fn watch_own_clicks(on_press: Box<dyn Fn()>) -> Option<ClickWatch> {
         // Ereignis unverändert weitergeben.
         event.as_ptr()
     });
-    unsafe {
+    let watch = unsafe {
         NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::LeftMouseDown, &block)
+    };
+    if watch.is_none() {
+        log::warn!("Klick-Wächter für eigene Fenster nicht angelegt");
     }
-    .map(ClickWatch)
+    watch.map(ClickWatch)
 }
 
 impl Drop for ClickWatch {
@@ -87,9 +90,16 @@ impl Handle {
     pub fn set_frozen(&self, display_id: u32, image: Arc<RgbaImage>) {
         if let Some(session) = self.session.upgrade() {
             let s = session.borrow();
-            if let Some(st) = s.screens.iter().find(|st| st.display_id == display_id) {
-                st.set_frozen(image);
+            match s.screens.iter().find(|st| st.display_id == display_id) {
+                Some(st) => st.set_frozen(image),
+                // Nach dem Schliessen sind die Monitore leer – dann normal.
+                None if s.on_done.is_some() => {
+                    log::warn!("Overlay: Monitor {display_id} für das eingefrorene Bild unbekannt")
+                }
+                None => {}
             }
+        } else {
+            log::debug!("Overlay schon zu – eingefrorenes Bild verworfen");
         }
     }
 
@@ -128,8 +138,15 @@ pub(crate) fn open(
         .unwrap_or(0.0);
     for (index, ns_screen) in ns_screens.iter().enumerate() {
         let Some(display_id) = screen_number(&ns_screen) else {
+            log::warn!("Overlay: Monitor {index} ohne Kennung – übersprungen");
             continue;
         };
+        log::debug!(
+            "Overlay auf Monitor {display_id}: {}×{} Punkte, Skalierung {}",
+            ns_screen.frame().size.width,
+            ns_screen.frame().size.height,
+            ns_screen.backingScaleFactor()
+        );
         let state = ScreenState::new(
             mtm,
             &ns_screen,
@@ -378,6 +395,7 @@ impl ScreenState {
 
     fn set_frozen(&self, image: Arc<RgbaImage>) {
         let Some(cg) = cgimage_from_rgba(image) else {
+            log::warn!("Overlay: eingefrorenes Bild nicht umwandelbar");
             return;
         };
         without_animation(|| {
@@ -1026,7 +1044,10 @@ fn open_bar(
     let screen = screens
         .iter()
         .find(|s| screen_number(s) == Some(display_id))
-        .or_else(|| screens.firstObject())
+        .or_else(|| {
+            log::warn!("Monitor {display_id} nicht gefunden – nehme den ersten");
+            screens.firstObject()
+        })
         .ok_or(OverlayError::NoScreens)?;
     let scale = screen.backingScaleFactor().max(1.0);
 
@@ -1406,7 +1427,10 @@ pub(crate) unsafe fn open_bubble(
     let screen = screens
         .iter()
         .find(|s| screen_number(s) == Some(display_id))
-        .or_else(|| screens.firstObject())
+        .or_else(|| {
+            log::warn!("Monitor {display_id} nicht gefunden – nehme den ersten");
+            screens.firstObject()
+        })
         .ok_or(OverlayError::NoScreens)?;
     let sf = screen.frame();
     let scale = screen.backingScaleFactor().max(1.0);
@@ -1692,7 +1716,10 @@ pub(crate) fn show_preview(
     // Nicht über allem wie das Overlay, aber über normalen Fenstern.
     panel.setLevel(objc2_app_kit::NSFloatingWindowLevel);
 
-    let cg = cgimage_from_rgba(image).ok_or(OverlayError::NoScreens)?;
+    let cg = cgimage_from_rgba(image).ok_or_else(|| {
+        log::warn!("Vorschau: Bild nicht umwandelbar");
+        OverlayError::NoScreens
+    })?;
     let view = PreviewView::alloc(mtm).set_ivars(PreviewIvars {
         on_action,
         file: file.to_string(),
@@ -1821,11 +1848,14 @@ const TOAST_SECONDS: f64 = 1.6;
 
 pub(crate) fn show_toast(text: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("Hinweis nicht im Haupt-Thread – nicht gezeigt");
         return;
     };
     let Some(screen) = NSScreen::mainScreen(mtm) else {
+        log::warn!("Hinweis: kein Hauptmonitor");
         return;
     };
+    log::debug!("Hinweis zeigen");
     let ns_text = NSString::from_str(text);
     let font_size = 15.0;
     let width = (40.0 + 8.5 * ns_text.length() as f64).min(screen.frame().size.width - 80.0);

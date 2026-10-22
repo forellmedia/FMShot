@@ -26,7 +26,20 @@ fn table(german: bool) -> &'static HashMap<String, String> {
 static LANGUAGE: RwLock<Option<String>> = RwLock::new(None);
 
 pub fn set_language(lang: Option<&str>) {
-    *LANGUAGE.write().unwrap_or_else(|e| e.into_inner()) = lang.map(str::to_string);
+    let previous = std::mem::replace(
+        &mut *LANGUAGE.write().unwrap_or_else(|e| e.into_inner()),
+        lang.map(str::to_string),
+    );
+    // Beim Start (vorher `None`) immer, danach nur bei Änderung.
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let first = !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed);
+    if first || previous.as_deref() != lang {
+        log::info!(
+            "Sprache: {} → {}",
+            lang.unwrap_or("System"),
+            if german() { "de" } else { "en" }
+        );
+    }
 }
 
 fn german() -> bool {

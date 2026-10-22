@@ -120,19 +120,33 @@ pub struct Compositor {
 impl Compositor {
     /// Sucht eine Grafikkarte. Ohne passende Grafikkarte [`VideoError::NoGpu`].
     pub fn new(width: u32, height: u32) -> Result<Self, VideoError> {
+        let started = std::time::Instant::now();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }))
-        .map_err(|e| VideoError::NoGpu(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Keine Grafikkarte für den Export: {e}");
+            VideoError::NoGpu(e.to_string())
+        })?;
         let info = adapter.get_info();
+        log::debug!(
+            "Grafikkarte: {} ({:?}, {:?}) für {width}×{height}",
+            info.name,
+            info.backend,
+            info.device_type
+        );
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("grabmark-video"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
-        .map_err(|e| VideoError::NoGpu(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Grafikkarte {} nicht nutzbar: {e}", info.name);
+            VideoError::NoGpu(e.to_string())
+        })?;
+        log::debug!("Grafikkarte bereit in {} ms", started.elapsed().as_millis());
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compose"),

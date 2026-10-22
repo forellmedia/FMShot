@@ -39,7 +39,7 @@ use objc2_foundation::{NSArray, NSNumber, NSString};
 
 use super::{
     AUDIO_FORMAT_AAC, FINISH_TIMEOUT, SAMPLE_RATE, SendRetained, audio_media_type, backend, cf_key,
-    dict, file_url, number, video_media_type,
+    dict, error_detail, file_url, number, remove_quietly, video_media_type,
 };
 use crate::{AudioInput, MediaError, Result, export_bitrate};
 
@@ -61,13 +61,21 @@ pub(crate) struct MacFrames {
     reader: SendRetained<AVAssetReader>,
     output: SendRetained<AVAssetReaderTrackOutput>,
     size: (u32, u32),
+    path: PathBuf,
+    /// Gelesene Bilder – nur fürs Protokoll.
+    frames: u64,
+    opened: Instant,
 }
 
 pub(crate) fn open_video(path: &Path) -> Result<MacFrames> {
+    let opened = Instant::now();
     let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) };
     let track = unsafe { asset.tracksWithMediaType(video_media_type()?) }
         .firstObject()
-        .ok_or(MediaError::Empty)?;
+        .ok_or_else(|| {
+            log::warn!("{} enthält keine Videospur", path.display());
+            MediaError::Empty
+        })?;
     let natural = unsafe { track.naturalSize() };
     let reader =
         unsafe { AVAssetReader::assetReaderWithAsset_error(&asset) }.map_err(|e| backend(&e))?;
@@ -83,26 +91,50 @@ pub(crate) fn open_video(path: &Path) -> Result<MacFrames> {
         // Die Bilder werden ohnehin kopiert.
         output.setAlwaysCopiesSampleData(false);
         if !reader.canAddOutput(&output) {
+            log::error!("{}: Leser nimmt die Ausgabe nicht an", path.display());
             return Err(MediaError::Backend(
                 "Video kann nicht gelesen werden".into(),
             ));
         }
         reader.addOutput(&output);
         if !reader.startReading() {
+            log::error!("{}: Lesen startet nicht", path.display());
             return Err(reader
                 .error()
                 .map(|e| backend(&e))
                 .unwrap_or(MediaError::Empty));
         }
     }
+    let size = (
+        natural.width.round().max(1.0) as u32,
+        natural.height.round().max(1.0) as u32,
+    );
+    log::debug!(
+        "Video {} geöffnet: {}×{} in {} ms",
+        path.display(),
+        size.0,
+        size.1,
+        opened.elapsed().as_millis()
+    );
     Ok(MacFrames {
         reader: SendRetained(reader),
         output: SendRetained(output),
-        size: (
-            natural.width.round().max(1.0) as u32,
-            natural.height.round().max(1.0) as u32,
-        ),
+        size,
+        path: path.to_path_buf(),
+        frames: 0,
+        opened,
     })
+}
+
+impl Drop for MacFrames {
+    fn drop(&mut self) {
+        log::debug!(
+            "Video {}: {} Bilder gelesen in {} ms",
+            self.path.display(),
+            self.frames,
+            self.opened.elapsed().as_millis()
+        );
+    }
 }
 
 impl FrameSource for MacFrames {
@@ -114,9 +146,18 @@ impl FrameSource for MacFrames {
         loop {
             let Some(sample) = (unsafe { self.output.0.copyNextSampleBuffer() }) else {
                 return match unsafe { self.reader.0.status() } {
-                    AVAssetReaderStatus::Failed => Err(unsafe { self.reader.0.error() }
-                        .map(|e| e.localizedDescription().to_string())
-                        .unwrap_or_else(|| "Video kann nicht gelesen werden".into())),
+                    AVAssetReaderStatus::Failed => {
+                        let error = unsafe { self.reader.0.error() };
+                        log::error!(
+                            "Video {} lesen fehlgeschlagen nach {} Bildern: {}",
+                            self.path.display(),
+                            self.frames,
+                            error.as_deref().map_or("unbekannt".into(), error_detail)
+                        );
+                        Err(error
+                            .map(|e| e.localizedDescription().to_string())
+                            .unwrap_or_else(|| "Video kann nicht gelesen werden".into()))
+                    }
                     _ => Ok(None),
                 };
             };
@@ -125,7 +166,10 @@ impl FrameSource for MacFrames {
                 continue;
             };
             let pts = unsafe { sample.presentation_time_stamp().seconds() };
-            return copy_frame(&image, Duration::from_secs_f64(pts.max(0.0))).map(Some);
+            self.frames += 1;
+            return copy_frame(&image, Duration::from_secs_f64(pts.max(0.0)))
+                .inspect_err(|e| log::error!("Video {}: {e}", self.path.display()))
+                .map(Some);
         }
     }
 }
@@ -166,6 +210,8 @@ struct Pump {
     input: SendRetained<AVAssetWriterInput>,
     finished: AtomicBool,
     done: Mutex<Option<mpsc::SyncSender<()>>>,
+    /// Geschriebene Tonblöcke – nur fürs Protokoll.
+    samples: std::sync::atomic::AtomicU64,
 }
 
 impl Pump {
@@ -174,6 +220,10 @@ impl Pump {
             return;
         }
         unsafe { self.input.0.markAsFinished() };
+        log::debug!(
+            "Ton für den Export fertig: {} Blöcke",
+            self.samples.load(Ordering::Relaxed)
+        );
         if let Some(tx) = self.done.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
         }
@@ -188,13 +238,20 @@ impl Pump {
             match unsafe { self.output.0.copyNextSampleBuffer() } {
                 Some(sample) => {
                     if !unsafe { self.input.0.appendSampleBuffer(&sample) } {
+                        log::warn!("Ton schreiben abgebrochen (Writer nimmt nichts mehr an)");
                         self.finish();
                         return;
                     }
+                    self.samples.fetch_add(1, Ordering::Relaxed);
                 }
                 None => {
                     if unsafe { self.reader.0.status() } == AVAssetReaderStatus::Failed {
-                        log::warn!("Ton lesen fehlgeschlagen");
+                        log::warn!(
+                            "Ton lesen fehlgeschlagen: {}",
+                            unsafe { self.reader.0.error() }
+                                .as_deref()
+                                .map_or("unbekannt".into(), error_detail)
+                        );
                     }
                     self.finish();
                     return;
@@ -215,6 +272,10 @@ pub(crate) struct MacMp4 {
     size: (u32, u32),
     duration: Duration,
     finished: bool,
+    /// Zähler fürs Protokoll: Bilder, Wartezeit auf den Encoder, Beginn.
+    frames: u64,
+    waited: Duration,
+    created: Instant,
 }
 
 fn cm_time(t: Duration) -> CMTime {
@@ -231,11 +292,21 @@ pub(crate) fn create_mp4(
     kept: &[TimeRange],
     duration: Duration,
 ) -> Result<MacMp4> {
+    let created = Instant::now();
     let file_type = unsafe { AVFileTypeMPEG4 }.ok_or(MediaError::NotImplemented)?;
     let writer = super::new_writer(path, file_type)?;
     unsafe { writer.setShouldOptimizeForNetworkUse(true) };
     let (width, height) = size;
     let fps = fps.clamp(1, 120);
+    log::info!(
+        "Export kodieren: {:?} {width}×{height}, {fps} fps, {} bit/s, {} Tonspur(en), {} Stück(e), {:.1} s → {}",
+        encoding.codec,
+        export_bitrate(width, height, fps, encoding),
+        audio.len(),
+        kept.len(),
+        duration.as_secs_f64(),
+        path.display()
+    );
 
     let key = |k: Option<&'static NSString>| k.ok_or(MediaError::NotImplemented);
     let (bitrate, fps_n, key_interval) = (
@@ -296,6 +367,7 @@ pub(crate) fn create_mp4(
     unsafe {
         input.setExpectsMediaDataInRealTime(false);
         if !writer.canAddInput(&input) {
+            log::error!("Encoder nimmt die Videospur nicht an ({width}×{height})");
             return Err(MediaError::Backend(
                 "Videospur kann nicht angelegt werden".into(),
             ));
@@ -313,6 +385,7 @@ pub(crate) fn create_mp4(
                     writer.addInput(&input);
                     Some(input)
                 } else {
+                    log::warn!("Encoder nimmt die Tonspur nicht an – Export ohne Ton");
                     None
                 }
             }
@@ -322,6 +395,7 @@ pub(crate) fn create_mp4(
 
     unsafe {
         if !writer.startWriting() {
+            log::error!("Export: Schreiben startet nicht");
             return Err(writer.error().map(|e| backend(&e)).unwrap_or_else(|| {
                 MediaError::Backend("Datei kann nicht geschrieben werden".into())
             }));
@@ -339,6 +413,7 @@ pub(crate) fn create_mp4(
                 input: SendRetained(input),
                 finished: AtomicBool::new(false),
                 done: Mutex::new(Some(tx)),
+                samples: std::sync::atomic::AtomicU64::new(0),
             });
             let p = pump.clone();
             let block = RcBlock::new(move || p.run());
@@ -349,9 +424,12 @@ pub(crate) fn create_mp4(
             };
             Some((pump, rx))
         }
-        (_, Some(input)) => {
+        (parts, Some(input)) => {
             // Ton liess sich nicht lesen: leere Spur abschliessen.
-            log::warn!("Ton für den Export nicht lesbar");
+            let detail = parts
+                .and_then(|(reader, _)| unsafe { reader.error() })
+                .map_or("unbekannt".into(), |e| error_detail(&e));
+            log::warn!("Ton für den Export nicht lesbar: {detail}");
             unsafe { input.markAsFinished() };
             None
         }
@@ -368,6 +446,9 @@ pub(crate) fn create_mp4(
         size,
         duration,
         finished: false,
+        frames: 0,
+        waited: Duration::ZERO,
+        created,
     })
 }
 
@@ -399,9 +480,13 @@ fn audio_reader(
     }];
     let pieces = if kept.is_empty() { &whole[..] } else { kept };
     let mut volumes = Vec::new();
-    for input in files.iter().filter(|i| i.path.exists() && i.volume > 0.0) {
+    for input in files.iter().filter(|i| i.path.exists() && i.audible()) {
         let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(&input.path), None) };
         let Some(source) = unsafe { asset.tracksWithMediaType(media) }.firstObject() else {
+            log::warn!(
+                "{} enthält keine Tonspur – übersprungen",
+                input.path.display()
+            );
             continue;
         };
         let range = unsafe { source.timeRange() };
@@ -409,6 +494,10 @@ fn audio_reader(
         let Some(track) =
             (unsafe { composition.addMutableTrackWithMediaType_preferredTrackID(media, 0) })
         else {
+            log::warn!(
+                "Tonspur für {} nicht anlegbar – übersprungen",
+                input.path.display()
+            );
             continue;
         };
         let mut out = 0.0;
@@ -425,20 +514,25 @@ fn audio_reader(
                     track.insertTimeRange_ofTrack_atTime_error(r, &source, cm_ms(out + s - a))
                 } {
                     Ok(()) => inserted = true,
-                    Err(e) => log::warn!(
-                        "Tonspur {}: {}",
-                        input.path.display(),
-                        e.localizedDescription()
-                    ),
+                    Err(e) => log::warn!("Tonspur {}: {}", input.path.display(), error_detail(&e)),
                 }
             }
             out += b - a;
         }
         if inserted {
-            volumes.push((unsafe { track.trackID() }, input.volume.clamp(0.0, 1.0)));
+            log::debug!(
+                "Tonspur {}: Lautstärke {:.2}, {} Rampen, {:.0}–{:.0} ms",
+                input.path.display(),
+                input.volume,
+                input.ramps.len(),
+                src_start,
+                src_end
+            );
+            volumes.push((unsafe { track.trackID() }, input));
         }
     }
     if volumes.is_empty() {
+        log::debug!("Export ohne Ton ({} Eingänge)", files.len());
         return Ok(None);
     }
     let tracks: Vec<Retained<AVAssetTrack>> = unsafe { composition.tracksWithMediaType(media) }
@@ -474,6 +568,7 @@ fn audio_reader(
     unsafe {
         output.setAlwaysCopiesSampleData(false);
         if !reader.canAddOutput(&output) {
+            log::warn!("Tonmischung nicht lesbar – Export ohne Ton");
             return Ok(None);
         }
         reader.addOutput(&output);
@@ -481,13 +576,25 @@ fn audio_reader(
             start: kCMTimeZero,
             duration: cm_time(duration),
         });
-        // Lautstärke je Spur.
+        // Lautstärke je Spur: fest oder als Rampen (Punkte, Blenden).
         let parameters: Vec<Retained<AVAudioMixInputParameters>> = volumes
             .iter()
-            .map(|&(id, volume)| {
+            .map(|&(id, input)| {
                 let p = AVMutableAudioMixInputParameters::audioMixInputParameters();
                 p.setTrackID(id);
-                p.setVolume_atTime(volume, kCMTimeZero);
+                if input.ramps.is_empty() {
+                    p.setVolume_atTime(input.volume.clamp(0.0, 1.0), kCMTimeZero);
+                }
+                for r in input.ramps.iter().filter(|r| r.end_ms > r.start_ms) {
+                    p.setVolumeRampFromStartVolume_toEndVolume_timeRange(
+                        r.from.clamp(0.0, 1.0),
+                        r.to.clamp(0.0, 1.0),
+                        CMTimeRange {
+                            start: cm_ms(r.start_ms),
+                            duration: cm_ms(r.end_ms - r.start_ms),
+                        },
+                    );
+                }
                 Retained::into_super(p)
             })
             .collect();
@@ -522,6 +629,18 @@ fn audio_input() -> Result<Retained<AVAssetWriterInput>> {
 }
 
 impl MacMp4 {
+    /// Fehler des Encoders mit Domäne und Code ins Protokoll.
+    fn log_writer_failure(&self, step: &str) {
+        log::error!(
+            "Export, {step} nach {} Bildern: {}",
+            self.frames,
+            unsafe { self.writer.0.error() }.as_deref().map_or_else(
+                || format!("Status {:?}", unsafe { self.writer.0.status() }),
+                error_detail
+            )
+        );
+    }
+
     fn writer_error(&self) -> String {
         unsafe { self.writer.0.error() }
             .map(|e| e.localizedDescription().to_string())
@@ -552,15 +671,25 @@ impl FrameSink for MacMp4 {
         let started = Instant::now();
         while !unsafe { self.input.0.isReadyForMoreMediaData() } {
             if unsafe { self.writer.0.status() } == AVAssetWriterStatus::Failed {
+                self.log_writer_failure("Encoder");
                 return Err(self.writer_error());
             }
             if started.elapsed() > ENCODER_TIMEOUT {
+                log::error!(
+                    "Encoder antwortet nicht nach {} s (Bild {})",
+                    ENCODER_TIMEOUT.as_secs(),
+                    self.frames
+                );
                 return Err("Encoder antwortet nicht".into());
             }
             std::thread::sleep(Duration::from_micros(300));
         }
-        let buffer = self.pixel_buffer()?;
+        self.waited += started.elapsed();
+        let buffer = self
+            .pixel_buffer()
+            .inspect_err(|e| log::error!("Export: {e}"))?;
         if unsafe { CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags(0)) } != 0 {
+            log::error!("Export: Bildpuffer gesperrt");
             return Err("Bildpuffer gesperrt".into());
         }
         let base = CVPixelBufferGetBaseAddress(&buffer) as *mut u8;
@@ -581,8 +710,10 @@ impl FrameSink for MacMp4 {
                 .0
                 .appendPixelBuffer_withPresentationTime(&buffer, cm_time(pts))
         } {
+            self.frames += 1;
             Ok(())
         } else {
+            self.log_writer_failure("Bild anhängen");
             Err(self.writer_error())
         }
     }
@@ -590,6 +721,7 @@ impl FrameSink for MacMp4 {
     fn finish(&mut self) -> std::result::Result<(), String> {
         self.finished = true;
         unsafe { self.input.0.markAsFinished() };
+        let finishing = Instant::now();
         if let Some((pump, rx)) = &self.pump
             && rx.recv_timeout(FINISH_TIMEOUT).is_err()
         {
@@ -604,11 +736,24 @@ impl FrameSink for MacMp4 {
             self.writer.0.endSessionAtSourceTime(cm_time(self.duration));
             self.writer.0.finishWritingWithCompletionHandler(&block);
         }
-        rx.recv_timeout(FINISH_TIMEOUT)
-            .map_err(|_| "Datei abschliessen dauert zu lange".to_string())?;
+        rx.recv_timeout(FINISH_TIMEOUT).map_err(|_| {
+            log::error!(
+                "Export nach {} s nicht abgeschlossen",
+                FINISH_TIMEOUT.as_secs()
+            );
+            "Datei abschliessen dauert zu lange".to_string()
+        })?;
         if unsafe { self.writer.0.status() } == AVAssetWriterStatus::Completed {
+            log::info!(
+                "Export kodiert: {} Bilder in {} ms (davon {} ms auf den Encoder gewartet, Abschluss {} ms)",
+                self.frames,
+                self.created.elapsed().as_millis(),
+                self.waited.as_millis(),
+                finishing.elapsed().as_millis()
+            );
             Ok(())
         } else {
+            self.log_writer_failure("Abschliessen");
             Err(self.writer_error())
         }
     }
@@ -618,12 +763,17 @@ impl FrameSink for MacMp4 {
             return;
         }
         self.finished = true;
+        log::info!(
+            "Export verworfen nach {} Bildern ({} ms)",
+            self.frames,
+            self.created.elapsed().as_millis()
+        );
         if let Some((pump, _)) = &self.pump {
             pump.finish();
             unsafe { pump.reader.0.cancelReading() };
         }
         unsafe { self.writer.0.cancelWriting() };
-        let _ = std::fs::remove_file(&self.path);
+        remove_quietly(&self.path);
     }
 }
 

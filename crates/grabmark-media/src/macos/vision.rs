@@ -131,6 +131,10 @@ pub(crate) struct VisionSegmenter {
     inner: PersonSegmenter,
     /// Wiederverwendet, solange die Grösse gleich bleibt.
     buffer: Option<CFRetained<CVPixelBuffer>>,
+    /// Zähler fürs Protokoll: Bilder, davon ohne Maske, Rechenzeit.
+    frames: u64,
+    failed: u64,
+    busy: std::time::Duration,
 }
 
 // SAFETY: Vision-Objekte und Puffer werden nur von dem Thread benutzt, der
@@ -142,6 +146,9 @@ impl VisionSegmenter {
         Self {
             inner: PersonSegmenter::new(),
             buffer: None,
+            frames: 0,
+            failed: 0,
+            busy: std::time::Duration::ZERO,
         }
     }
 
@@ -161,6 +168,7 @@ impl VisionSegmenter {
                 CVPixelBufferCreate(None, w, h, PIXEL_FORMAT_BGRA, None, NonNull::from(&mut out))
             };
             if status != 0 {
+                log::warn!("Pixelpuffer {w}×{h} für die Freistellung: CVReturn {status}");
                 return None;
             }
             // SAFETY: frisch erzeugt (+1).
@@ -188,9 +196,29 @@ impl VisionSegmenter {
 
 impl Segmenter for VisionSegmenter {
     fn mask(&mut self, frame: FrameRef<'_>) -> Option<Mask> {
-        self.upload(frame)?;
-        let mask = self.inner.mask(self.buffer.as_deref()?)?;
-        copy_mask(&mask)
+        let started = std::time::Instant::now();
+        self.frames += 1;
+        let mask = self
+            .upload(frame)
+            .and_then(|()| self.inner.mask(self.buffer.as_deref()?))
+            .and_then(|mask| copy_mask(&mask));
+        if mask.is_none() {
+            self.failed += 1;
+        }
+        self.busy += started.elapsed();
+        mask
+    }
+}
+
+impl Drop for VisionSegmenter {
+    fn drop(&mut self) {
+        if let Some(avg_ms) = self.busy.as_millis().checked_div(self.frames as u128) {
+            log::debug!(
+                "Freistellung im Export: {} Bilder, {} ohne Maske, Ø {avg_ms} ms",
+                self.frames,
+                self.failed
+            );
+        }
     }
 }
 

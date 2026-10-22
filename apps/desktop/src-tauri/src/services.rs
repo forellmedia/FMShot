@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use grabmark_core::RgbaImage;
 use grabmark_library::{CaptureQuery, CaptureRecord, Library};
@@ -71,6 +71,7 @@ pub fn start(app: &AppHandle) {
     std::thread::spawn(move || {
         loop {
             purge(&purge_app);
+            crate::logs::prune_now(&purge_app);
             std::thread::sleep(Duration::from_secs(6 * 3600));
         }
     });
@@ -80,42 +81,86 @@ pub fn start(app: &AppHandle) {
 fn index_pending(app: &AppHandle) {
     let state = app.state::<CaptureState>();
     let Some(ocr) = state.ocr.as_ref() else {
+        log::debug!("Suchindex: keine Texterkennung verfügbar");
         return;
     };
-    loop {
+    let started = Instant::now();
+    let (mut done, mut failed) = (0u32, 0u32);
+    'batches: loop {
         let ids = match state.library.pending_ocr(10) {
             Ok(ids) if !ids.is_empty() => ids,
-            _ => return,
+            Ok(_) => break,
+            Err(e) => {
+                log::error!("Suchindex: {e}");
+                break;
+            }
         };
         for id in ids {
+            let one = Instant::now();
+            // Fehler: leerer Text, damit die Aufnahme nicht immer wieder drankommt.
             let text = state
                 .library
                 .read_original(&id)
-                .ok()
-                .and_then(|b| grabmark_render::decode_png(&b).ok())
-                .and_then(|img| ocr.recognize(&img).ok())
+                .map_err(|e| e.to_string())
+                .and_then(|b| grabmark_render::decode_png(&b).map_err(|e| e.to_string()))
+                .and_then(|img| ocr.recognize(&img).map_err(|e| e.to_string()))
                 .map(|blocks| grabmark_ocr::join_text(&blocks))
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    log::warn!("Suchindex {id}: {e}");
+                    failed += 1;
+                    String::new()
+                });
+            log::debug!(
+                "Suchindex {id}: {} Zeichen in {:.0} ms",
+                text.chars().count(),
+                one.elapsed().as_secs_f64() * 1000.0
+            );
             if let Err(e) = state.library.set_ocr_text(&id, &text) {
                 log::error!("Suchindex {id}: {e}");
-                return;
+                break 'batches;
             }
+            done += 1;
         }
+    }
+    if done > 0 || failed > 0 {
+        log::info!(
+            "Suchindex: {done} Aufnahmen in {:.1} s ({failed} fehlgeschlagen)",
+            started.elapsed().as_secs_f64()
+        );
     }
 }
 
 fn purge(app: &AppHandle) {
     let Some(days) = settings::get(app).retention_days else {
+        log::debug!("Aufbewahrung: unbegrenzt");
         return;
     };
     let before = now_ms() - days as i64 * 86_400_000;
+    let started = Instant::now();
     match app.state::<CaptureState>().library.purge_older_than(before) {
-        Ok(0) => {}
+        Ok(0) => log::debug!("Aufbewahrung ({days} Tage): nichts zu löschen"),
         Ok(n) => {
-            log::info!("Aufbewahrung: {n} Aufnahmen gelöscht");
-            let _ = app.emit("library-changed", ());
+            log::info!(
+                "Aufbewahrung ({days} Tage): {n} Aufnahmen gelöscht ({:.0} ms)",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            emit(app, "library-changed", ());
         }
         Err(e) => log::error!("Aufbewahrung: {e}"),
+    }
+}
+
+/// Ereignis ans Frontend; Fehler nur fürs Debug-Log.
+fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
+    if let Err(e) = app.emit(event, payload) {
+        log::debug!("Ereignis {event}: {e}");
+    }
+}
+
+/// Auf dem Haupt-Thread ausführen; Fehler ins Log.
+fn on_main(app: &AppHandle, what: &str, f: impl FnOnce() + Send + 'static) {
+    if let Err(e) = app.run_on_main_thread(f) {
+        log::warn!("{what}: Haupt-Thread nicht erreichbar: {e}");
     }
 }
 
@@ -135,11 +180,12 @@ pub fn index_capture(app: &AppHandle, rec: &CaptureRecord) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
+        && let Err(e) = tx.send(())
     {
-        let _ = tx.send(());
+        log::debug!("Suchindex wecken: {e}");
     }
     crate::vision::wake(app);
-    let _ = app.emit("capture-saved", rec.id.clone());
+    emit(app, "capture-saved", rec.id.clone());
 }
 
 /// Nach jeder gespeicherten Aufnahme (läuft im Hintergrund-Thread).
@@ -162,15 +208,18 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
     } else {
         settings.after_capture
     };
+    log::info!("Nach der Aufnahme {}: {after:?}", rec.id);
     match after {
         AfterCapture::Editor => {
-            let _ = app.emit("open-capture", rec.id.clone());
+            emit(app, "open-capture", rec.id.clone());
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || crate::tray::show_main_window(&a));
+            on_main(app, "Editor zeigen", move || {
+                crate::tray::show_main_window(&a)
+            });
         }
         AfterCapture::Clipboard => {
             let msg = t("capture.copied", &[]);
-            let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+            on_main(app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
         }
         AfterCapture::Preview => show_preview(app, rec, image, settings.preview_position),
     }
@@ -206,8 +255,9 @@ fn show_preview(
         t("preview.edit", &[]),
         t("preview.text", &[]),
     ];
+    log::debug!("Vorschau {}: {placement:?}", rec.id);
     let (app2, id) = (app.clone(), rec.id.clone());
-    let _ = app.run_on_main_thread(move || {
+    on_main(app, "Vorschau", move || {
         let app3 = app2.clone();
         let labels_ref = [
             labels[0].as_str(),
@@ -229,20 +279,31 @@ fn show_preview(
 }
 
 fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
+    log::info!("Vorschau {id}: {action:?}");
     let (app, id) = (app.clone(), id.to_string());
     match action {
         PreviewAction::Edit => {
-            let _ = app.emit("open-capture", id);
+            emit(&app, "open-capture", id);
             crate::tray::show_main_window(&app);
         }
         PreviewAction::Close | PreviewAction::Dragged => {}
         PreviewAction::Copy => {
             std::thread::spawn(move || {
+                let started = Instant::now();
                 let msg = match copy_flattened(&app, &id) {
-                    Ok(()) => t("editor.copied", &[]),
-                    Err(e) => e,
+                    Ok(()) => {
+                        log::info!(
+                            "Zwischenablage: Aufnahme {id} kopiert ({:.0} ms)",
+                            started.elapsed().as_secs_f64() * 1000.0
+                        );
+                        t("editor.copied", &[])
+                    }
+                    Err(e) => {
+                        log::error!("Kopieren {id}: {e}");
+                        e
+                    }
                 };
-                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+                on_main(&app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
             });
         }
         PreviewAction::Save => {
@@ -254,14 +315,18 @@ fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
                     .and_then(|rec| export(&app, &library, &rec, None))
                 {
                     Ok(path) => t("preview.saved", &[("path", &path.to_string_lossy())]),
-                    Err(e) => e,
+                    Err(e) => {
+                        log::error!("Sichern {id}: {e}");
+                        e
+                    }
                 };
-                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+                on_main(&app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
             });
         }
         PreviewAction::Text => {
             std::thread::spawn(move || {
                 let state = app.state::<CaptureState>();
+                let started = Instant::now();
                 let msg = match (state.ocr.as_ref(), state.library.read_original(&id)) {
                     (Some(ocr), Ok(bytes)) => grabmark_render::decode_png(&bytes)
                         .map_err(|e| e.to_string())
@@ -269,18 +334,33 @@ fn preview_action(app: &AppHandle, id: &str, action: PreviewAction) {
                         .and_then(|blocks| {
                             let text = grabmark_ocr::join_text(&blocks);
                             if text.is_empty() {
+                                log::info!("Vorschau {id}: kein Text gefunden");
                                 return Ok(t("ocr.nothing", &[]));
                             }
                             grabmark_clipboard::copy_text(&text).map_err(|e| e.to_string())?;
+                            log::info!(
+                                "Zwischenablage: Text aus {id} kopiert ({:.0} ms)",
+                                started.elapsed().as_secs_f64() * 1000.0
+                            );
                             Ok(t(
                                 "ocr.copied",
                                 &[("count", &text.chars().count().to_string())],
                             ))
                         })
-                        .unwrap_or_else(|e| e),
-                    _ => t("ocr.unavailable", &[]),
+                        .unwrap_or_else(|e| {
+                            log::error!("Text aus {id}: {e}");
+                            e
+                        }),
+                    (None, _) => {
+                        log::warn!("Text aus {id}: keine Texterkennung verfügbar");
+                        t("ocr.unavailable", &[])
+                    }
+                    (_, Err(e)) => {
+                        log::error!("Text aus {id}: {e}");
+                        t("ocr.unavailable", &[])
+                    }
                 };
-                let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&msg));
+                on_main(&app, "Hinweis", move || grabmark_overlay::show_toast(&msg));
             });
         }
     }
@@ -312,8 +392,14 @@ pub fn export(
     rec: &CaptureRecord,
     image: Option<&RgbaImage>,
 ) -> Result<PathBuf, String> {
+    let started = Instant::now();
     let settings = settings::get(app).auto_export;
-    let path = match library.export_path(&rec.id).ok().flatten() {
+    let previous = library
+        .export_path(&rec.id)
+        .inspect_err(|e| log::warn!("Export {}: bisheriger Pfad: {e}", rec.id))
+        .ok()
+        .flatten();
+    let path = match previous {
         Some(p) => p,
         None => {
             let folder = match &settings.folder {
@@ -348,6 +434,12 @@ pub fn export(
         .set_export_path(&rec.id, &path)
         .map_err(|e| e.to_string())?;
     let _ = settings.format == ImageFormat::Png;
+    log::info!(
+        "Export {}: {} ({:.0} ms)",
+        rec.id,
+        path.display(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(path)
 }
 
@@ -373,8 +465,12 @@ pub fn refresh_export(app: &AppHandle, id: &str) {
     if !settings::get(app).auto_export.enabled {
         return;
     }
-    if let Ok(Some(_)) = library.export_path(id)
-        && let Ok(rec) = library.get(id)
+    if let Ok(Some(_)) = library
+        .export_path(id)
+        .inspect_err(|e| log::warn!("Auto-Export aktualisieren {id}: {e}"))
+        && let Ok(rec) = library
+            .get(id)
+            .inspect_err(|e| log::warn!("Auto-Export aktualisieren {id}: {e}"))
         && !rec.is_video()
         && let Err(e) = export(app, &library, &rec, None)
     {
@@ -479,6 +575,7 @@ pub async fn query_captures(app: AppHandle, query: GalleryQuery) -> Result<Galle
 }
 
 fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<GalleryResult, String> {
+    let started = Instant::now();
     let library = app.state::<CaptureState>().library.clone();
     let has_text = !query.text.trim().is_empty();
     let content_ids = if has_text {
@@ -532,6 +629,15 @@ fn gallery(app: &AppHandle, query: GalleryQuery) -> Result<GalleryResult, String
         Default::default()
     };
     let by_content: std::collections::HashSet<&String> = content_ids.iter().collect();
+    // Ohne Suchtext – der ist privat.
+    log::debug!(
+        "Galerie: {} Aufnahmen, {} Schnellfilter (Text: {has_text}, Bildinhalt: {}, Stichwörter: {}) in {:.0} ms",
+        records.len(),
+        groups.len(),
+        content_ids.len(),
+        text_tags.len(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
     let items = records
         .iter()
         .map(|r| {
@@ -561,19 +667,26 @@ pub fn search_captures(
     app: AppHandle,
     query: String,
 ) -> Result<Vec<crate::editor::CaptureInfo>, String> {
-    Ok(app
+    let started = Instant::now();
+    let found: Vec<crate::editor::CaptureInfo> = app
         .state::<CaptureState>()
         .library
         .search(&query, 500)
+        .inspect_err(|e| log::error!("Volltextsuche: {e}"))
         .map_err(|e| e.to_string())?
         .iter()
         .map(crate::editor::CaptureInfo::from)
-        .collect())
+        .collect();
+    log::debug!(
+        "Volltextsuche: {} Treffer in {:.0} ms",
+        found.len(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(found)
 }
 
 fn log_file(app: &AppHandle) -> Option<PathBuf> {
-    let name = format!("{}.log", app.package_info().name);
-    Some(crate::paths::get().log.join(name))
+    Some(crate::logs::current_file(app))
 }
 
 /// „Fehler melden“: öffnet ein vorausgefülltes GitHub-Issue im Browser.
@@ -583,8 +696,13 @@ fn log_file(app: &AppHandle) -> Option<PathBuf> {
 pub fn report_bug(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let d = get_diagnostics(app.clone());
+    log::info!("Fehler melden: Issue im Browser öffnen");
     let log_tail = log_file(&app)
-        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|p| {
+            std::fs::read_to_string(p)
+                .inspect_err(|e| log::warn!("Fehler melden: Log lesen: {e}"))
+                .ok()
+        })
         .map(|s| {
             let lines: Vec<&str> = s.lines().collect();
             lines[lines.len().saturating_sub(40)..].join("\n")
@@ -601,6 +719,7 @@ pub fn report_bug(app: AppHandle) -> Result<(), String> {
     );
     app.opener()
         .open_url(url, None::<&str>)
+        .inspect_err(|e| log::error!("Fehler melden: Browser öffnen: {e}"))
         .map_err(|e| e.to_string())
 }
 

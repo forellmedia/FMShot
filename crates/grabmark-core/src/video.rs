@@ -24,6 +24,10 @@ pub struct VideoDoc {
     /// Lautstärke je Tonspur (Etappe 4).
     #[serde(default)]
     pub audio: AudioMix,
+    /// Ein- und Ausblenden am Anfang und Ende des fertigen Videos (Bild und
+    /// Ton).
+    #[serde(default, skip_serializing_if = "Fade::is_none")]
+    pub fade: Fade,
     /// Eigener Mauszeiger und Klicks (Etappe 5).
     #[serde(default)]
     pub cursor: CursorStyle,
@@ -142,13 +146,18 @@ pub struct TimeRange {
     pub end_ms: u32,
 }
 
-/// Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. Die Punkte
+/// verändern sie zusätzlich über die Zeit (Faktor, dazwischen linear).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(default)]
 pub struct AudioMix {
     pub system: f32,
     pub microphone: f32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub system_keys: Vec<VolumeKey>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub microphone_keys: Vec<VolumeKey>,
 }
 
 impl Default for AudioMix {
@@ -156,7 +165,34 @@ impl Default for AudioMix {
         Self {
             system: 1.0,
             microphone: 1.0,
+            system_keys: Vec::new(),
+            microphone_keys: Vec::new(),
         }
+    }
+}
+
+/// Lautstärke-Punkt (Keyframe) einer Tonspur, Zeit der Aufnahme. Vor dem
+/// ersten und nach dem letzten Punkt gilt dessen Wert.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct VolumeKey {
+    pub t_ms: u32,
+    /// 0 = stumm bis 1 = volle Lautstärke der Spur.
+    pub volume: f32,
+}
+
+/// Ein- und Ausblenden in Bildern des fertigen Videos (0 = aus).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(default)]
+pub struct Fade {
+    pub in_frames: u32,
+    pub out_frames: u32,
+}
+
+impl Fade {
+    pub fn is_none(&self) -> bool {
+        self.in_frames == 0 && self.out_frames == 0
     }
 }
 
@@ -236,6 +272,7 @@ impl Default for VideoDoc {
             webcam: None,
             cuts: Vec::new(),
             audio: AudioMix::default(),
+            fade: Fade::default(),
             cursor: CursorStyle::default(),
             zooms: Vec::new(),
             layer_times: Vec::new(),

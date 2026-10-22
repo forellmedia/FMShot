@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use grabmark_core::{AssetRef, Document, RgbaImage};
 use grabmark_library::{CaptureRecord, Library};
@@ -97,28 +98,52 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Millisekunden seit `start` (fürs Log).
+fn ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
 /// Neueste Aufnahmen zuerst.
 #[tauri::command]
 #[specta::specta]
 pub fn list_captures(app: AppHandle, limit: u32) -> Result<Vec<CaptureInfo>, String> {
-    Ok(library(&app)
+    let start = Instant::now();
+    let list: Vec<CaptureInfo> = library(&app)
         .recent(limit)
+        .inspect_err(|e| log::error!("Aufnahmen auflisten: {e}"))
         .map_err(err)?
         .iter()
         .map(CaptureInfo::from)
-        .collect())
+        .collect();
+    log::debug!("Aufnahmen auflisten: {} in {:.0} ms", list.len(), ms(start));
+    Ok(list)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn get_capture(app: AppHandle, id: String) -> Result<CaptureInfo, String> {
-    Ok(CaptureInfo::from(&library(&app).get(&id).map_err(err)?))
+    Ok(CaptureInfo::from(
+        &library(&app)
+            .get(&id)
+            .inspect_err(|e| log::error!("Aufnahme {id}: {e}"))
+            .map_err(err)?,
+    ))
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn load_document(app: AppHandle, id: String) -> Result<Document, String> {
-    library(&app).load_document(&id).map_err(err)
+    let start = Instant::now();
+    let doc = library(&app)
+        .load_document(&id)
+        .inspect_err(|e| log::error!("Editor öffnen {id}: {e}"))
+        .map_err(err)?;
+    log::info!(
+        "Editor öffnet {id}: {} Ebenen ({:.0} ms)",
+        doc.layers.len(),
+        ms(start)
+    );
+    Ok(doc)
 }
 
 /// Speichert das Dokument sofort; das Vorschaubild wird im Hintergrund neu
@@ -126,9 +151,18 @@ pub fn load_document(app: AppHandle, id: String) -> Result<Document, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(), String> {
+    let start = Instant::now();
     let lib = library(&app);
-    lib.save_document(&id, &document, None).map_err(err)?;
+    lib.save_document(&id, &document, None)
+        .inspect_err(|e| log::error!("Editor speichern {id}: {e}"))
+        .map_err(err)?;
+    log::info!(
+        "Editor gespeichert {id}: {} Ebenen ({:.0} ms)",
+        document.layers.len(),
+        ms(start)
+    );
     std::thread::spawn(move || {
+        let start = Instant::now();
         let state = app.state::<EditorState>();
         let preview = render(
             &lib,
@@ -138,11 +172,10 @@ pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(
             Some(grabmark_library::THUMBNAIL_MAX * 2),
         );
         match preview {
-            Ok(img) => {
-                if let Err(e) = lib.save_document(&id, &document, Some(&img)) {
-                    log::error!("Vorschaubild {id}: {e}");
-                }
-            }
+            Ok(img) => match lib.save_document(&id, &document, Some(&img)) {
+                Ok(()) => log::debug!("Vorschaubild {id} neu gezeichnet ({:.0} ms)", ms(start)),
+                Err(e) => log::error!("Vorschaubild {id}: {e}"),
+            },
             Err(e) => log::error!("Vorschaubild {id}: {e}"),
         }
         crate::services::refresh_export(&app, &id);
@@ -155,10 +188,22 @@ pub fn save_document(app: AppHandle, id: String, document: Document) -> Result<(
 #[specta::specta]
 pub async fn copy_document(app: AppHandle, id: String, document: Document) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let start = Instant::now();
         let lib = library(&app);
         let state = app.state::<EditorState>();
-        let img = render(&lib, &state, &id, &document, None)?;
-        grabmark_clipboard::copy_image(&img, document.pixel_ratio).map_err(err)
+        let result = render(&lib, &state, &id, &document, None).and_then(|img| {
+            grabmark_clipboard::copy_image(&img, document.pixel_ratio)
+                .map_err(err)
+                .map(|()| (img.width(), img.height()))
+        });
+        match &result {
+            Ok((w, h)) => log::info!(
+                "Zwischenablage: Editor {id} kopiert, {w}×{h} ({:.0} ms)",
+                ms(start)
+            ),
+            Err(e) => log::error!("Editor kopieren {id}: {e}"),
+        }
+        result.map(|_| ())
     })
     .await
     .map_err(err)?
@@ -186,23 +231,45 @@ pub async fn export_document(
             .add_filter(label, &[ext])
             .blocking_save_file()
         else {
+            log::info!("Editor exportieren {id}: abgebrochen");
             return Ok(None);
         };
-        let path = path.into_path().map_err(err)?;
-        let lib = library(&app);
-        let state = app.state::<EditorState>();
-        let img = render(&lib, &state, &id, &document, None)?;
-        let bytes = match format {
-            ExportFormat::Png => {
-                grabmark_library::encode_png(&img, document.pixel_ratio).map_err(err)?
-            }
-            ExportFormat::Jpg => grabmark_library::encode_jpeg(&img, 90)?,
-        };
-        std::fs::write(&path, bytes).map_err(err)?;
-        Ok(Some(path.to_string_lossy().into_owned()))
+        let start = Instant::now();
+        let written = write_export(&app, &id, &document, format, path);
+        match &written {
+            Ok(path) => log::info!(
+                "Editor exportiert {id} als {label}: {} ({:.0} ms)",
+                path.display(),
+                ms(start)
+            ),
+            Err(e) => log::error!("Editor exportieren {id}: {e}"),
+        }
+        Ok(Some(written?.to_string_lossy().into_owned()))
     })
     .await
     .map_err(err)?
+}
+
+/// Zeichnet das Dokument und schreibt es an den gewählten Ort.
+fn write_export(
+    app: &AppHandle,
+    id: &str,
+    document: &Document,
+    format: ExportFormat,
+    path: tauri_plugin_dialog::FilePath,
+) -> Result<std::path::PathBuf, String> {
+    let path = path.into_path().map_err(err)?;
+    let lib = library(app);
+    let state = app.state::<EditorState>();
+    let img = render(&lib, &state, id, document, None)?;
+    let bytes = match format {
+        ExportFormat::Png => {
+            grabmark_library::encode_png(&img, document.pixel_ratio).map_err(err)?
+        }
+        ExportFormat::Jpg => grabmark_library::encode_jpeg(&img, 90)?,
+    };
+    std::fs::write(&path, bytes).map_err(err)?;
+    Ok(path)
 }
 
 /// Legt das Video als Datei in die Zwischenablage (vorher, falls nötig,
@@ -211,9 +278,16 @@ pub async fn export_document(
 #[specta::specta]
 pub async fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::video_edit::ensure_current(&app, &id)?;
-        let rec = library(&app).get(&id).map_err(err)?;
-        grabmark_clipboard::copy_file(&rec.video_path()).map_err(err)
+        let start = Instant::now();
+        let result = crate::video_edit::ensure_current(&app, &id).and_then(|()| {
+            let rec = library(&app).get(&id).map_err(err)?;
+            grabmark_clipboard::copy_file(&rec.video_path()).map_err(err)
+        });
+        match &result {
+            Ok(()) => log::info!("Zwischenablage: Video {id} kopiert ({:.0} ms)", ms(start)),
+            Err(e) => log::error!("Video kopieren {id}: {e}"),
+        }
+        result
     })
     .await
     .map_err(err)?
@@ -224,8 +298,12 @@ pub async fn copy_video(app: AppHandle, id: String) -> Result<(), String> {
 #[specta::specta]
 pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::video_edit::ensure_current(&app, &id)?;
-        let rec = library(&app).get(&id).map_err(err)?;
+        crate::video_edit::ensure_current(&app, &id)
+            .inspect_err(|e| log::error!("Video sichern {id}: {e}"))?;
+        let rec = library(&app)
+            .get(&id)
+            .inspect_err(|e| log::error!("Video sichern {id}: {e}"))
+            .map_err(err)?;
         let Some(path) = app
             .dialog()
             .file()
@@ -233,10 +311,19 @@ pub async fn save_video_as(app: AppHandle, id: String) -> Result<Option<String>,
             .add_filter("MP4", &["mp4"])
             .blocking_save_file()
         else {
+            log::info!("Video sichern {id}: abgebrochen");
             return Ok(None);
         };
+        let start = Instant::now();
         let path = path.into_path().map_err(err)?;
-        std::fs::copy(rec.video_path(), &path).map_err(err)?;
+        std::fs::copy(rec.video_path(), &path)
+            .inspect_err(|e| log::error!("Video sichern {id}: {e}"))
+            .map_err(err)?;
+        log::info!(
+            "Video {id} gesichert: {} ({:.0} ms)",
+            path.display(),
+            ms(start)
+        );
         Ok(Some(path.to_string_lossy().into_owned()))
     })
     .await
@@ -253,6 +340,11 @@ pub struct AssetInfo {
 
 /// Legt ein Bild (PNG, JPEG oder WebP) bei der Aufnahme ab – als PNG.
 fn store_asset(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, String> {
+    store_asset_inner(app, id, bytes).inspect_err(|e| log::error!("Bild einfügen {id}: {e}"))
+}
+
+fn store_asset_inner(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, String> {
+    let start = Instant::now();
     let img = grabmark_render::decode_image(bytes).map_err(err)?;
     let png = if bytes.starts_with(b"\x89PNG") {
         bytes.to_vec()
@@ -260,6 +352,13 @@ fn store_asset(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<AssetInfo, Str
         grabmark_library::encode_png(&img, 1.0).map_err(err)?
     };
     let hash = library(app).add_asset(id, &png).map_err(err)?;
+    log::info!(
+        "Bild eingefügt in {id}: {}×{}, {} kB ({:.0} ms)",
+        img.width(),
+        img.height(),
+        png.len() / 1024,
+        ms(start)
+    );
     Ok(AssetInfo {
         hash,
         width: img.width(),
@@ -281,7 +380,9 @@ pub async fn add_asset(app: AppHandle, id: String, bytes: Vec<u8>) -> Result<Ass
 #[specta::specta]
 pub async fn add_asset_file(app: AppHandle, id: String, path: String) -> Result<AssetInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = std::fs::read(&path).map_err(err)?;
+        let bytes = std::fs::read(&path)
+            .inspect_err(|e| log::error!("Bild einfügen {id}: Datei lesen: {e}"))
+            .map_err(err)?;
         store_asset(&app, &id, &bytes)
     })
     .await
@@ -297,11 +398,17 @@ pub async fn add_asset_from_capture(
     source_id: String,
 ) -> Result<AssetInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        log::debug!("Aufnahme {source_id} als Bild in {id} übernehmen");
         let lib = library(&app);
-        let doc = lib.load_document(&source_id).map_err(err)?;
-        let state = app.state::<EditorState>();
-        let img = render(&lib, &state, &source_id, &doc, None)?;
-        let png = grabmark_library::encode_png(&img, 1.0).map_err(err)?;
+        let png = lib
+            .load_document(&source_id)
+            .map_err(err)
+            .and_then(|doc| {
+                let state = app.state::<EditorState>();
+                render(&lib, &state, &source_id, &doc, None)
+            })
+            .and_then(|img| grabmark_library::encode_png(&img, 1.0).map_err(err))
+            .inspect_err(|e| log::error!("Aufnahme {source_id} übernehmen: {e}"))?;
         store_asset(&app, &id, &png)
     })
     .await
@@ -323,16 +430,26 @@ pub struct OcrBlock {
 #[specta::specta]
 pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let start = Instant::now();
         let state = app.state::<CaptureState>();
-        let ocr = state
-            .ocr
-            .as_ref()
-            .ok_or_else(|| crate::i18n::t("ocr.unavailable", &[]))?;
-        let bytes = state.library.read_original(&id).map_err(err)?;
-        let img = grabmark_render::decode_png(&bytes).map_err(err)?;
-        Ok(ocr
-            .recognize(&img)
-            .map_err(err)?
+        let ocr = state.ocr.as_ref().ok_or_else(|| {
+            log::warn!("Texterkennung {id}: nicht verfügbar");
+            crate::i18n::t("ocr.unavailable", &[])
+        })?;
+        let blocks = state
+            .library
+            .read_original(&id)
+            .map_err(err)
+            .and_then(|bytes| grabmark_render::decode_png(&bytes).map_err(err))
+            .and_then(|img| ocr.recognize(&img).map_err(err))
+            .inspect_err(|e| log::error!("Texterkennung {id}: {e}"))?;
+        // Nur die Anzahl – der erkannte Text ist privat.
+        log::info!(
+            "Texterkennung {id}: {} Blöcke ({:.0} ms)",
+            blocks.len(),
+            ms(start)
+        );
+        Ok(blocks
             .into_iter()
             .map(|b| OcrBlock {
                 text: b.text,
@@ -350,7 +467,16 @@ pub async fn recognize_text(app: AppHandle, id: String) -> Result<Vec<OcrBlock>,
 #[tauri::command]
 #[specta::specta]
 pub fn copy_text(text: String) -> Result<(), String> {
-    grabmark_clipboard::copy_text(&text).map_err(err)
+    match grabmark_clipboard::copy_text(&text) {
+        Ok(()) => {
+            log::info!("Zwischenablage: Text kopiert");
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("Zwischenablage (Text): {e}");
+            Err(err(e))
+        }
+    }
 }
 
 /// Änderungszähler der Zwischenablage (`None` = gibt es hier nicht).
@@ -363,13 +489,26 @@ pub fn clipboard_change_count() -> Option<u32> {
 #[tauri::command]
 #[specta::specta]
 pub fn delete_capture(app: AppHandle, id: String) -> Result<(), String> {
-    library(&app).delete(&id).map_err(err)
+    match library(&app).delete(&id) {
+        Ok(()) => {
+            log::info!("Aufnahme {id} gelöscht");
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("Aufnahme {id} löschen: {e}");
+            Err(err(e))
+        }
+    }
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_starred(app: AppHandle, id: String, starred: bool) -> Result<(), String> {
-    library(&app).set_starred(&id, starred).map_err(err)
+    log::info!("Aufnahme {id}: Stern {starred}");
+    library(&app)
+        .set_starred(&id, starred)
+        .inspect_err(|e| log::error!("Stern {id}: {e}"))
+        .map_err(err)
 }
 
 /// Zeigt die Originaldatei im Finder / Explorer.
@@ -377,9 +516,14 @@ pub fn set_starred(app: AppHandle, id: String, starred: bool) -> Result<(), Stri
 #[specta::specta]
 pub fn reveal_capture(app: AppHandle, id: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let rec = library(&app).get(&id).map_err(err)?;
+    log::info!("Aufnahme {id} im Dateimanager zeigen");
+    let rec = library(&app)
+        .get(&id)
+        .inspect_err(|e| log::error!("Zeigen {id}: {e}"))
+        .map_err(err)?;
     app.opener()
         .reveal_item_in_dir(rec.original_path())
+        .inspect_err(|e| log::error!("Zeigen {id}: {e}"))
         .map_err(err)
 }
 
@@ -387,6 +531,7 @@ pub fn reveal_capture(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn start_capture(app: AppHandle, mode: CaptureMode) {
+    log::info!("Aufnahme aus der Oberfläche: {mode:?}");
     let mode = match mode {
         CaptureMode::Region => capture::Mode::Region,
         CaptureMode::Window => capture::Mode::Window,
@@ -424,6 +569,7 @@ fn render(
     doc: &Document,
     max: Option<u32>,
 ) -> Result<RgbaImage, String> {
+    let start = Instant::now();
     let mut assets: HashMap<AssetRef, RgbaImage> = HashMap::new();
     for asset in doc.assets() {
         if assets.contains_key(asset) {
@@ -444,5 +590,13 @@ fn render(
         None => RenderOptions::full(doc),
     };
     let mut renderer = state.renderer.lock().unwrap_or_else(|e| e.into_inner());
-    renderer.render_with(doc, &assets, &opts).map_err(err)
+    let img = renderer.render_with(doc, &assets, &opts).map_err(err)?;
+    log::debug!(
+        "Zeichnen {id}: {}×{}, {} Ebenen ({:.0} ms)",
+        img.width(),
+        img.height(),
+        doc.layers.len(),
+        ms(start)
+    );
+    Ok(img)
 }

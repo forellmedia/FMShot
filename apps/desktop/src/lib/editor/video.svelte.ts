@@ -11,6 +11,7 @@ import { t } from "$lib/i18n";
 import { VideoPreview } from "$lib/wasm/grabmark_render";
 import { wasmModule } from "./renderer";
 import { editor } from "./state.svelte";
+import { computePeaks, type Peaks } from "./audioWave";
 import { staleLayerTimes } from "./videoLayers";
 
 /** Weicht eine Spur weiter ab, wird sie nachgezogen (Sekunden). */
@@ -43,7 +44,21 @@ export type EditOp =
   | { op: "autoZoom" }
   | { op: "hideClick"; source: number }
   | { op: "showClicks" }
-  | { op: "layerTime"; layer: number; range: [number, number] | null };
+  | { op: "layerTime"; layer: number; range: [number, number] | null }
+  | { op: "volumeKey"; track: AudioName; index: number | null; t: number; volume: number }
+  | { op: "removeVolumeKey"; track: AudioName; index: number }
+  | { op: "clearVolumeKeys"; track: AudioName }
+  | { op: "fade"; fade_in?: number; fade_out?: number };
+
+/** Die Tonspuren: Ton des Computers und Mikrofon. */
+export type AudioName = "system" | "mic";
+export const AUDIO_TRACKS: AudioName[] = ["system", "mic"];
+
+/** Punkt in Ausgabe-Zeit (ms) mit Lautstärke 0–1. */
+export type VolumePoint = { t: number; v: number };
+
+/** Mögliche Längen von Ein- und Ausblenden in Bildern (0 = aus). */
+export const FADE_FRAMES = [0, 12, 25, 50] as const;
 
 type Urls = { screen: string | null; webcam: string | null; system: string | null; mic: string | null };
 
@@ -74,6 +89,17 @@ export class VideoPlayer {
   /** Grössen in Pixeln, sobald die Videos geladen sind. */
   screenSize = $state<[number, number] | null>(null);
   cameraSize = $state<[number, number] | null>(null);
+  /** Deckkraft des Bilds durch Ein- und Ausblenden (Vorschau). */
+  fade = $state(1);
+  /** Länge von Ein- und Ausblenden in ms. */
+  fadeMs = $state<[number, number]>([0, 0]);
+  /** Lautstärke-Punkte und Kurve je Tonspur (Ausgabe-Zeit). */
+  volume = $state<Record<AudioName, { keys: VolumePoint[]; curve: VolumePoint[] }>>({
+    system: { keys: [], curve: [] },
+    mic: { keys: [], curve: [] },
+  });
+  /** Wellenform je Tonspur (Zeit der Aufnahme), sobald dekodiert. */
+  peaks = $state<Record<AudioName, Peaks | null>>({ system: null, mic: null });
 
   private preview: VideoPreview | null = null;
   private media: { screen?: HTMLVideoElement; webcam?: HTMLVideoElement; system?: HTMLAudioElement; mic?: HTMLAudioElement } = {};
@@ -99,12 +125,14 @@ export class VideoPlayer {
     if (this.id === capture.id) return;
     this.pause();
     this.id = capture.id;
+    revoke(this.urls?.system, this.urls?.mic);
     this.urls = null;
     this.outputMs = 0;
     this.selection = null;
     this.exporting = null;
     this.screenSize = null;
     this.cameraSize = null;
+    this.peaks = { system: null, mic: null };
     this.media = {};
     this.docJson = "";
     this.knownLayers = new Set();
@@ -119,12 +147,18 @@ export class VideoPlayer {
     }
     if (this.id !== capture.id) return;
     const url = (p: string | null) => (p ? fileUrl(p) : Promise.resolve(null));
-    const [screen, webcam, system, mic] = await Promise.all([
+    const [screen, webcam, systemAudio, micAudio] = await Promise.all([
       url(tracks.screen),
       url(tracks.webcam),
-      url(tracks.systemAudio),
-      url(tracks.microphone),
+      loadAudio(tracks.systemAudio),
+      loadAudio(tracks.microphone),
     ]);
+    const system = systemAudio?.url ?? null;
+    const mic = micAudio?.url ?? null;
+    if (this.id !== capture.id) {
+      revoke(system, mic);
+      return;
+    }
     const text = async (p: string | null) => {
       if (!p) return "";
       try {
@@ -134,7 +168,10 @@ export class VideoPlayer {
       }
     };
     const [input, faces] = await Promise.all([text(tracks.input), text(tracks.faces)]);
-    if (this.id !== capture.id) return;
+    if (this.id !== capture.id) {
+      revoke(system, mic);
+      return;
+    }
     try {
       this.preview.setInput(input);
     } catch {
@@ -148,11 +185,22 @@ export class VideoPlayer {
     this.hasInput = this.preview.hasInput();
     this.urls = { screen, webcam, system, mic };
     this.syncDoc();
+    // Wellenform im Hintergrund: Die Wiedergabe wartet nicht darauf.
+    for (const [name, audio] of [
+      ["system", systemAudio],
+      ["mic", micAudio],
+    ] as const) {
+      if (!audio) continue;
+      void decodePeaks(audio.bytes).then((p) => {
+        if (p && this.id === capture.id) this.peaks = { ...this.peaks, [name]: p };
+      });
+    }
   }
 
   unload() {
     this.pause();
     this.id = null;
+    revoke(this.urls?.system, this.urls?.mic);
     this.urls = null;
     this.docJson = "";
     this.knownLayers = new Set();
@@ -215,6 +263,18 @@ export class VideoPlayer {
     this.docJson = json;
     this.preview.setDoc(json);
     this.durationMs = this.preview.duration();
+    const fade = this.preview.fadeMs();
+    this.fadeMs = [fade[0] ?? 0, fade[1] ?? 0];
+    const points = (flat: Float64Array): VolumePoint[] => {
+      const out: VolumePoint[] = [];
+      for (let i = 0; i + 1 < flat.length; i += 2) out.push({ t: flat[i], v: flat[i + 1] });
+      return out;
+    };
+    const preview = this.preview;
+    this.volume = {
+      system: { keys: points(preview.volumeKeys("system")), curve: points(preview.volumeCurve("system")) },
+      mic: { keys: points(preview.volumeKeys("mic")), curve: points(preview.volumeCurve("mic")) },
+    };
     this.clicks = Array.from(this.preview.clickTimes());
     this.clickSources = Array.from(this.preview.clickSources());
     this.outputMs = Math.min(this.outputMs, this.durationMs);
@@ -236,6 +296,7 @@ export class VideoPlayer {
   updateScene() {
     const doc = editor.doc;
     if (!this.preview || !doc) return;
+    this.fade = this.preview.fade(this.outputMs);
     if (!(this.video?.camera_only ? this.cameraSize : this.screenSize)) {
       // Videos noch nicht geladen: wenigstens die Zeit stimmt (Ebenen).
       this.scene = { sourceMs: this.preview.sourceTime(this.outputMs), layers: [] };
@@ -270,7 +331,8 @@ export class VideoPlayer {
     if (!this.master || !this.preview) return;
     if (this.outputMs >= this.durationMs - 30) this.seek(0);
     this.playing = true;
-    for (const el of this.elements()) void el.play().catch(() => {});
+    this.applyVolumes();
+    for (const el of this.elements()) void el.play().catch((e) => console.warn(`Wiedergabe: ${e}`));
     const loop = () => {
       if (!this.playing) return;
       this.tick();
@@ -324,10 +386,18 @@ export class VideoPlayer {
     for (const el of [this.media.webcam, this.media.system, this.media.mic]) {
       if (el && el !== master && Math.abs(el.currentTime - source / 1000) > MAX_DRIFT_S) el.currentTime = source / 1000;
     }
-    const video = this.video;
-    if (this.media.system) this.media.system.volume = Math.min(1, video?.audio?.system ?? 1);
-    if (this.media.mic) this.media.mic.volume = Math.min(1, video?.audio?.microphone ?? 1);
+    this.applyVolumes();
     this.updateScene();
+  }
+
+  /** Lautstärke der Tonspuren an der aktuellen Stelle (Punkte, Blenden). */
+  private applyVolumes() {
+    if (!this.preview) return;
+    const set = (el: HTMLMediaElement | undefined, name: AudioName) => {
+      if (el) el.volume = Math.max(0, Math.min(1, this.preview!.gain(name, this.outputMs)));
+    };
+    set(this.media.system, "system");
+    set(this.media.mic, "mic");
   }
 
   // --- Bearbeiten -------------------------------------------------------------
@@ -430,6 +500,42 @@ export class VideoPlayer {
       editor.flash(String(e));
     }
   }
+}
+
+/**
+ * Tonspur als Blob-URL. Das Asset-Protokoll liefert `.m4a` als `audio/m4a`
+ * aus – diesen Typ spielt WebKit nicht ab (nur `audio/mp4`, `audio/x-m4a`).
+ * Die Bytes bleiben für die Wellenform.
+ */
+async function loadAudio(path: string | null): Promise<{ url: string; bytes: ArrayBuffer } | null> {
+  if (!path) return null;
+  try {
+    const res = await fetch(await fileUrl(path));
+    if (!res.ok) throw new Error(`${res.status}`);
+    const bytes = await res.arrayBuffer();
+    return { url: URL.createObjectURL(new Blob([bytes], { type: "audio/mp4" })), bytes };
+  } catch (e) {
+    console.warn(`Tonspur ${path}: ${e}`);
+    return null;
+  }
+}
+
+/** Spitzenwerte für die Wellenform; `null`, wenn WebKit die Spur nicht dekodiert. */
+async function decodePeaks(bytes: ArrayBuffer): Promise<Peaks | null> {
+  try {
+    const ctx = new OfflineAudioContext(1, 1, 48000);
+    // decodeAudioData übernimmt den Puffer – eine Kopie behält das Original.
+    const buffer = await ctx.decodeAudioData(bytes.slice(0));
+    const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
+    return computePeaks(channels, buffer.sampleRate);
+  } catch (e) {
+    console.warn(`Wellenform: ${e}`);
+    return null;
+  }
+}
+
+function revoke(...urls: (string | null | undefined)[]) {
+  for (const u of urls) if (u?.startsWith("blob:")) URL.revokeObjectURL(u);
 }
 
 export const player = new VideoPlayer();

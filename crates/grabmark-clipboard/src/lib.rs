@@ -7,6 +7,8 @@
 //!   in Word in richtiger Grösse.
 //! - Linux: `arboard` (Rohpixel).
 
+use std::time::Instant;
+
 use grabmark_core::RgbaImage;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,13 +22,13 @@ pub enum ClipboardError {
 /// Legt ein Bild in die Zwischenablage. `scale_factor` = physische Pixel pro
 /// Punkt (2.0 bei Retina).
 pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardError> {
+    let started = Instant::now();
     #[cfg(target_os = "macos")]
-    return macos::copy_image(image, scale_factor);
+    let result = macos::copy_image(image, scale_factor);
     #[cfg(target_os = "windows")]
-    return windows::copy_image(image, scale_factor);
+    let result = windows::copy_image(image, scale_factor);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = scale_factor;
+    let result = {
         let data = arboard::ImageData {
             width: image.width() as usize,
             height: image.height() as usize,
@@ -35,33 +37,64 @@ pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardE
         arboard::Clipboard::new()
             .and_then(|mut c| c.set_image(data))
             .map_err(|e| ClipboardError::Unavailable(e.to_string()))
+    };
+    logged(
+        &format!(
+            "Bild {}×{} (Skalierung {scale_factor})",
+            image.width(),
+            image.height()
+        ),
+        started,
+        result,
+    )
+}
+
+/// Protokolliert Ergebnis und Dauer eines Kopiervorgangs (nie den Inhalt).
+fn logged(
+    what: &str,
+    started: Instant,
+    result: Result<(), ClipboardError>,
+) -> Result<(), ClipboardError> {
+    match &result {
+        Ok(()) => log::info!(
+            "Zwischenablage: {what} kopiert in {} ms",
+            started.elapsed().as_millis()
+        ),
+        Err(e) => log::error!("Zwischenablage: {what} kopieren fehlgeschlagen: {e}"),
     }
+    result
 }
 
 /// Legt Text in die Zwischenablage (z. B. OCR-Ergebnis).
 pub fn copy_text(text: &str) -> Result<(), ClipboardError> {
+    let started = Instant::now();
     #[cfg(target_os = "macos")]
-    return macos::copy_text(text);
+    let result = macos::copy_text(text);
     #[cfg(target_os = "windows")]
-    return windows::copy_text(text);
+    let result = windows::copy_text(text);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    arboard::Clipboard::new()
+    let result = arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(text.to_owned()))
-        .map_err(|e| ClipboardError::Unavailable(e.to_string()))
+        .map_err(|e| ClipboardError::Unavailable(e.to_string()));
+    // Nur die Länge – der Text selbst bleibt draussen.
+    logged(
+        &format!("Text ({} Zeichen)", text.chars().count()),
+        started,
+        result,
+    )
 }
 
 /// Legt eine Datei in die Zwischenablage (z. B. ein Video) – Einfügen in
 /// Finder, Mail oder Chat-Apps fügt die Datei ein.
 pub fn copy_file(path: &std::path::Path) -> Result<(), ClipboardError> {
+    let started = Instant::now();
     #[cfg(target_os = "macos")]
-    return macos::copy_file(path);
+    let result = macos::copy_file(path);
     #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Err(ClipboardError::Unavailable(
-            "Dateien kopieren folgt auf dieser Plattform".into(),
-        ))
-    }
+    let result = Err(ClipboardError::Unavailable(
+        "Dateien kopieren folgt auf dieser Plattform".into(),
+    ));
+    logged(&format!("Datei {}", path.display()), started, result)
 }
 
 /// Zähler, der bei jeder Änderung der Zwischenablage weiterzählt – auch
@@ -101,8 +134,14 @@ mod macos {
     }
 
     pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardError> {
+        let started = std::time::Instant::now();
         let png = grabmark_library::encode_png(image, scale_factor)
             .map_err(|e| ClipboardError::Encode(e.to_string()))?;
+        log::debug!(
+            "Zwischenablage: PNG {} KB in {} ms",
+            png.len() / 1024,
+            started.elapsed().as_millis()
+        );
         let data = NSData::with_bytes(&png);
         // NSImage liest die Auflösung aus dem PNG und setzt die Grösse in Punkten.
         let ns_image = NSImage::initWithData(NSImage::alloc(), &data)

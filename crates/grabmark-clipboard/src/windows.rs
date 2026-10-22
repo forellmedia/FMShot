@@ -30,6 +30,14 @@ pub fn copy_image(image: &RgbaImage, scale_factor: f32) -> Result<(), ClipboardE
         .map_err(|e| ClipboardError::Encode(e.to_string()))?;
     let dib = dibv5(image, scale);
     let png_format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    if png_format == 0 {
+        log::warn!("Zwischenablage: Format PNG nicht registrierbar – nur DIB");
+    }
+    log::debug!(
+        "Zwischenablage: PNG {} KB, DIB {} KB",
+        png.len() / 1024,
+        dib.len() / 1024
+    );
     with_clipboard(|| {
         if png_format != 0 {
             set_data(png_format, &png)?;
@@ -58,14 +66,20 @@ pub fn copy_text(text: &str) -> Result<(), ClipboardError> {
 /// offen – dann einige Male nachfassen), leert sie und führt `f` aus.
 fn with_clipboard(f: impl FnOnce() -> Result<(), ClipboardError>) -> Result<(), ClipboardError> {
     let mut opened = false;
+    let mut tries = 0;
     for _ in 0..20 {
+        tries += 1;
         if unsafe { OpenClipboard(None) }.is_ok() {
             opened = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    if tries > 1 {
+        log::debug!("Zwischenablage: {tries} Versuche zum Öffnen");
+    }
     if !opened {
+        log::warn!("Zwischenablage nach {tries} Versuchen noch belegt");
         return Err(ClipboardError::Unavailable(
             "Zwischenablage ist von einem anderen Programm belegt".into(),
         ));
@@ -73,7 +87,9 @@ fn with_clipboard(f: impl FnOnce() -> Result<(), ClipboardError>) -> Result<(), 
     let result = unsafe { EmptyClipboard() }
         .map_err(|e| ClipboardError::Unavailable(e.message()))
         .and_then(|()| f());
-    let _ = unsafe { CloseClipboard() };
+    if let Err(e) = unsafe { CloseClipboard() } {
+        log::warn!("Zwischenablage schliessen: {}", e.message());
+    }
     result
 }
 

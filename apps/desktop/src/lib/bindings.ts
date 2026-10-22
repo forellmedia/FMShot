@@ -104,6 +104,10 @@ export const commands = {
 	 *  Der Nutzer sieht alles und schickt es selbst ab – ohne Screenshots.
 	 */
 	reportBug: () => typedError<null, string>(__TAURI_INVOKE("report_bug")),
+	/**  Fehler und Hinweise aus den Fenstern ins gleiche Log schreiben. */
+	logFrontend: (level: FrontendLevel, message: string) => __TAURI_INVOKE<void>("log_frontend", { level, message }),
+	/**  Öffnet den Ordner mit den Log-Dateien. */
+	openLogFolder: () => typedError<null, string>(__TAURI_INVOKE("open_log_folder")),
 	/**  Prüft, ob eine neuere Version veröffentlicht ist. */
 	checkForUpdate: () => typedError<{
 	version: string,
@@ -161,10 +165,32 @@ export type AssetRef =
 /**  Hineingezogenes Bild (Hash des Inhalts). */
 { source: "asset"; hash: string };
 
-/**  Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. */
-export type AudioMix = {
+/**
+ *  Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. Die Punkte
+ *  verändern sie zusätzlich über die Zeit (Faktor, dazwischen linear).
+ */
+export type AudioMix = AudioMix_Serialize | AudioMix_Deserialize;
+
+/**
+ *  Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. Die Punkte
+ *  verändern sie zusätzlich über die Zeit (Faktor, dazwischen linear).
+ */
+export type AudioMix_Deserialize = {
 	system?: number | null,
 	microphone?: number | null,
+	system_keys?: VolumeKey[],
+	microphone_keys?: VolumeKey[],
+};
+
+/**
+ *  Lautstärke je Tonspur: 0 = stumm bis 1 = wie aufgenommen. Die Punkte
+ *  verändern sie zusätzlich über die Zeit (Faktor, dazwischen linear).
+ */
+export type AudioMix_Serialize = {
+	system: number | null,
+	microphone: number | null,
+	system_keys?: VolumeKey[],
+	microphone_keys?: VolumeKey[],
 };
 
 /**  Jede Aufnahme zusätzlich als Datei in einen Ordner schreiben. */
@@ -313,10 +339,19 @@ export type DrawMode =
 
 export type ExportFormat = "png" | "jpg";
 
+/**  Ein- und Ausblenden in Bildern des fertigen Videos (0 = aus). */
+export type Fade = {
+	in_frames?: number,
+	out_frames?: number,
+};
+
 /**  Flächenfüllung. */
 export type Fill = { type: "solid"; color: Color } | 
 /**  Linearer Verlauf; `angle` in Grad, 0 = von links nach rechts. */
 { type: "linear_gradient"; from: Color; to: Color; angle: number | null };
+
+/**  Stufe einer Meldung aus dem Frontend. */
+export type FrontendLevel = "error" | "warn" | "info" | "debug";
 
 /**  Eine Aufnahme in der Galerie mit Stichwörtern und Grund des Treffers. */
 export type GalleryItem = {
@@ -529,6 +564,8 @@ export type Settings = {
 	auto_export?: AutoExport,
 	/**  Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie. */
 	retention_days?: number | null,
+	/**  Log-Dateien nach so vielen Tagen löschen (10, 30, 60 oder 360). */
+	log_retention_days?: number,
 	/**  Format beim Speichern aus dem Editor (⌘S). */
 	save_format?: ImageFormat,
 	/**
@@ -621,7 +658,12 @@ export type VideoDoc_Deserialize = {
 	 */
 	cuts?: TimeRange[],
 	/**  Lautstärke je Tonspur (Etappe 4). */
-	audio?: AudioMix,
+	audio?: AudioMix_Deserialize,
+	/**
+	 *  Ein- und Ausblenden am Anfang und Ende des fertigen Videos (Bild und
+	 *  Ton).
+	 */
+	fade?: Fade,
 	/**  Eigener Mauszeiger und Klicks (Etappe 5). */
 	cursor?: CursorStyle,
 	/**  Zoom-Abschnitte auf den Bildschirm (Zeit der Aufnahme, Etappe 5). */
@@ -659,7 +701,12 @@ export type VideoDoc_Serialize = {
 	 */
 	cuts?: TimeRange[],
 	/**  Lautstärke je Tonspur (Etappe 4). */
-	audio: AudioMix,
+	audio: AudioMix_Serialize,
+	/**
+	 *  Ein- und Ausblenden am Anfang und Ende des fertigen Videos (Bild und
+	 *  Ton).
+	 */
+	fade?: Fade,
 	/**  Eigener Mauszeiger und Klicks (Etappe 5). */
 	cursor: CursorStyle,
 	/**  Zoom-Abschnitte auf den Bildschirm (Zeit der Aufnahme, Etappe 5). */
@@ -716,7 +763,7 @@ export type VideoSettings = {
 	system_audio?: boolean,
 	/**  3-Sekunden-Countdown vor dem Start. */
 	countdown?: boolean,
-	/**  Bilder pro Sekunde: 30 oder 60. */
+	/**  Bilder pro Sekunde: 24, 25, 30, 50 oder 60. */
 	fps?: number,
 	/**  Webcam zu Beginn eingeschaltet (während der Aufnahme umschaltbar). */
 	webcam?: boolean,
@@ -757,6 +804,16 @@ export type VideoTracks = {
 	input: string | null,
 	/**  Kopfpositionen der Webcam (JSON, Etappe 3). */
 	faces: string | null,
+};
+
+/**
+ *  Lautstärke-Punkt (Keyframe) einer Tonspur, Zeit der Aufnahme. Vor dem
+ *  ersten und nach dem letzten Punkt gilt dessen Wert.
+ */
+export type VolumeKey = {
+	t_ms: number,
+	/**  0 = stumm bis 1 = volle Lautstärke der Spur. */
+	volume: number | null,
 };
 
 /**  Was mit dem Hintergrund hinter der Person geschieht. */

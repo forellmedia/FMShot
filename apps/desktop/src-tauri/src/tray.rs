@@ -12,12 +12,12 @@ use serde::Serialize;
 use specta::Type;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Rect, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
-#[cfg(target_os = "macos")]
-use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -38,6 +38,13 @@ const REOPEN_GUARD: Duration = Duration::from_millis(350);
 #[derive(Default)]
 pub struct PopoverState {
     hidden_at: Mutex<Option<Instant>>,
+}
+
+/// Fehler bei Fensteraufrufen, die nur selten etwas bedeuten – fürs Debug-Log.
+fn check<T, E: std::fmt::Display>(what: &str, result: Result<T, E>) {
+    if let Err(e) = result {
+        log::debug!("{what}: {e}");
+    }
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -78,6 +85,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
     // Schon vorhanden (z. B. Sprache geändert): nur das Menü ersetzen.
     if let Some(tray) = app.tray_by_id("main") {
+        log::debug!("Tray-Menü neu aufgebaut");
         tray.set_menu(Some(menu))?;
         tray.set_tooltip(Some(t("tray.tooltip", &[])))?;
         return Ok(());
@@ -98,20 +106,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 toggle_popover(tray.app_handle(), rect);
             }
         })
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "capture_region" => capture::start(app, capture::Mode::Region),
-            "capture_window" => capture::start(app, capture::Mode::Window),
-            "capture_screen" => capture::start(app, capture::Mode::Screen),
-            "capture_text" => capture::start(app, capture::Mode::Text),
-            "capture_scroll" => capture::start(app, capture::Mode::Scroll),
-            "capture_scroll_auto" => capture::start(app, capture::Mode::ScrollAuto),
-            "capture_video" => capture::start(app, capture::Mode::Video),
-            "capture_webcam" => capture::start(app, capture::Mode::Webcam),
-            "open_window" => open_editor(app),
-            "open_library" => open_library(app),
-            "settings" => open_settings(app),
-            "quit" => crate::video::quit(app),
-            _ => {}
+        .on_menu_event(|app, event| {
+            log::info!("Tray-Menü: {}", event.id.as_ref());
+            on_menu_event(app, event.id.as_ref())
         });
     // Schwarz-auf-durchsichtig als Vorlage: macOS färbt es passend zur
     // Menüleiste (hell/dunkel). Unter Windows/Linux das App-Symbol.
@@ -122,11 +119,31 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
+    log::debug!("Tray-Symbol angelegt");
     Ok(())
+}
+
+fn on_menu_event(app: &AppHandle, id: &str) {
+    match id {
+        "capture_region" => capture::start(app, capture::Mode::Region),
+        "capture_window" => capture::start(app, capture::Mode::Window),
+        "capture_screen" => capture::start(app, capture::Mode::Screen),
+        "capture_text" => capture::start(app, capture::Mode::Text),
+        "capture_scroll" => capture::start(app, capture::Mode::Scroll),
+        "capture_scroll_auto" => capture::start(app, capture::Mode::ScrollAuto),
+        "capture_video" => capture::start(app, capture::Mode::Video),
+        "capture_webcam" => capture::start(app, capture::Mode::Webcam),
+        "open_window" => open_editor(app),
+        "open_library" => open_library(app),
+        "settings" => open_settings(app),
+        "quit" => crate::video::quit(app),
+        other => log::warn!("Tray-Menü: unbekannter Eintrag {other}"),
+    }
 }
 
 fn open_library(app: &AppHandle) {
     let root = app.state::<CaptureState>().library.root().to_path_buf();
+    log::info!("Bibliotheksordner öffnen");
     if let Err(e) = app.opener().open_path(root.to_string_lossy(), None::<&str>) {
         log::error!("Bibliothek öffnen: {e}");
     }
@@ -138,13 +155,18 @@ fn open_library(app: &AppHandle) {
 pub fn open_settings(app: &AppHandle) {
     // Mit offenem Fenster ins Dock und in ⌘⇥, damit man es wiederfindet.
     #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    check(
+        "Dock-Symbol zeigen",
+        app.set_activation_policy(tauri::ActivationPolicy::Regular),
+    );
     if let Some(window) = app.get_webview_window(SETTINGS) {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        log::info!("Einstellungen: Fenster nach vorne");
+        check("Einstellungen", window.unminimize());
+        check("Einstellungen", window.show());
+        check("Einstellungen", window.set_focus());
         return;
     }
+    let start = Instant::now();
     let builder = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings".into()))
         .title(t("settings.title", &[]))
         .inner_size(SETTINGS_SIZE.0, SETTINGS_SIZE.1)
@@ -160,7 +182,11 @@ pub fn open_settings(app: &AppHandle) {
     let built = builder.build();
     match built {
         Ok(window) => {
-            let _ = window.set_focus();
+            log::info!(
+                "Einstellungen: Fenster geöffnet ({:.0} ms)",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            check("Einstellungen", window.set_focus());
         }
         Err(e) => log::error!("Einstellungen: {e}"),
     }
@@ -182,7 +208,8 @@ pub fn update_activation(app: &AppHandle, closing: &str) {
         } else {
             tauri::ActivationPolicy::Accessory
         };
-        let _ = app.set_activation_policy(policy);
+        log::debug!("Fenster {closing} geht zu – Dock-Symbol: {open}");
+        check("Dock-Symbol", app.set_activation_policy(policy));
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, closing);
@@ -203,13 +230,21 @@ fn toggle_popover(app: &AppHandle, icon: Rect) {
             return;
         }
         if recently_hidden {
+            log::debug!("Tray-Fenster: Klick kurz nach dem Schliessen – bleibt zu");
             return;
         }
         show_popover(&window, icon);
         return;
     }
+    let start = Instant::now();
     match build_popover(app) {
-        Ok(window) => show_popover(&window, icon),
+        Ok(window) => {
+            log::debug!(
+                "Tray-Fenster angelegt ({:.0} ms)",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            show_popover(&window, icon)
+        }
         Err(e) => log::error!("Tray-Fenster: {e}"),
     }
 }
@@ -295,10 +330,14 @@ fn show_popover(window: &WebviewWindow, icon: Rect) {
         x = x.clamp(ax + gap, ax + aw - w - gap);
         y = y.clamp(ay + gap, ay + ah - h - gap);
     }
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-    let _ = window.show();
-    let _ = window.set_focus();
-    let _ = window.emit("tray-opened", ());
+    log::info!("Tray-Fenster zeigen");
+    check(
+        "Tray-Fenster",
+        window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32)),
+    );
+    check("Tray-Fenster", window.show());
+    check("Tray-Fenster", window.set_focus());
+    check("Tray-Fenster", window.emit("tray-opened", ()));
 }
 
 /// Tray-Fenster nach einer Aufnahme wieder in den Vordergrund, falls offen.
@@ -306,7 +345,8 @@ pub fn refocus_popover(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPOVER)
         && window.is_visible().unwrap_or(false)
     {
-        let _ = window.set_focus();
+        log::debug!("Tray-Fenster: Fokus zurück");
+        check("Tray-Fenster", window.set_focus());
     }
 }
 
@@ -314,7 +354,8 @@ pub fn hide_popover(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPOVER)
         && window.is_visible().unwrap_or(false)
     {
-        let _ = window.hide();
+        log::info!("Tray-Fenster verstecken");
+        check("Tray-Fenster", window.hide());
         *app.state::<PopoverState>()
             .hidden_at
             .lock()
@@ -327,24 +368,31 @@ pub fn hide_popover(app: &AppHandle) {
 pub fn show_main_window(app: &AppHandle) {
     // Mit offenem Fenster ins Dock und in ⌘⇥, damit man es wiederfindet.
     #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    check(
+        "Dock-Symbol zeigen",
+        app.set_activation_policy(tauri::ActivationPolicy::Regular),
+    );
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        log::info!("Hauptfenster zeigen");
+        check("Hauptfenster", window.show());
+        check("Hauptfenster", window.unminimize());
+        check("Hauptfenster", window.set_focus());
+    } else {
+        log::warn!("Hauptfenster fehlt");
     }
 }
 
 /// Hauptfenster mit dem Editor zeigen (eine offene Galerie schliesst sich).
 fn open_editor(app: &AppHandle) {
     show_main_window(app);
-    let _ = app.emit("open-editor", ());
+    check("Ereignis open-editor", app.emit("open-editor", ()));
 }
 
 /// Fenster verstecken – Grabmark läuft im Tray weiter.
 pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        log::info!("Hauptfenster verstecken");
+        check("Hauptfenster", window.hide());
     }
     update_activation(app, "main");
 }
@@ -365,12 +413,13 @@ pub enum MainView {
 #[specta::specta]
 // async: Fenster aus einem synchronen Befehl anzulegen blockiert unter Windows.
 pub async fn open_main(app: AppHandle, view: MainView) {
+    log::info!("Tray-Fenster: {view:?} öffnen");
     hide_popover(&app);
     match view {
         MainView::Editor => open_editor(&app),
         MainView::Gallery => {
             show_main_window(&app);
-            let _ = app.emit("open-gallery", ());
+            check("Ereignis open-gallery", app.emit("open-gallery", ()));
         }
         MainView::Settings => open_settings(&app),
         MainView::Library => open_library(&app),
@@ -380,6 +429,7 @@ pub async fn open_main(app: AppHandle, view: MainView) {
 #[tauri::command]
 #[specta::specta]
 pub fn quit_app(app: AppHandle) {
+    log::info!("Beenden (Tray-Fenster)");
     // Läuft eine Aufnahme, wird sie erst gesichert.
     crate::video::quit(&app);
 }
@@ -395,16 +445,26 @@ pub struct Microphone {
 #[specta::specta]
 pub async fn list_microphones() -> Vec<Microphone> {
     tauri::async_runtime::spawn_blocking(|| {
-        grabmark_media::microphones()
+        let start = Instant::now();
+        let list: Vec<Microphone> = grabmark_media::microphones()
             .into_iter()
             .map(|d| Microphone {
                 id: d.id,
                 name: d.name,
             })
-            .collect()
+            .collect();
+        log::debug!(
+            "Mikrofone: {} ({:.0} ms)",
+            list.len(),
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        list
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_else(|e| {
+        log::warn!("Mikrofone auflisten: {e}");
+        Vec::new()
+    })
 }
 
 /// Eine Kamera für die Auswahl im Video-Tab.
@@ -418,33 +478,48 @@ pub struct Camera {
 #[specta::specta]
 pub async fn list_cameras() -> Vec<Camera> {
     tauri::async_runtime::spawn_blocking(|| {
-        grabmark_media::cameras()
+        let start = Instant::now();
+        let list: Vec<Camera> = grabmark_media::cameras()
             .into_iter()
             .map(|d| Camera {
                 id: d.id,
                 name: d.name,
             })
-            .collect()
+            .collect();
+        log::debug!(
+            "Kameras: {} ({:.0} ms)",
+            list.len(),
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        list
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_else(|e| {
+        log::warn!("Kameras auflisten: {e}");
+        Vec::new()
+    })
 }
 
 /// Startet Grabmark mit der Anmeldung am Computer?
 #[tauri::command]
 #[specta::specta]
 pub fn get_launch_at_login(app: AppHandle) -> bool {
-    app.autolaunch().is_enabled().unwrap_or(false)
+    app.autolaunch().is_enabled().unwrap_or_else(|e| {
+        log::warn!("Mit Anmeldung starten abfragen: {e}");
+        false
+    })
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> {
+    log::info!("Mit Anmeldung starten: {enabled}");
     let autolaunch = app.autolaunch();
     if enabled {
         autolaunch.enable()
     } else {
         autolaunch.disable()
     }
+    .inspect_err(|e| log::error!("Mit Anmeldung starten: {e}"))
     .map_err(|e| e.to_string())
 }

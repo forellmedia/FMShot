@@ -43,6 +43,11 @@ pub(crate) struct LiveVision {
     last_face: AtomicU64,
     preview_on: AtomicBool,
     inner: Mutex<Inner>,
+    /// Zähler fürs Protokoll: verarbeitete und (weil beschäftigt)
+    /// ausgelassene Bilder, Rechenzeit in µs.
+    processed: AtomicU64,
+    skipped: AtomicU64,
+    busy_us: AtomicU64,
 }
 
 struct Inner {
@@ -72,6 +77,9 @@ impl LiveVision {
                 faces: Vec::new(),
                 preview: None,
             }),
+            processed: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            busy_us: AtomicU64::new(0),
         })
     }
 
@@ -96,6 +104,12 @@ impl LiveVision {
         };
         self.lock().preview = Some(preview);
         self.preview_on.store(true, Ordering::Release);
+        log::debug!(
+            "Eigenes Webcam-Bild: {:?}, Hintergrund {:?}, gespiegelt={}",
+            layout.framing,
+            layout.background,
+            layout.mirror
+        );
         layer
     }
 
@@ -108,6 +122,7 @@ impl LiveVision {
             return;
         }
         if self.busy.swap(true, Ordering::AcqRel) {
+            self.skipped.fetch_add(1, Ordering::Relaxed);
             return;
         }
         let Some(image) = (unsafe { sample.image_buffer() }) else {
@@ -121,7 +136,11 @@ impl LiveVision {
         let image = SendCf(image);
         self.queue.exec_async(move || {
             let image = image;
+            let started = std::time::Instant::now();
             this.process(&image.0, pts, t_ms, detect);
+            this.busy_us
+                .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            this.processed.fetch_add(1, Ordering::Relaxed);
             this.busy.store(false, Ordering::Release);
         });
     }
@@ -151,7 +170,18 @@ impl LiveVision {
         self.queue.exec_sync(|| {});
         let mut inner = self.lock();
         inner.preview = None;
-        std::mem::take(&mut inner.faces)
+        let faces = std::mem::take(&mut inner.faces);
+        let processed = self.processed.swap(0, Ordering::Relaxed);
+        let busy_us = self.busy_us.swap(0, Ordering::Relaxed);
+        let skipped = self.skipped.swap(0, Ordering::Relaxed);
+        if let Some(avg_us) = busy_us.checked_div(processed) {
+            log::debug!(
+                "Webcam-Erkennung: {processed} Bilder verarbeitet (Ø {avg_us} µs), {skipped} ausgelassen, {} Gesichtsproben, davon {} mit Gesicht",
+                faces.len(),
+                faces.iter().filter(|f| f.face.is_some()).count()
+            );
+        }
+        faces
     }
 }
 

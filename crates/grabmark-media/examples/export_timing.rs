@@ -88,7 +88,13 @@ fn main() {
         (path("_mic.m4a"), video.audio.microphone),
     ]
     .into_iter()
-    .filter_map(|(p, volume)| Some(AudioInput { path: p?, volume }))
+    .filter_map(|(p, volume)| {
+        Some(AudioInput {
+            path: p?,
+            volume,
+            ramps: Vec::new(),
+        })
+    })
     .collect();
     let prepared = t0.elapsed();
 

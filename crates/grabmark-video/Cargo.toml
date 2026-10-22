@@ -14,7 +14,7 @@ workspace = true
 [features]
 default = ["gpu", "gif", "layers"]
 # Ebenen (Pfeile, Text …) über dem Video – zeichnet grabmark-render.
-layers = ["dep:grabmark-render", "dep:log"]
+layers = ["dep:grabmark-render"]
 # Export als animiertes GIF.
 gif = ["dep:gif"]
 # Zusammensetzen auf der Grafikkarte (wgpu). Ohne: nur Layout-Rechnung (z. B. WASM).
@@ -23,7 +23,8 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 grabmark-core.workspace = true
 grabmark-render = { workspace = true, optional = true }
-log = { version = "0.4", optional = true }
+# Protokoll: ohne eingerichteten Logger (WASM, Tests) kostet es nichts.
+log = "0.4"
 thiserror.workspace = true
 bytemuck = { version = "1", features = ["derive"], optional = true }
 gif = { version = "0.13", optional = true }

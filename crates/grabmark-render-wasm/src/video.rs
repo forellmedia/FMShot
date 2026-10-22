@@ -6,6 +6,7 @@
 use grabmark_core::{
     FaceTrack, InputTrack, Size, VideoDoc, WebcamFraming, WebcamMode, ZoomSection,
 };
+use grabmark_video::audio::{self, AudioTrack};
 use grabmark_video::cursor::{ARROW_INNER, ARROW_OUTER, CursorTrack, auto_zooms};
 use grabmark_video::layout::{Placement, SceneExtras, Source};
 use grabmark_video::{HeadPath, edit, timeline};
@@ -65,6 +66,30 @@ enum Op {
         layer: u32,
         range: Option<(f64, f64)>,
     },
+    /// Lautstärke-Punkt setzen; `index` = vorhandenen verschieben.
+    VolumeKey {
+        track: String,
+        index: Option<usize>,
+        t: f64,
+        volume: f32,
+    },
+    RemoveVolumeKey {
+        track: String,
+        index: usize,
+    },
+    /// Alle Punkte einer Spur löschen.
+    ClearVolumeKeys {
+        track: String,
+    },
+    /// Ein-/Ausblenden in Bildern; fehlend = unverändert.
+    Fade {
+        fade_in: Option<u32>,
+        fade_out: Option<u32>,
+    },
+}
+
+fn track(name: &str) -> Result<AudioTrack, JsError> {
+    AudioTrack::parse(name).ok_or_else(|| JsError::new(&format!("Tonspur {name}?")))
 }
 
 /// Vorschau eines Videos im Editor: hält Dokument und Mausspur, damit pro
@@ -220,6 +245,59 @@ impl VideoPreview {
             .collect()
     }
 
+    /// Lautstärke einer Tonspur (`system`/`mic`) zur Zeit des fertigen
+    /// Videos, mit Punkten und Blenden (0–1).
+    pub fn gain(&self, track: &str, output_ms: f64) -> f32 {
+        AudioTrack::parse(track).map_or(1.0, |t| audio::gain_at(&self.doc, t, output_ms))
+    }
+
+    /// Deckkraft des Bilds durch Ein- und Ausblenden (0–1).
+    pub fn fade(&self, output_ms: f64) -> f32 {
+        audio::fade_at(&self.doc, output_ms)
+    }
+
+    /// Länge von Ein- und Ausblenden in ms: `[ein, aus]`.
+    #[wasm_bindgen(js_name = fadeMs)]
+    pub fn fade_ms(&self) -> Vec<f64> {
+        let (a, b) = audio::fade_ms(&self.doc);
+        vec![a, b]
+    }
+
+    /// Lautstärke-Punkte einer Spur in Ausgabe-Zeit: `[t, v, t, v, …]`.
+    /// Punkte in Schnitten liegen an der Stelle direkt danach.
+    #[wasm_bindgen(js_name = volumeKeys)]
+    pub fn volume_keys(&self, track: &str) -> Vec<f64> {
+        let Some(t) = AudioTrack::parse(track) else {
+            return Vec::new();
+        };
+        t.keys(&self.doc)
+            .iter()
+            .flat_map(|k| {
+                [
+                    timeline::output_time(&self.doc, k.t_ms as f64),
+                    k.volume as f64,
+                ]
+            })
+            .collect()
+    }
+
+    /// Lautstärkekurve fürs Zeichnen: `[t, v, …]` an allen Knickstellen, in
+    /// Ausgabe-Zeit (ohne Blenden – die zeigt die Video-Zeile).
+    #[wasm_bindgen(js_name = volumeCurve)]
+    pub fn volume_curve(&self, track: &str) -> Vec<f64> {
+        let Some(t) = AudioTrack::parse(track) else {
+            return Vec::new();
+        };
+        let doc = VideoDoc {
+            fade: Default::default(),
+            ..self.doc.clone()
+        };
+        audio::volume_ramps(&doc, t)
+            .iter()
+            .flat_map(|r| [r.start_ms, r.from as f64, r.end_ms, r.to as f64])
+            .collect()
+    }
+
     /// Wendet einen Bearbeitungsschritt an und gibt den neuen Video-Teil
     /// zurück (das Objekt selbst bleibt beim alten, bis `setDoc`).
     pub fn edit(&self, op_json: &str) -> Result<String, JsError> {
@@ -239,6 +317,21 @@ impl VideoPreview {
             Op::LayerTime { layer, range } => edit::set_layer_time(doc, layer, range),
             Op::HideClick { source } => edit::hide_click(doc, source),
             Op::ShowClicks => edit::show_clicks(doc),
+            Op::VolumeKey {
+                track: name,
+                index,
+                t,
+                volume,
+            } => audio::set_volume_key(doc, track(&name)?, index, t, volume).0,
+            Op::RemoveVolumeKey { track: name, index } => {
+                audio::remove_volume_key(doc, track(&name)?, index)
+            }
+            Op::ClearVolumeKeys { track: name } => {
+                let mut out = doc.clone();
+                track(&name)?.keys_mut(&mut out).clear();
+                out
+            }
+            Op::Fade { fade_in, fade_out } => audio::set_fade(doc, fade_in, fade_out),
         };
         Ok(serde_json::to_string(&out)?)
     }

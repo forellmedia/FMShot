@@ -25,7 +25,15 @@ impl WindowsOcr {
     pub fn new() -> Option<Self> {
         let count = WinOcrEngine::AvailableRecognizerLanguages()
             .and_then(|l| l.Size())
-            .unwrap_or(0);
+            .unwrap_or_else(|e| {
+                log::warn!("OCR-Sprachen nicht abfragbar: {}", e.message());
+                0
+            });
+        if count == 0 {
+            log::warn!("Keine OCR-Sprache installiert – Texterkennung aus");
+        } else {
+            log::debug!("Texterkennung: {count} Sprache(n) verfügbar");
+        }
         (count > 0).then_some(Self)
     }
 }
@@ -43,6 +51,30 @@ impl OcrEngine for WindowsOcr {
     }
 
     fn recognize(&self, image: &RgbaImage) -> Result<Vec<TextBlock>, OcrError> {
+        let started = std::time::Instant::now();
+        let result = self.recognize_inner(image);
+        match &result {
+            // Nur Zahlen – der erkannte Text gehört nicht ins Protokoll.
+            Ok(blocks) => log::debug!(
+                "Texterkennung {}×{}: {} Zeilen, {} Zeichen in {} ms",
+                image.width(),
+                image.height(),
+                blocks.len(),
+                blocks.iter().map(|b| b.text.chars().count()).sum::<usize>(),
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::warn!(
+                "Texterkennung {}×{} fehlgeschlagen: {e}",
+                image.width(),
+                image.height()
+            ),
+        }
+        result
+    }
+}
+
+impl WindowsOcr {
+    fn recognize_inner(&self, image: &RgbaImage) -> Result<Vec<TextBlock>, OcrError> {
         let engine = engine()?;
         let max = WinOcrEngine::MaxImageDimension()
             .map_err(backend)?
@@ -54,8 +86,13 @@ impl OcrEngine for WindowsOcr {
         // Zu breite Bilder (selten) verkleinern, damit die Breite passt.
         let shrink = w.div_ceil(max).max(1);
         let grow = upscale_factor(w / shrink, h / shrink, max);
+        let tiles = tiles(h, max / grow * shrink, TILE_OVERLAP);
+        log::debug!(
+            "Texterkennung: {} Streifen, verkleinert ÷{shrink}, vergrössert ×{grow}",
+            tiles.len()
+        );
         let mut blocks = Vec::new();
-        for tile in tiles(h, max / grow * shrink, TILE_OVERLAP) {
+        for tile in tiles {
             let part = scaled_bgra(image, tile.y0, tile.y1, shrink, grow);
             let lines = recognize_bgra(&engine, &part)?;
             let factor = shrink as f32 / grow as f32;
@@ -83,8 +120,12 @@ impl OcrEngine for WindowsOcr {
 
 /// Engine für die Sprachen des Benutzerprofils, sonst die erste verfügbare.
 fn engine() -> Result<WinOcrEngine, OcrError> {
-    if let Ok(e) = WinOcrEngine::TryCreateFromUserProfileLanguages() {
-        return Ok(e);
+    match WinOcrEngine::TryCreateFromUserProfileLanguages() {
+        Ok(e) => return Ok(e),
+        Err(e) => log::debug!(
+            "OCR mit Profilsprachen nicht möglich, nehme erste Sprache: {}",
+            e.message()
+        ),
     }
     let list = WinOcrEngine::AvailableRecognizerLanguages().map_err(backend)?;
     let first = list.GetAt(0).map_err(|_| {

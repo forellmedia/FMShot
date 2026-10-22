@@ -12,6 +12,7 @@
 //! - Linux: folgt
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use grabmark_core::RgbaImage;
 
@@ -80,6 +81,11 @@ pub struct OverlayHandle {
 impl OverlayHandle {
     /// Reicht das eingefrorene Bild eines Monitors nach (physische Pixel).
     pub fn set_frozen(&self, display_id: u32, image: Arc<RgbaImage>) {
+        log::debug!(
+            "Overlay: eingefrorenes Bild für Monitor {display_id}, {}×{}",
+            image.width(),
+            image.height()
+        );
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.set_frozen(display_id, image);
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -88,6 +94,7 @@ impl OverlayHandle {
 
     /// Schliesst das Overlay ohne Ergebnis (z. B. wenn die Aufnahme scheitert).
     pub fn cancel(&self) {
+        log::debug!("Overlay von aussen abgebrochen");
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.cancel();
     }
@@ -109,15 +116,53 @@ pub fn open(
     windows: Vec<WindowTarget>,
     on_done: DoneCallback,
 ) -> Result<OverlayHandle, OverlayError> {
+    let started = Instant::now();
+    log::info!("Overlay öffnen: {mode:?}, {} Fenster", windows.len());
+    let on_done: DoneCallback = Box::new(move |result| {
+        let ms = started.elapsed().as_millis();
+        match &result {
+            OverlayResult::Selected(s) => log::info!(
+                "Overlay: Bereich {}×{} px bei ({}, {}) auf Monitor {} gewählt nach {ms} ms",
+                s.width,
+                s.height,
+                s.x,
+                s.y,
+                s.display_id
+            ),
+            OverlayResult::Window(id) => {
+                log::info!("Overlay: Fenster {id} gewählt nach {ms} ms")
+            }
+            OverlayResult::Cancelled => log::info!("Overlay abgebrochen nach {ms} ms"),
+        }
+        on_done(result)
+    });
     #[cfg(target_os = "macos")]
-    return macos::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
+    let result = macos::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
     #[cfg(target_os = "windows")]
-    return windows::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
+    let result = windows::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
+    let result = {
         let _ = (mode, windows, on_done);
         Err(OverlayError::NotImplemented)
+    };
+    logged("Overlay", started, result)
+}
+
+/// Protokolliert, ob ein Fenster aufging und wie lange das dauerte.
+fn logged<T>(
+    what: &str,
+    started: Instant,
+    result: Result<T, OverlayError>,
+) -> Result<T, OverlayError> {
+    match &result {
+        Ok(_) => log::debug!("{what} offen nach {} ms", started.elapsed().as_millis()),
+        // Auf dieser Plattform fehlt es eben – kein Fehler.
+        Err(OverlayError::NotImplemented) => {
+            log::debug!("{what}: auf dieser Plattform nicht umgesetzt")
+        }
+        Err(e) => log::error!("{what} öffnen fehlgeschlagen: {e}"),
     }
+    result
 }
 
 /// Knopf in der Scroll-Leiste.
@@ -145,6 +190,7 @@ impl ScrollUi {
     }
 
     pub fn close(&self) {
+        log::debug!("Scroll-Leiste schliessen");
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.close();
     }
@@ -158,17 +204,24 @@ pub fn open_scroll_ui(
     labels: (&str, &str, &str),
     on_action: Box<dyn Fn(ScrollAction)>,
 ) -> Result<ScrollUi, OverlayError> {
+    let started = Instant::now();
+    log::debug!("Scroll-Leiste öffnen: Monitor {display_id}, Bereich {rect:?}");
+    let on_action: Box<dyn Fn(ScrollAction)> = Box::new(move |action| {
+        log::info!("Scroll-Leiste: {action:?}");
+        on_action(action)
+    });
     #[cfg(target_os = "macos")]
-    return macos::open_scroll_ui(display_id, rect, labels, on_action)
-        .map(|inner| ScrollUi { inner });
+    let result =
+        macos::open_scroll_ui(display_id, rect, labels, on_action).map(|inner| ScrollUi { inner });
     #[cfg(target_os = "windows")]
-    return windows::open_scroll_ui(display_id, rect, labels, on_action)
+    let result = windows::open_scroll_ui(display_id, rect, labels, on_action)
         .map(|inner| ScrollUi { inner });
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
+    let result = {
         let _ = (display_id, rect, labels, on_action);
         Err(OverlayError::NotImplemented)
-    }
+    };
+    logged("Scroll-Leiste", started, result)
 }
 
 /// Knopf in der Leiste der Video-Aufnahme.
@@ -251,6 +304,7 @@ impl RecordUi {
     }
 
     pub fn close(&self) {
+        log::debug!("Aufnahmeleiste schliessen");
         #[cfg(target_os = "macos")]
         self.inner.close();
     }
@@ -266,14 +320,21 @@ pub fn open_record_ui(
     labels: &RecordLabels<'_>,
     on_action: Box<dyn Fn(RecordAction)>,
 ) -> Result<RecordUi, OverlayError> {
+    let started = Instant::now();
+    log::debug!("Aufnahmeleiste öffnen: Monitor {display_id}, Rahmen {rect:?}");
+    let on_action: Box<dyn Fn(RecordAction)> = Box::new(move |action| {
+        log::info!("Aufnahmeleiste: {action:?}");
+        on_action(action)
+    });
     #[cfg(target_os = "macos")]
-    return macos::open_record_ui(display_id, rect, labels, on_action)
-        .map(|inner| RecordUi { inner });
+    let result =
+        macos::open_record_ui(display_id, rect, labels, on_action).map(|inner| RecordUi { inner });
     #[cfg(not(target_os = "macos"))]
-    {
+    let result = {
         let _ = (display_id, rect, labels, on_action);
         Err(OverlayError::NotImplemented)
-    }
+    };
+    logged("Aufnahmeleiste", started, result)
 }
 
 /// Aussehen der Webcam-Blase.
@@ -308,6 +369,7 @@ impl WebcamBubble {
     }
 
     pub fn set_visible(&self, visible: bool) {
+        log::debug!("Webcam-Blase sichtbar={visible}");
         #[cfg(target_os = "macos")]
         self.inner.set_visible(visible);
         #[cfg(not(target_os = "macos"))]
@@ -315,6 +377,7 @@ impl WebcamBubble {
     }
 
     pub fn close(&self) {
+        log::debug!("Webcam-Blase schliessen");
         #[cfg(target_os = "macos")]
         self.inner.close();
     }
@@ -332,15 +395,18 @@ pub unsafe fn open_webcam_bubble(
     style: BubbleStyle,
     layer: *mut std::ffi::c_void,
 ) -> Result<WebcamBubble, OverlayError> {
+    let started = Instant::now();
+    log::debug!("Webcam-Blase öffnen: Monitor {display_id}, {rect:?}, {style:?}");
     #[cfg(target_os = "macos")]
     // SAFETY: vom Aufrufer zugesichert.
-    return unsafe { macos::open_bubble(display_id, rect, style, layer) }
+    let result = unsafe { macos::open_bubble(display_id, rect, style, layer) }
         .map(|inner| WebcamBubble { inner });
     #[cfg(not(target_os = "macos"))]
-    {
+    let result = {
         let _ = (display_id, rect, style, layer);
         Err(OverlayError::NotImplemented)
-    }
+    };
+    logged("Webcam-Blase", started, result)
 }
 
 /// Neue Grösse der Blase nach einem Schritt am Scrollrad (Punkte): Höhe
@@ -384,15 +450,26 @@ pub fn show_preview(
     labels: [&str; 4],
     on_action: Box<dyn Fn(PreviewAction)>,
 ) -> Result<(), OverlayError> {
+    let started = Instant::now();
+    log::debug!(
+        "Vorschau zeigen: {}×{}, {placement:?}",
+        image.width(),
+        image.height()
+    );
+    let on_action: Box<dyn Fn(PreviewAction)> = Box::new(move |action| {
+        log::debug!("Vorschau: {action:?}");
+        on_action(action)
+    });
     #[cfg(target_os = "macos")]
-    return macos::show_preview(image, file, placement, labels, on_action);
+    let result = macos::show_preview(image, file, placement, labels, on_action);
     #[cfg(target_os = "windows")]
-    return windows::show_preview(image, file, placement, labels, on_action);
+    let result = windows::show_preview(image, file, placement, labels, on_action);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
+    let result = {
         let _ = (image, file, placement, labels, on_action);
         Err(OverlayError::NotImplemented)
-    }
+    };
+    logged("Vorschau", started, result)
 }
 
 /// Kurzer Hinweis am unteren Bildschirmrand (z. B. „Text kopiert“), der von
@@ -572,6 +649,7 @@ pub struct DrawSurface {
 impl DrawSurface {
     /// Zeichnen ein/aus: Werkzeugleiste, Fadenkreuz, Tastatur.
     pub fn set_active(&self, active: bool) {
+        log::debug!("Zeichenfläche aktiv={active}");
         #[cfg(target_os = "macos")]
         self.inner.set_active(active);
         #[cfg(not(target_os = "macos"))]
@@ -603,6 +681,7 @@ impl DrawSurface {
     }
 
     pub fn close(&self) {
+        log::debug!("Zeichenfläche schliessen");
         #[cfg(target_os = "macos")]
         self.inner.close();
     }
@@ -618,12 +697,19 @@ pub fn open_draw_surface(
     colors: &[[f64; 4]],
     on_event: Box<dyn Fn(DrawEvent)>,
 ) -> Result<DrawSurface, OverlayError> {
+    let started = Instant::now();
+    log::debug!(
+        "Zeichenfläche öffnen: Monitor {display_id}, Bereich {area:?}, {} Werkzeuge, {} Farben",
+        tools.len(),
+        colors.len()
+    );
     #[cfg(target_os = "macos")]
-    return macos::draw::open(display_id, area, tools, colors, on_event)
+    let result = macos::draw::open(display_id, area, tools, colors, on_event)
         .map(|inner| DrawSurface { inner });
     #[cfg(not(target_os = "macos"))]
-    {
+    let result = {
         let _ = (display_id, area, tools, colors, on_event);
         Err(OverlayError::NotImplemented)
-    }
+    };
+    logged("Zeichenfläche", started, result)
 }

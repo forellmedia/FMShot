@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 use grabmark_core::{Document, RgbaImage};
 use rusqlite::Connection;
@@ -102,10 +103,24 @@ impl Library {
     /// Öffnet die Bibliothek, legt sie bei Bedarf an und bringt ältere
     /// Ablagen auf den aktuellen Stand.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        let started = Instant::now();
         let root = root.into();
-        fs::create_dir_all(&root)?;
-        let conn = index::open(&root.join(INDEX_FILE))?;
-        migrate(&conn, &root)?;
+        fs::create_dir_all(&root).inspect_err(|e| {
+            log::error!("Bibliothek {} anlegen fehlgeschlagen: {e}", root.display())
+        })?;
+        let conn = index::open(&root.join(INDEX_FILE)).inspect_err(|e| {
+            log::error!("Index in {} öffnen fehlgeschlagen: {e}", root.display())
+        })?;
+        migrate(&conn, &root)
+            .inspect_err(|e| log::error!("Bibliothek migrieren fehlgeschlagen: {e}"))?;
+        match index::count(&conn) {
+            Ok(n) => log::info!(
+                "Bibliothek {} geöffnet: {n} Aufnahmen in {} ms",
+                root.display(),
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::warn!("Bibliothek geöffnet, Anzahl unbekannt: {e}"),
+        }
         Ok(Self {
             root,
             index: Mutex::new(conn),
@@ -119,11 +134,34 @@ impl Library {
 
     /// Legt die Aufnahme an: Dokument, Original, Vorschaubild, Index-Eintrag.
     pub fn save_capture(&self, capture: &NewCapture) -> Result<CaptureRecord> {
+        let started = Instant::now();
+        let result = self.save_capture_inner(capture);
+        match &result {
+            Ok(rec) => log::info!(
+                "Aufnahme {} gespeichert: {}×{} ({}) in {} ms",
+                rec.id,
+                rec.width,
+                rec.height,
+                rec.mode,
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::error!("Aufnahme speichern fehlgeschlagen: {e}"),
+        }
+        result
+    }
+
+    fn save_capture_inner(&self, capture: &NewCapture) -> Result<CaptureRecord> {
         let (id, dir) = self.reserve_id(capture.created_at_ms)?;
         let id = id.to_string();
 
+        let t = Instant::now();
         let png = encode_png(&capture.image, capture.scale_factor)
             .map_err(|e| LibraryError::Encode(e.to_string()))?;
+        log::debug!(
+            "PNG für {id}: {} KB in {} ms",
+            png.len() / 1024,
+            t.elapsed().as_millis()
+        );
         write_atomic(&dir.join(original_file(&id)), &png)?;
 
         let doc = Document::from_capture_scaled(
@@ -136,8 +174,14 @@ impl Library {
             &serde_json::to_vec_pretty(&doc)?,
         )?;
 
+        let t = Instant::now();
         let thumb = encode_webp(&thumbnail(&capture.image, THUMBNAIL_MAX))
             .map_err(|e| LibraryError::Encode(e.to_string()))?;
+        log::debug!(
+            "Vorschaubild für {id}: {} KB in {} ms",
+            thumb.len() / 1024,
+            t.elapsed().as_millis()
+        );
         write_atomic(&dir.join(thumbnail_file(&id)), &thumb)?;
 
         let record = CaptureRecord {
@@ -158,6 +202,7 @@ impl Library {
     /// Reserviert eine ID für ein Video, das gleich aufgenommen wird.
     pub fn reserve_video(&self, created_at_ms: i64) -> Result<VideoSlot> {
         let (id, dir) = self.reserve_id(created_at_ms)?;
+        log::debug!("Video-ID {id} reserviert");
         Ok(VideoSlot {
             id: id.to_string(),
             dir,
@@ -170,6 +215,29 @@ impl Library {
     /// Dokument in voller Grösse (das fertige Video kann kleiner sein) mit
     /// Video-Teil und Ebenen.
     pub fn save_video(
+        &self,
+        slot: &VideoSlot,
+        poster: &RgbaImage,
+        scale_factor: f32,
+        doc: Document,
+    ) -> Result<CaptureRecord> {
+        let started = Instant::now();
+        let result = self.save_video_inner(slot, poster, scale_factor, doc);
+        match &result {
+            Ok(rec) => log::info!(
+                "Video {} gespeichert: {}×{}, {} ms lang, in {} ms",
+                rec.id,
+                rec.width,
+                rec.height,
+                rec.duration_ms.unwrap_or(0),
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::error!("Video {} speichern fehlgeschlagen: {e}", slot.id),
+        }
+        result
+    }
+
+    fn save_video_inner(
         &self,
         slot: &VideoSlot,
         poster: &RgbaImage,
@@ -210,6 +278,7 @@ impl Library {
     /// Nach dem neuen Zusammensetzen im Editor: Standbild, Vorschaubild und
     /// Länge nachführen.
     pub fn refresh_video(&self, id: &str, poster: &RgbaImage, duration_ms: i64) -> Result<()> {
+        log::debug!("Video {id}: Standbild und Länge ({duration_ms} ms) nachführen");
         let rec = self.get(id)?;
         let png = encode_png(poster, rec.scale_factor)
             .map_err(|e| LibraryError::Encode(e.to_string()))?;
@@ -222,7 +291,8 @@ impl Library {
 
     /// Verwirft ein abgebrochenes Video samt Reservierung.
     pub fn discard_video(&self, slot: &VideoSlot) {
-        remove_files_of(&slot.dir, &slot.id);
+        let removed = remove_files_of(&slot.dir, &slot.id);
+        log::info!("Video {} verworfen ({removed} Dateien)", slot.id);
     }
 
     /// Videos, deren Aufnahme nie fertig wurde (Absturz, Beenden): leerer
@@ -230,18 +300,32 @@ impl Library {
     /// Webcam-Spur. Platzhalter ohne Spur werden dabei still entfernt. Nur
     /// beim Start aufrufen – sonst zählt eine laufende Aufnahme mit.
     pub fn unfinished_videos(&self) -> Vec<VideoSlot> {
+        let started = Instant::now();
         let mut found = Vec::new();
-        let Ok(years) = fs::read_dir(&self.root) else {
-            return found;
+        let mut placeholders = 0;
+        let years = match fs::read_dir(&self.root) {
+            Ok(y) => y,
+            Err(e) => {
+                log::warn!("Bibliothek {} nicht lesbar: {e}", self.root.display());
+                return found;
+            }
         };
         for year in years.flatten().filter(|e| e.path().is_dir()) {
-            let Ok(months) = fs::read_dir(year.path()) else {
-                continue;
+            let months = match fs::read_dir(year.path()) {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!("{} nicht lesbar: {e}", year.path().display());
+                    continue;
+                }
             };
             for month in months.flatten().filter(|e| e.path().is_dir()) {
                 let dir = month.path();
-                let Ok(entries) = fs::read_dir(&dir) else {
-                    continue;
+                let entries = match fs::read_dir(&dir) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        log::warn!("{} nicht lesbar: {e}", dir.display());
+                        continue;
+                    }
                 };
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
@@ -266,14 +350,21 @@ impl Library {
                         .iter()
                         .any(|p| fs::metadata(p).is_ok_and(|m| m.len() > 0));
                     if has_track {
+                        log::warn!("Unfertiges Video gefunden: {}", slot.id);
                         found.push(slot);
                     } else {
+                        placeholders += 1;
                         remove_files_of(&slot.dir, &slot.id);
                     }
                 }
             }
         }
         found.sort_by(|a, b| a.id.cmp(&b.id));
+        log::debug!(
+            "Unfertige Videos gesucht in {} ms: {} gefunden, {placeholders} leere Platzhalter entfernt",
+            started.elapsed().as_millis(),
+            found.len()
+        );
         found
     }
 
@@ -302,8 +393,14 @@ impl Library {
     /// es vor dem Kopieren oder Sichern neu zusammengesetzt werden.
     pub fn video_is_current(&self, id: &str) -> Result<bool> {
         let rec = self.get(id)?;
-        let Ok(stamp) = fs::read_to_string(rec.video_stamp_path()) else {
-            return Ok(false);
+        let stamp = match fs::read_to_string(rec.video_stamp_path()) {
+            Ok(s) => s,
+            Err(e) => {
+                if e.kind() != io::ErrorKind::NotFound {
+                    log::warn!("Video {id}: Fingerabdruck nicht lesbar: {e}");
+                }
+                return Ok(false);
+            }
         };
         Ok(stamp == document_stamp(&self.load_document(id)?)?)
     }
@@ -325,13 +422,23 @@ impl Library {
         doc: &Document,
         preview: Option<&RgbaImage>,
     ) -> Result<()> {
+        let started = Instant::now();
         let rec = self.get(id)?;
-        write_atomic(&rec.document_path(), &serde_json::to_vec_pretty(doc)?)?;
+        let json = serde_json::to_vec_pretty(doc)?;
+        write_atomic(&rec.document_path(), &json)
+            .inspect_err(|e| log::error!("Dokument {id} speichern fehlgeschlagen: {e}"))?;
         if let Some(preview) = preview {
             let thumb = encode_webp(&thumbnail(preview, THUMBNAIL_MAX))
                 .map_err(|e| LibraryError::Encode(e.to_string()))?;
             write_atomic(&rec.thumbnail_path(), &thumb)?;
         }
+        log::debug!(
+            "Dokument {id} gespeichert: {} KB, {} Ebenen, Vorschau={} in {} ms",
+            json.len() / 1024,
+            doc.layers.len(),
+            preview.is_some(),
+            started.elapsed().as_millis()
+        );
         Ok(())
     }
 
@@ -342,6 +449,7 @@ impl Library {
         let path = rec.dir.join(asset_file(id, &hash));
         if !path.exists() {
             write_atomic(&path, png)?;
+            log::debug!("Bild {hash} zu {id} abgelegt ({} KB)", png.len() / 1024);
         }
         Ok(hash)
     }
@@ -353,6 +461,8 @@ impl Library {
 
     /// Erkannten Text für die Suche ablegen.
     pub fn set_ocr_text(&self, id: &str, text: &str) -> Result<()> {
+        // Nur die Länge – erkannter Text gehört nicht ins Protokoll.
+        log::debug!("Text für {id} abgelegt ({} Zeichen)", text.chars().count());
         Ok(index::set_ocr_text(&self.lock(), id, text)?)
     }
 
@@ -364,6 +474,9 @@ impl Library {
     /// Vektor ablegen; ein leerer Vektor heisst „nicht berechenbar“. Die
     /// Bibliothek kennt das Modell nicht, nur seine Kennung.
     pub fn set_embedding(&self, id: &str, model: &str, vector: &[u8]) -> Result<()> {
+        if vector.is_empty() {
+            log::debug!("Bildinhalt für {id} ({model}) nicht berechenbar – leer abgelegt");
+        }
         Ok(index::set_embedding(&self.lock(), id, model, vector)?)
     }
 
@@ -384,6 +497,7 @@ impl Library {
 
     /// Stichwörter (Schlüssel, Wert) einer Aufnahme ersetzen.
     pub fn set_tags(&self, id: &str, version: &str, tags: &[(&str, f32)]) -> Result<()> {
+        log::debug!("{} Stichwörter für {id} (Liste {version})", tags.len());
         Ok(index::set_tags(&self.lock(), id, version, tags)?)
     }
 
@@ -410,12 +524,29 @@ impl Library {
 
     /// Galerie: Aufnahmen nach Text, Zeitraum, Art und Stern filtern.
     pub fn query(&self, q: &CaptureQuery) -> Result<Vec<CaptureRecord>> {
-        Ok(index::query(&self.lock(), &self.root, q)?)
+        let started = Instant::now();
+        let found = index::query(&self.lock(), &self.root, q)
+            .inspect_err(|e| log::error!("Galerie abfragen fehlgeschlagen: {e}"))?;
+        log::debug!(
+            "Galerie: {} Aufnahmen in {} ms",
+            found.len(),
+            started.elapsed().as_millis()
+        );
+        Ok(found)
     }
 
     /// Volltextsuche über den erkannten Text; leere Suche = neueste.
     pub fn search(&self, query: &str, limit: u32) -> Result<Vec<CaptureRecord>> {
-        Ok(index::search(&self.lock(), &self.root, query, limit)?)
+        let started = Instant::now();
+        // Den Suchtext selbst nicht protokollieren.
+        let found = index::search(&self.lock(), &self.root, query, limit)
+            .inspect_err(|e| log::error!("Suche fehlgeschlagen: {e}"))?;
+        log::debug!(
+            "Suche: {} Treffer in {} ms",
+            found.len(),
+            started.elapsed().as_millis()
+        );
+        Ok(found)
     }
 
     /// Wohin die Aufnahme zuletzt automatisch exportiert wurde.
@@ -424,6 +555,7 @@ impl Library {
     }
 
     pub fn set_export_path(&self, id: &str, path: &Path) -> Result<()> {
+        log::debug!("Aufnahme {id} exportiert nach {}", path.display());
         Ok(index::set_export_path(
             &self.lock(),
             id,
@@ -434,28 +566,53 @@ impl Library {
     /// Löscht Aufnahmen, die älter als `before_ms` sind und keinen Stern
     /// haben. Gibt die Anzahl zurück.
     pub fn purge_older_than(&self, before_ms: i64) -> Result<usize> {
+        let started = Instant::now();
         let ids = index::expired(&self.lock(), before_ms)?;
         for id in &ids {
-            self.delete(id)?;
+            self.delete(id)
+                .inspect_err(|e| log::error!("Aufräumen bei {id} abgebrochen: {e}"))?;
+        }
+        if !ids.is_empty() {
+            log::info!(
+                "Aufbewahrung: {} alte Aufnahmen gelöscht in {} ms",
+                ids.len(),
+                started.elapsed().as_millis()
+            );
         }
         Ok(ids.len())
     }
 
     pub fn set_starred(&self, id: &str, starred: bool) -> Result<()> {
+        log::debug!("Aufnahme {id}: Stern={starred}");
         Ok(index::set_starred(&self.lock(), id, starred)?)
     }
 
     /// Löscht alle Dateien der Aufnahme und den Index-Eintrag.
     pub fn delete(&self, id: &str) -> Result<()> {
+        let started = Instant::now();
         let rec = self.get(id)?;
-        for entry in fs::read_dir(&rec.dir)? {
-            let entry = entry?;
-            if belongs_to(&entry.file_name().to_string_lossy(), id) {
-                fs::remove_file(entry.path())?;
+        let mut removed = 0;
+        let result = (|| -> Result<()> {
+            for entry in fs::read_dir(&rec.dir)? {
+                let entry = entry?;
+                if belongs_to(&entry.file_name().to_string_lossy(), id) {
+                    fs::remove_file(entry.path())?;
+                    removed += 1;
+                }
+            }
+            index::delete(&self.lock(), id)?;
+            Ok(())
+        })();
+        match &result {
+            Ok(()) => log::info!(
+                "Aufnahme {id} gelöscht ({removed} Dateien) in {} ms",
+                started.elapsed().as_millis()
+            ),
+            Err(e) => {
+                log::error!("Aufnahme {id} löschen fehlgeschlagen nach {removed} Dateien: {e}")
             }
         }
-        index::delete(&self.lock(), id)?;
-        Ok(())
+        result
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -487,8 +644,14 @@ impl Library {
 fn migrate(conn: &Connection, root: &Path) -> Result<()> {
     let version = index::version(conn)?;
     if version < 2 {
+        let started = Instant::now();
+        let dirs = index::all_dirs(conn)?;
+        log::info!(
+            "Bibliothek migrieren v{version} → v2: {} Aufnahmen in flache Monatsordner",
+            dirs.len()
+        );
         // v1: `<monat>/<id>/{doc.json, original.png, thumb.webp, assets/}`
-        for (id, rel_dir) in index::all_dirs(conn)? {
+        for (id, rel_dir) in dirs {
             let old = root.join(&rel_dir);
             let Some(month) = Path::new(&rel_dir).parent() else {
                 continue;
@@ -506,14 +669,19 @@ fn migrate(conn: &Connection, root: &Path) -> Result<()> {
                             move_if_exists(&a, &new.join(asset_file(&id, stem)))?;
                         }
                     }
-                    let _ = fs::remove_dir(&assets);
+                    remove_dir_logged(&assets);
                 }
-                let _ = fs::remove_dir(&old);
+                remove_dir_logged(&old);
             }
             index::set_dir(conn, &id, &month.to_string_lossy())?;
         }
+        log::info!(
+            "Migration auf v2 fertig in {} ms",
+            started.elapsed().as_millis()
+        );
     }
     if version != index::SCHEMA_VERSION {
+        log::info!("Index-Schema v{version} → v{}", index::SCHEMA_VERSION);
         index::set_version(conn, index::SCHEMA_VERSION)?;
     }
     Ok(())
@@ -534,14 +702,31 @@ fn belongs_to(name: &str, id: &str) -> bool {
     name == document_file(id) || name.starts_with(&format!("{id}_"))
 }
 
-fn remove_files_of(dir: &Path, id: &str) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+/// Löscht alle Dateien der Aufnahme, so gut es geht. Gibt die Anzahl zurück.
+fn remove_files_of(dir: &Path, id: &str) -> usize {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("{} nicht lesbar: {e}", dir.display());
+            return 0;
+        }
     };
+    let mut removed = 0;
     for entry in entries.flatten() {
         if belongs_to(&entry.file_name().to_string_lossy(), id) {
-            let _ = fs::remove_file(entry.path());
+            match fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(e) => log::warn!("{} löschen fehlgeschlagen: {e}", entry.path().display()),
+            }
         }
+    }
+    removed
+}
+
+/// Leeren Ordner der alten Ablage entfernen; bleibt er stehen, ist das kein Fehler.
+fn remove_dir_logged(dir: &Path) {
+    if let Err(e) = fs::remove_dir(dir) {
+        log::debug!("Alter Ordner {} bleibt: {e}", dir.display());
     }
 }
 

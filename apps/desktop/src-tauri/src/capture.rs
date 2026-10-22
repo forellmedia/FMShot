@@ -109,12 +109,15 @@ pub fn start(app: &AppHandle, mode: Mode) {
 /// Einstellungen) mit ins Bild kommen – bei globalen Tastenkürzeln ja.
 pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
     let started = Instant::now();
+    log::info!("Aufnahme starten: {mode:?} (eigene Fenster: {own:?})");
     // Zweites Drücken während einer Scroll-Aufnahme = „Fertig“.
     if matches!(mode, Mode::Scroll | Mode::ScrollAuto) && crate::scroll::finish_running(app) {
+        log::info!("Scroll-Aufnahme läuft schon → fertig");
         return;
     }
     // Zweites Drücken während eines Videos = „Stopp“.
     if matches!(mode, Mode::Video | Mode::Webcam) && crate::video::stop_running(app) {
+        log::info!("Video läuft schon → Stopp");
         return;
     }
     // Nur Webcam braucht keine Bildschirm-Freigabe.
@@ -124,6 +127,7 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
     }
     let state = app.state::<CaptureState>();
     if state.busy.swap(true, Ordering::AcqRel) {
+        log::warn!("Aufnahme {mode:?} ignoriert – es läuft schon eine");
         return;
     }
     state
@@ -133,7 +137,9 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
         release(app);
         // Beim ersten Mal fragt macOS mit eigenem Fenster (mit Knopf zu den
         // Einstellungen). Danach fragt es nicht mehr – dann direkt dorthin.
-        if first_permission_request("screen") {
+        let first = first_permission_request("screen");
+        log::warn!("Bildschirm-Freigabe fehlt (erste Anfrage: {first})");
+        if first {
             state.capturer.request_permission();
         } else {
             open_privacy_settings(app, PrivacyPane::ScreenCapture);
@@ -141,6 +147,7 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
         return;
     }
     if mode == Mode::ScrollAuto && !state.capturer.has_input_permission() {
+        log::warn!("Bedienungshilfen-Freigabe fehlt für automatisches Scrollen");
         release(app);
         // Trägt Grabmark in die Liste „Bedienungshilfen“ ein (beim ersten Mal
         // mit Systemfenster); die Einstellungen öffnen wir direkt.
@@ -155,8 +162,8 @@ pub fn start_with(app: &AppHandle, mode: Mode, own: OwnWindows) {
         // Scroll-Aufnahmen setzen Ausschnitte ohne Grabmark zusammen.
         Mode::Scroll | Mode::ScrollAuto => start_region(app, started, mode, OwnWindows::Hidden),
         Mode::Region | Mode::Text => start_region(app, started, mode, own),
-        Mode::Window => start_window(app, own),
-        Mode::Screen => start_screen(app, own),
+        Mode::Window => start_window(app, started, own),
+        Mode::Screen => start_screen(app, started, own),
         Mode::Video => {
             // Das Video verwaltet seinen Zustand selbst.
             release(app);
@@ -197,13 +204,18 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                 OVERLAY.with(|o| o.borrow_mut().take());
                 match result {
                     OverlayResult::Selected(sel) => {
+                        log::debug!(
+                            "Bereich gewählt nach {:.0} ms",
+                            started.elapsed().as_secs_f64() * 1000.0
+                        );
                         pending_done
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .selection = Some(sel);
-                        try_finish_region(&app_done, &pending_done, mode);
+                        try_finish_region(&app_done, &pending_done, mode, started);
                     }
-                    _ => {
+                    other => {
+                        log::info!("Auswahl beendet ohne Bereich: {other:?}");
                         pending_done
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
@@ -249,11 +261,20 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                         started.elapsed().as_secs_f64() * 1000.0
                     ),
                 );
+                for f in &frames {
+                    log::debug!(
+                        "Monitor {} aufgenommen: {}×{}, Massstab {}",
+                        f.display_id,
+                        f.image.width(),
+                        f.image.height(),
+                        f.scale_factor
+                    );
+                }
                 let images: Vec<(u32, Arc<RgbaImage>)> = frames
                     .iter()
                     .map(|f| (f.display_id, Arc::new(f.image.clone())))
                     .collect();
-                let _ = app.run_on_main_thread(move || {
+                if let Err(e) = app.run_on_main_thread(move || {
                     OVERLAY.with(|o| {
                         if let Some(h) = o.borrow().as_ref() {
                             for (id, img) in images {
@@ -261,18 +282,22 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                             }
                         }
                     });
-                });
+                }) {
+                    log::warn!("Eingefrorenes Bild ans Overlay: {e}");
+                }
                 pending.lock().unwrap_or_else(|e| e.into_inner()).frames = Some(frames);
-                try_finish_region(&app, &pending, mode);
+                try_finish_region(&app, &pending, mode, started);
             }
             Err(e) => {
-                let _ = app.run_on_main_thread(|| {
+                if let Err(e) = app.run_on_main_thread(|| {
                     OVERLAY.with(|o| {
                         if let Some(h) = o.borrow_mut().take() {
                             h.cancel();
                         }
                     });
-                });
+                }) {
+                    log::warn!("Overlay schliessen: {e}");
+                }
                 release(&app);
                 show_error(&app, &e.to_string());
             }
@@ -281,7 +306,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
 }
 
 /// Schliesst ab, sobald Bild und Auswahl beide da sind.
-fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode) {
+fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode, started: Instant) {
     let (frames, sel) = {
         let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
         if p.finished || p.frames.is_none() || p.selection.is_none() {
@@ -293,19 +318,36 @@ fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode)
     release(app);
     let Some(sel) = sel else { return };
     let Some(frame) = frames.into_iter().find(|f| f.display_id == sel.display_id) else {
+        log::warn!("Kein Bild für Monitor {} der Auswahl", sel.display_id);
         return;
     };
+    log::info!(
+        "Bereich gewählt: {}×{} auf Monitor {}, Massstab {}",
+        sel.width,
+        sel.height,
+        sel.display_id,
+        frame.scale_factor
+    );
     if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {
         crate::scroll::begin(app, sel, frame.scale_factor, mode == Mode::ScrollAuto);
         return;
     }
     let Some(image) = frame.image.crop(sel.x, sel.y, sel.width, sel.height) else {
+        log::warn!(
+            "Ausschnitt {}×{} bei {},{} liegt ausserhalb des Bildes {}×{}",
+            sel.width,
+            sel.height,
+            sel.x,
+            sel.y,
+            frame.image.width(),
+            frame.image.height()
+        );
         return;
     };
     if mode == Mode::Text {
         recognize_and_copy(app, image);
     } else {
-        finish(app, mode, image, frame.scale_factor);
+        finish(app, mode, image, frame.scale_factor, started);
     }
 }
 
@@ -319,32 +361,47 @@ fn recognize_and_copy(app: &AppHandle, image: RgbaImage) {
             return;
         };
         let started = Instant::now();
+        let ms = || started.elapsed().as_secs_f64() * 1000.0;
         let message = match ocr.recognize(&image) {
             Ok(blocks) if !blocks.is_empty() => {
                 let text = grabmark_ocr::join_text(&blocks);
+                let count = text.chars().count();
+                log::info!(
+                    "Texterkennung: {} Blöcke, {count} Zeichen in {:.0} ms",
+                    blocks.len(),
+                    ms()
+                );
                 match grabmark_clipboard::copy_text(&text) {
-                    Ok(()) => t(
-                        "ocr.copied",
-                        &[("count", &text.chars().count().to_string())],
-                    ),
-                    Err(e) => e.to_string(),
+                    Ok(()) => {
+                        log::info!("Zwischenablage: Text kopiert");
+                        t("ocr.copied", &[("count", &count.to_string())])
+                    }
+                    Err(e) => {
+                        log::error!("Zwischenablage (Text): {e}");
+                        e.to_string()
+                    }
                 }
             }
-            Ok(_) => t("ocr.nothing", &[]),
-            Err(e) => e.to_string(),
+            Ok(_) => {
+                log::info!("Texterkennung: kein Text gefunden ({:.0} ms)", ms());
+                t("ocr.nothing", &[])
+            }
+            Err(e) => {
+                log::error!("Texterkennung nach {:.0} ms: {e}", ms());
+                e.to_string()
+            }
         };
-        log::info!(
-            "Texterkennung in {:.0} ms: {message}",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        let _ = app.run_on_main_thread(move || grabmark_overlay::show_toast(&message));
+        if let Err(e) = app.run_on_main_thread(move || grabmark_overlay::show_toast(&message)) {
+            log::debug!("Hinweis anzeigen: {e}");
+        }
     });
 }
 
-fn start_window(app: &AppHandle, own: OwnWindows) {
+fn start_window(app: &AppHandle, started: Instant, own: OwnWindows) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
+        let list_start = Instant::now();
         let windows: Vec<WindowTarget> = match state.capturer.windows(own) {
             Ok(w) => w
                 .into_iter()
@@ -364,8 +421,13 @@ fn start_window(app: &AppHandle, own: OwnWindows) {
                 return;
             }
         };
+        log::debug!(
+            "Fensterliste: {} Fenster in {:.0} ms",
+            windows.len(),
+            list_start.elapsed().as_secs_f64() * 1000.0
+        );
         let app_main = app.clone();
-        let _ = app.run_on_main_thread(move || {
+        let opened = app.run_on_main_thread(move || {
             let app_done = app_main.clone();
             let result = grabmark_overlay::open(
                 OverlayMode::Window,
@@ -373,19 +435,30 @@ fn start_window(app: &AppHandle, own: OwnWindows) {
                 Box::new(move |result| {
                     OVERLAY.with(|o| o.borrow_mut().take());
                     let OverlayResult::Window(id) = result else {
+                        log::info!("Fensterauswahl beendet ohne Fenster: {result:?}");
                         release(&app_done);
                         return;
                     };
+                    log::debug!("Fenster {id} gewählt");
                     let app = app_done.clone();
                     // Kurz warten, bis das Overlay wirklich weg ist.
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(60));
                         let state = app.state::<CaptureState>();
+                        let shot = Instant::now();
                         let result = state.capturer.capture_window(id);
                         release(&app);
                         match result {
                             Ok(frame) => {
-                                finish(&app, Mode::Window, frame.image, frame.scale_factor)
+                                log::info!(
+                                    "Fenster aufgenommen: {}×{} auf Monitor {}, Massstab {} ({:.0} ms)",
+                                    frame.image.width(),
+                                    frame.image.height(),
+                                    frame.display_id,
+                                    frame.scale_factor,
+                                    shot.elapsed().as_secs_f64() * 1000.0
+                                );
+                                finish(&app, Mode::Window, frame.image, frame.scale_factor, started)
                             }
                             Err(e) => show_error(&app, &e.to_string()),
                         }
@@ -393,17 +466,26 @@ fn start_window(app: &AppHandle, own: OwnWindows) {
                 }),
             );
             match result {
-                Ok(handle) => OVERLAY.with(|o| *o.borrow_mut() = Some(handle)),
+                Ok(handle) => {
+                    OVERLAY.with(|o| *o.borrow_mut() = Some(handle));
+                    log::debug!(
+                        "Fenster-Overlay sichtbar nach {:.0} ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
                 Err(e) => {
                     release(&app_main);
                     show_error(&app_main, &e.to_string());
                 }
             }
         });
+        if let Err(e) = opened {
+            log::error!("Fenster-Overlay: Haupt-Thread nicht erreichbar: {e}");
+        }
     });
 }
 
-fn start_screen(app: &AppHandle, own: OwnWindows) {
+fn start_screen(app: &AppHandle, started: Instant, own: OwnWindows) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<CaptureState>();
@@ -418,20 +500,32 @@ fn start_screen(app: &AppHandle, own: OwnWindows) {
         });
         release(&app);
         match result {
-            Ok(Some(frame)) => finish(&app, Mode::Screen, frame.image, frame.scale_factor),
-            Ok(None) => {}
+            Ok(Some(frame)) => {
+                log::info!(
+                    "Monitor {} aufgenommen: {}×{}, Massstab {} ({:.0} ms)",
+                    frame.display_id,
+                    frame.image.width(),
+                    frame.image.height(),
+                    frame.scale_factor,
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                finish(&app, Mode::Screen, frame.image, frame.scale_factor, started)
+            }
+            Ok(None) => log::warn!("Vollbild: kein Monitor unter der Maus gefunden"),
             Err(e) => show_error(&app, &e.to_string()),
         }
     });
 }
 
 /// Ergebnis einer Scroll-Aufnahme.
-pub fn finish_scroll(app: &AppHandle, image: RgbaImage, scale_factor: f32) {
-    finish(app, Mode::Scroll, image, scale_factor);
+/// `started` = Beginn der Scroll-Aufnahme (für die Zeitmessung).
+pub fn finish_scroll(app: &AppHandle, image: RgbaImage, scale_factor: f32, started: Instant) {
+    finish(app, Mode::Scroll, image, scale_factor, started);
 }
 
 /// Zwischenablage und Bibliothek (im Hintergrund), danach Editor zeigen.
-fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32) {
+/// `started` = Auslöser (Taste, Menü, …) – für die Zeitmessung.
+fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32, started: Instant) {
     let capture = NewCapture {
         image,
         scale_factor,
@@ -443,6 +537,14 @@ fn finish(app: &AppHandle, mode: Mode, image: RgbaImage, scale_factor: f32) {
         let library = app.state::<CaptureState>().library.clone();
         let copy = crate::settings::get(&app).copy_to_clipboard;
         if let Some(rec) = save_and_copy(&app, &library, &capture, copy) {
+            log::info!(
+                "Aufnahme {} gespeichert: {}×{}, {}, {:.0} ms seit Auslöser",
+                rec.id,
+                rec.width,
+                rec.height,
+                rec.mode,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
             crate::services::after_capture(&app, &rec, &capture.image, mode);
         }
     });
@@ -458,6 +560,8 @@ pub fn save_and_copy(
     let start = Instant::now();
     if copy {
         copy_to_clipboard(&capture.image, capture.scale_factor);
+    } else {
+        log::debug!("Zwischenablage aus (Einstellung)");
     }
     let copied = start.elapsed().as_secs_f64() * 1000.0;
     match library.save_capture(capture) {
@@ -481,8 +585,13 @@ pub fn save_and_copy(
 }
 
 pub fn copy_to_clipboard(image: &RgbaImage, scale_factor: f32) {
-    if let Err(e) = grabmark_clipboard::copy_image(image, scale_factor) {
-        log::error!("Zwischenablage: {e}");
+    match grabmark_clipboard::copy_image(image, scale_factor) {
+        Ok(()) => log::info!(
+            "Zwischenablage: Bild {}×{} kopiert",
+            image.width(),
+            image.height()
+        ),
+        Err(e) => log::error!("Zwischenablage: {e}"),
     }
 }
 
@@ -499,6 +608,7 @@ pub fn first_permission_request(kind: &str) -> bool {
     let dir = &crate::paths::get().config;
     let marker = dir.join(format!("{kind}-permission-requested"));
     if marker.exists() {
+        log::debug!("Freigabe {kind} wurde schon einmal angefragt");
         return false;
     }
     if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&marker, b"")) {
@@ -512,8 +622,10 @@ pub fn first_permission_request(kind: &str) -> bool {
 pub fn open_privacy_settings(app: &AppHandle, pane: PrivacyPane) {
     use tauri_plugin_opener::OpenerExt;
     let Some(url) = grabmark_capture::privacy_settings_url(pane) else {
+        log::debug!("Systemeinstellungen für {pane:?} gibt es hier nicht");
         return;
     };
+    log::info!("Systemeinstellungen öffnen: {pane:?}");
     if let Err(e) = app.opener().open_url(url, None::<&str>) {
         log::error!("Systemeinstellungen öffnen: {e}");
     }

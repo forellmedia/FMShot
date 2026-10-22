@@ -26,7 +26,25 @@ impl OcrEngine for VisionOcr {
     }
 
     fn recognize(&self, image: &RgbaImage) -> Result<Vec<TextBlock>, OcrError> {
-        autoreleasepool(|_| recognize(image))
+        let started = std::time::Instant::now();
+        let result = autoreleasepool(|_| recognize(image));
+        match &result {
+            // Nur Zahlen – der erkannte Text gehört nicht ins Protokoll.
+            Ok(blocks) => log::debug!(
+                "Texterkennung {}×{}: {} Blöcke, {} Zeichen in {} ms",
+                image.width(),
+                image.height(),
+                blocks.len(),
+                blocks.iter().map(|b| b.text.chars().count()).sum::<usize>(),
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::warn!(
+                "Texterkennung {}×{} fehlgeschlagen: {e}",
+                image.width(),
+                image.height()
+            ),
+        }
+        result
     }
 }
 
@@ -50,7 +68,15 @@ fn recognize(image: &RgbaImage) -> Result<Vec<TextBlock>, OcrError> {
         Retained::into_super(Retained::into_super(request.clone()));
     handler
         .performRequests_error(&NSArray::from_retained_slice(&[as_request]))
-        .map_err(|e| OcrError::Backend(e.localizedDescription().to_string()))?;
+        .map_err(|e| {
+            log::warn!(
+                "Vision: {} ({} {})",
+                e.localizedDescription(),
+                e.domain(),
+                e.code()
+            );
+            OcrError::Backend(e.localizedDescription().to_string())
+        })?;
 
     let (w, h) = (image.width() as f32, image.height() as f32);
     let mut blocks = Vec::new();

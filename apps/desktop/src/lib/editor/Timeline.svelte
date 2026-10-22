@@ -9,11 +9,13 @@
   import { t } from "$lib/i18n";
   import Icon from "./Icon.svelte";
   import { editor } from "./state.svelte";
-  import { formatTime, player } from "./video.svelte";
+  import { AUDIO_TRACKS, FADE_FRAMES, formatTime, player, type AudioName } from "./video.svelte";
+  import { wavePath } from "./audioWave";
   import type { MessageKey } from "$lib/i18n";
   import { dragRange, isBaseLayer, layerLanes, layerTime, type LaneGroup, type TimeBlock } from "./videoLayers";
 
   let lanes = $state<HTMLDivElement | null>(null);
+  let root = $state<HTMLElement | null>(null);
   let width = $state(600);
   let panel = $state<"audio" | "cursor" | null>(null);
   /** Ausgewählter Zoom-Abschnitt (Index in `video.zooms`). */
@@ -159,6 +161,175 @@
     return tm ? { start: player.outputTime(tm.start_ms), end: player.outputTime(tm.end_ms) } : { start: 0, end: player.durationMs };
   });
 
+  // --- Ton: Wellenform, Lautstärke-Punkte -------------------------------------
+
+  /** Höhe einer Tonspur-Zeile (Punkte, wie in `.lane.audio`). */
+  const AUDIO_H = 36;
+  const AUDIO_LABEL: Record<AudioName, MessageKey> = { system: "video.track_system", mic: "video.track_mic" };
+  const audioLanes = $derived(AUDIO_TRACKS.filter((n) => !!(n === "system" ? player.urls?.system : player.urls?.mic)));
+
+  const waves = $derived.by(() => {
+    void video?.cuts;
+    const out: Record<string, string> = {};
+    for (const n of audioLanes) {
+      const p = player.peaks[n];
+      out[n] = p ? wavePath(p, track, AUDIO_H, duration, (ms) => player.sourceTime(ms)) : "";
+    }
+    return out;
+  });
+
+  const base = (n: AudioName) => Math.min(1, n === "system" ? (video?.audio?.system ?? 1) : (video?.audio?.microphone ?? 1));
+  const yOf = (v: number) => 3 + (1 - Math.max(0, Math.min(1, v))) * (AUDIO_H - 6);
+  const vOf = (y: number) => Math.max(0, Math.min(1, 1 - (y - 3) / (AUDIO_H - 6)));
+
+  /** Lautstärkelinie als Punkte für `<polyline>`. */
+  function curvePoints(n: AudioName): string {
+    const c = player.volume[n].curve;
+    if (!c.length) return `0,${yOf(base(n))} ${track},${yOf(base(n))}`;
+    return c.map((p) => `${x(p.t).toFixed(1)},${yOf(p.v).toFixed(1)}`).join(" ");
+  }
+
+  /** Ausgewählter Lautstärke-Punkt – löschen mit Entf. */
+  let selectedKey = $state<{ track: AudioName; index: number } | null>(null);
+  let keyDrag: { track: AudioName; index: number; rect: DOMRect; moved: boolean; x0: number; y0: number } | null = null;
+  let keyPreview = $state<{ track: AudioName; index: number; t: number; v: number } | null>(null);
+
+  /** Zeit und Lautstärke an der Mausposition in einer Tonspur-Zeile. */
+  function audioPoint(e: PointerEvent | MouseEvent, rect: DOMRect, n: AudioName) {
+    const t = Math.max(0, Math.min(duration, ((e.clientX - rect.left) / track) * duration));
+    const total = vOf(e.clientY - rect.top);
+    const b = base(n);
+    return { t, total, v: b > 0 ? Math.min(1, total / b) : 0 };
+  }
+
+  function keyDown(e: PointerEvent, n: AudioName, index: number) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const lane = (e.currentTarget as HTMLElement).closest(".audio-area") as HTMLElement;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    player.pause();
+    editor.selectedIds = [];
+    clickSource = null;
+    selectedKey = { track: n, index };
+    keyDrag = { track: n, index, rect: lane.getBoundingClientRect(), moved: false, x0: e.clientX, y0: e.clientY };
+  }
+
+  function keyMove(e: PointerEvent) {
+    const d = keyDrag;
+    if (!d) return;
+    if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 2) d.moved = true;
+    if (!d.moved) return;
+    const p = audioPoint(e, d.rect, d.track);
+    keyPreview = { track: d.track, index: d.index, t: p.t, v: p.total };
+  }
+
+  function keyUp(e: PointerEvent) {
+    e.stopPropagation();
+    const d = keyDrag;
+    keyDrag = null;
+    if (d?.moved && keyPreview) {
+      const b = base(d.track);
+      player.edit({ op: "volumeKey", track: d.track, index: d.index, t: keyPreview.t, volume: b > 0 ? keyPreview.v / b : 0 });
+      selectedKey = null;
+    } else if (d) {
+      player.seek(player.volume[d.track].keys[d.index]?.t ?? player.outputMs);
+    }
+    keyPreview = null;
+  }
+
+  /**
+   * Doppelklick in eine Tonspur: neuer Punkt an dieser Stelle. Die Zeitleiste
+   * hält den Zeiger fest (Ziehen zum Auswählen), darum kommt der Doppelklick
+   * dort an – die Spur ergibt sich aus der Höhe.
+   */
+  function onDoubleClick(e: MouseEvent) {
+    for (const el of lanes?.querySelectorAll<HTMLElement>(".audio-area") ?? []) {
+      const rect = el.getBoundingClientRect();
+      if (e.clientY < rect.top || e.clientY > rect.bottom) continue;
+      const n = el.dataset.track as AudioName;
+      const p = audioPoint(e, rect, n);
+      player.edit({ op: "volumeKey", track: n, index: null, t: p.t, volume: p.v });
+      player.selection = null;
+      return;
+    }
+  }
+
+  function removeKey(n: AudioName, index: number) {
+    player.edit({ op: "removeVolumeKey", track: n, index });
+    selectedKey = null;
+  }
+
+  function keyPos(n: AudioName, index: number, k: { t: number; v: number }) {
+    if (keyPreview?.track === n && keyPreview.index === index) return { t: keyPreview.t, y: yOf(keyPreview.v) };
+    return { t: k.t, y: yOf(k.v * base(n)) };
+  }
+
+  // --- Blenden am Anfang und Ende ----------------------------------------------
+
+  type MenuItem = { label: string; checked?: boolean; action: () => void };
+  let menu = $state<{ x: number; y: number; title: string; items: MenuItem[] } | null>(null);
+
+  /** Mausposition relativ zur Zeitleiste: Ihr Glas-Effekt (`backdrop-filter`)
+   *  macht sie zum Bezugsrahmen, auch für `position: fixed`. */
+  function menuAt(e: MouseEvent) {
+    const r = root?.getBoundingClientRect();
+    return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+  }
+
+  function fadeLabel(frames: number): string {
+    if (!frames) return t("video.fade_off");
+    const fps = video?.fps || 30;
+    return t("video.fade_frames", { n: String(frames), s: (frames / fps).toFixed(1) });
+  }
+
+  function fadeMenu(e: MouseEvent, side: "in" | "out") {
+    e.preventDefault();
+    e.stopPropagation();
+    const current = side === "in" ? (video?.fade?.in_frames ?? 0) : (video?.fade?.out_frames ?? 0);
+    menu = {
+      ...menuAt(e),
+      title: t(side === "in" ? "video.fade_in" : "video.fade_out"),
+      items: FADE_FRAMES.map((f) => ({
+        label: fadeLabel(f),
+        checked: f === current,
+        action: () => player.edit(side === "in" ? { op: "fade", fade_in: f } : { op: "fade", fade_out: f }),
+      })),
+    };
+  }
+
+  function keyMenu(e: MouseEvent, n: AudioName, index: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedKey = { track: n, index };
+    menu = {
+      ...menuAt(e),
+      title: t(AUDIO_LABEL[n]),
+      items: [
+        { label: t("video.key_delete"), action: () => removeKey(n, index) },
+        { label: t("video.keys_clear"), action: () => player.edit({ op: "clearVolumeKeys", track: n }) },
+      ],
+    };
+  }
+
+  function audioMenu(e: MouseEvent, n: AudioName) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const p = audioPoint(e, rect, n);
+    const items: MenuItem[] = [
+      { label: t("video.key_add"), action: () => player.edit({ op: "volumeKey", track: n, index: null, t: p.t, volume: p.v }) },
+    ];
+    if (player.volume[n].keys.length) {
+      items.push({ label: t("video.keys_clear"), action: () => player.edit({ op: "clearVolumeKeys", track: n }) });
+    }
+    menu = { ...menuAt(e), title: t(AUDIO_LABEL[n]), items };
+  }
+
+  function closeMenu(e: PointerEvent) {
+    if (menu && !(e.target as HTMLElement | null)?.closest(".menu")) menu = null;
+  }
+
   // --- Aktionen ----------------------------------------------------------------
 
   const sel = $derived(player.selection);
@@ -208,7 +379,10 @@
 
   // Eine Ebene gewählt: Der Klick ist nicht mehr gemeint.
   $effect(() => {
-    if (editor.selectedIds.length) clickSource = null;
+    if (editor.selectedIds.length) {
+      clickSource = null;
+      selectedKey = null;
+    }
   });
 
   function selectClick(e: PointerEvent, i: number) {
@@ -237,6 +411,19 @@
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
     if (editor.galleryOpen || editor.editingTextId) return;
+    if (menu && e.key === "Escape") {
+      menu = null;
+      return;
+    }
+    if (selectedKey && !e.metaKey && !e.ctrlKey && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      removeKey(selectedKey.track, selectedKey.index);
+      return;
+    }
+    if (selectedKey && e.key === "Escape") {
+      selectedKey = null;
+      return;
+    }
     if (clickAt != null && !e.metaKey && !e.ctrlKey && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
       deleteClick();
@@ -259,9 +446,9 @@
   };
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onpointerdown={closeMenu} />
 
-<section class="timeline" aria-label={t("video.timeline")}>
+<section class="timeline" aria-label={t("video.timeline")} bind:this={root}>
   <div class="bar">
     <button class="play" title={t(player.playing ? "video.pause" : "video.play")} onclick={() => player.toggle()}>
       <Icon name={player.playing ? "pause" : "play"} />
@@ -330,6 +517,7 @@
           onchange={(e) => player.update((v) => (v.audio = { ...(v.audio ?? { system: 1, microphone: 1 }), microphone: Number(e.currentTarget.value) }))}
         />
       </label>
+      <span class="muted">{t("video.audio_lane_hint")}</span>
     </div>
   {:else if panel === "cursor" && video}
     {@const c = video.cursor ?? { visible: true, size: 1.5, highlight_clicks: true, click_color: { r: 229, g: 57, b: 53, a: 255 } }}
@@ -379,13 +567,63 @@
     onpointermove={onMove}
     onpointerup={onUp}
     onpointercancel={onUp}
+    ondblclick={onDoubleClick}
   >
     <div class="lane clip">
       <span class="name">{t("video.track_video")}</span>
       {#each cutMarks as m, i (i)}
         <span class="cutmark" style:left="{x(m)}px" title={t("video.cut_here")}></span>
       {/each}
+      {#each ["in", "out"] as const as side (side)}
+        {@const len = x(side === "in" ? player.fadeMs[0] : player.fadeMs[1])}
+        {#if len > 0}
+          <svg class="fade-shape {side}" width={len} height="20" aria-hidden="true">
+            <polygon points={side === "in" ? `0,0 ${len},0 0,20` : `0,0 ${len},0 ${len},20`} />
+            <line x1={side === "in" ? 0 : len} y1="20" x2={side === "in" ? len : 0} y2="0" />
+          </svg>
+        {/if}
+        <span
+          class="fade-zone {side}"
+          style:width="{Math.max(12, len)}px"
+          title={`${t(side === "in" ? "video.fade_in" : "video.fade_out")}: ${fadeLabel(side === "in" ? (video?.fade?.in_frames ?? 0) : (video?.fade?.out_frames ?? 0))} – ${t("video.fade_hint")}`}
+          role="button"
+          tabindex="-1"
+          oncontextmenu={(e) => fadeMenu(e, side)}
+        ></span>
+      {/each}
     </div>
+    {#each audioLanes as n (n)}
+      <div class="lane audio">
+        <span class="name">{t(AUDIO_LABEL[n])}</span>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="audio-area"
+          data-track={n}
+          title={t("video.audio_lane_hint")}
+          oncontextmenu={(e) => audioMenu(e, n)}
+        >
+          <svg width={track} height={AUDIO_H} aria-hidden="true">
+            {#if waves[n]}<path class="wave" d={waves[n]} />{/if}
+            <polyline class="level" points={curvePoints(n)} />
+          </svg>
+          {#each player.volume[n].keys as k, i (i)}
+            {@const pos = keyPos(n, i, k)}
+            <button
+              class="key"
+              class:selected={selectedKey?.track === n && selectedKey.index === i}
+              style:left="{x(pos.t)}px"
+              style:top="{pos.y}px"
+              aria-label={t("video.key_at", { time: formatTime(pos.t, true) })}
+              onpointerdown={(e) => keyDown(e, n, i)}
+              onpointermove={keyMove}
+              onpointerup={keyUp}
+              onpointercancel={keyUp}
+              oncontextmenu={(e) => keyMenu(e, n, i)}
+            ></button>
+          {/each}
+        </div>
+      </div>
+    {/each}
     {#if player.hasInput && !cameraOnly && (player.clicks.length || hiddenClicks)}
       <div class="lane">
         <span class="name">{t("video.track_clicks")}</span>
@@ -516,10 +754,28 @@
       <button onclick={() => editor.deleteSelected()}>{t("video.layer_delete")}</button>
     </div>
   {/if}
+  {#if menu}
+    <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+      <div class="menu-title">{menu.title}</div>
+      {#each menu.items as item, i (i)}
+        <button
+          role="menuitemradio"
+          aria-checked={!!item.checked}
+          onclick={() => {
+            item.action();
+            menu = null;
+          }}
+        >
+          <span class="check">{item.checked ? "✓" : ""}</span>{item.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
 </section>
 
 <style>
   .timeline {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -702,6 +958,112 @@
   }
   .block.layer.selected .grip {
     background: rgb(255 255 255 / 0.35);
+  }
+  .lane.audio {
+    height: 36px;
+  }
+  .audio-area {
+    position: absolute;
+    inset: 0;
+    cursor: crosshair;
+  }
+  .audio-area svg {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+  }
+  .wave {
+    fill: color-mix(in srgb, #00897b 45%, transparent);
+  }
+  .level {
+    fill: none;
+    stroke: #ffb300;
+    stroke-width: 1.5;
+  }
+  .key {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    padding: 0;
+    border: 4px solid transparent;
+    border-radius: 50%;
+    background: #ffb300 content-box;
+    cursor: grab;
+    z-index: 3;
+  }
+  .key:active {
+    cursor: grabbing;
+  }
+  .key.selected {
+    box-shadow: 0 0 0 2px var(--text);
+  }
+  .fade-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    cursor: context-menu;
+    z-index: 2;
+  }
+  .fade-zone.in {
+    left: 0;
+  }
+  .fade-zone.out {
+    right: 0;
+  }
+  .fade-zone:hover {
+    background: rgb(0 0 0 / 0.12);
+  }
+  .fade-shape {
+    position: absolute;
+    top: 0;
+    pointer-events: none;
+  }
+  .fade-shape.in {
+    left: 0;
+  }
+  .fade-shape.out {
+    right: 0;
+  }
+  .fade-shape polygon {
+    fill: rgb(0 0 0 / 0.35);
+  }
+  .fade-shape line {
+    stroke: var(--text);
+    stroke-width: 1;
+  }
+  .menu {
+    position: absolute;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 150px;
+    padding: 4px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+    transform: translateY(-100%);
+  }
+  .menu-title {
+    padding: 2px 8px 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .menu button {
+    border: none;
+    background: none;
+    text-align: left;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .menu button:hover {
+    background: var(--hover);
+  }
+  .menu .check {
+    display: inline-block;
+    width: 16px;
   }
   .cutmark {
     position: absolute;

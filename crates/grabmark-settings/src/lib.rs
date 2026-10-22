@@ -89,7 +89,7 @@ pub struct VideoSettings {
     pub system_audio: bool,
     /// 3-Sekunden-Countdown vor dem Start.
     pub countdown: bool,
-    /// Bilder pro Sekunde: 30 oder 60.
+    /// Bilder pro Sekunde: 24, 25, 30, 50 oder 60.
     pub fps: u32,
     /// Webcam zu Beginn eingeschaltet (während der Aufnahme umschaltbar).
     pub webcam: bool,
@@ -213,6 +213,8 @@ pub struct Settings {
     pub auto_export: AutoExport,
     /// Aufnahmen nach so vielen Tagen löschen (ausser ⭐); `None` = nie.
     pub retention_days: Option<u32>,
+    /// Log-Dateien nach so vielen Tagen löschen (10, 30, 60 oder 360).
+    pub log_retention_days: u32,
     /// Format beim Speichern aus dem Editor (⌘S).
     pub save_format: ImageFormat,
     /// Bildinhalt erkennen, damit die Suche auch „Wald“ oder „Hund“ findet
@@ -233,6 +235,7 @@ impl Default for Settings {
             replace_mac_system_shortcuts: false,
             auto_export: AutoExport::default(),
             retention_days: None,
+            log_retention_days: 30,
             save_format: ImageFormat::Png,
             content_search: true,
             video: VideoSettings::default(),

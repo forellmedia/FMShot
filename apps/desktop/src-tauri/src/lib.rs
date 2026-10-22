@@ -6,6 +6,7 @@ mod commands;
 mod editor;
 mod hotkeys;
 mod i18n;
+mod logs;
 mod menu;
 mod paths;
 mod scroll;
@@ -18,10 +19,10 @@ mod video_edit;
 mod vision;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use grabmark_library::Library;
-use tauri::{Emitter, Manager, WindowEvent};
-use tauri_plugin_log::{Target, TargetKind};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_specta::{Builder, collect_commands};
 
 /// Alle Commands, die das Frontend aufrufen darf. Die TypeScript-Typen dazu
@@ -71,6 +72,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         services::search_captures,
         services::query_captures,
         services::report_bug,
+        logs::log_frontend,
+        logs::open_log_folder,
         updater::check_for_update,
         updater::install_update,
         vision::content_search_status,
@@ -101,18 +104,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             handle_args(app, &argv);
         }))
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(log::LevelFilter::Info)
-                .targets([
-                    Target::new(TargetKind::Stdout),
-                    Target::new(TargetKind::Folder {
-                        path: paths::get().log.clone(),
-                        file_name: None,
-                    }),
-                ])
-                .build(),
-        )
+        .plugin(logs::plugin())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -124,6 +116,14 @@ pub fn run() {
         ))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
+            let setup_start = Instant::now();
+            // Dauer eines Startschritts ins Log.
+            let step = |name: &str, start: Instant| {
+                log::debug!(
+                    "Start: {name} {:.0} ms",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            };
             builder.mount_events(app);
 
             // Kein Dock-Symbol – Grabmark lebt im Tray.
@@ -133,16 +133,28 @@ pub fn run() {
             let config = paths::get().config.join("settings.json");
             app.manage(settings::SettingsState::load(config));
             i18n::set_language(settings::get(app.handle()).language.as_deref());
+            logs::log_startup(app.handle());
+
+            log_displays(app.handle());
 
             let root = paths::get().data.join("Library");
-            let library = Arc::new(Library::open(&root)?);
+            let t = Instant::now();
+            let library = Arc::new(Library::open(&root).inspect_err(|e| {
+                log::error!("Bibliothek {} öffnen: {e}", root.display());
+            })?);
             // Vorschaubilder und Videos lädt das Frontend über `asset:`.
             app.asset_protocol_scope().allow_directory(&root, true)?;
-            log::info!("Bibliothek: {}", root.display());
+            log::info!(
+                "Bibliothek: {} ({:.0} ms)",
+                root.display(),
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+            let t = Instant::now();
             app.manage(capture::CaptureState::new(
                 grabmark_capture::platform_capturer(),
                 library,
             ));
+            step("Aufnahme und Texterkennung", t);
 
             app.manage(editor::EditorState::new());
             app.manage(scroll::ScrollState::default());
@@ -150,28 +162,44 @@ pub fn run() {
             app.manage(video_edit::VideoEditState::default());
             app.manage(tray::PopoverState::default());
             app.manage(services::Services::new());
+            let t = Instant::now();
             app.manage(vision::VisionState::new(app.handle()));
+            step("Bildinhalt vorbereiten", t);
+            let t = Instant::now();
             app.state::<capture::CaptureState>().capturer.warm_up();
-            tray::create(app.handle())?;
-            menu::create(app.handle())?;
+            step("Aufnahme aufwärmen", t);
+            let t = Instant::now();
+            tray::create(app.handle()).inspect_err(|e| log::error!("Tray-Symbol anlegen: {e}"))?;
+            menu::create(app.handle()).inspect_err(|e| log::error!("App-Menü anlegen: {e}"))?;
+            step("Tray und Menü", t);
+            let t = Instant::now();
             hotkeys::register(app.handle());
+            step("Tastenkürzel", t);
             services::start(app.handle());
             // Abgestürzte Aufnahme vom letzten Mal? (ADR 0012)
             video::offer_recovery(app.handle());
+            let t = Instant::now();
             vision::start(app.handle());
+            step("Bildinhalt starten", t);
             // Erster Start mit Argumenten (z. B. aus der Kommandozeile).
             let argv: Vec<String> = std::env::args().collect();
             handle_args(app.handle(), &argv);
+            log::info!(
+                "Start fertig in {:.0} ms",
+                setup_start.elapsed().as_secs_f64() * 1000.0
+            );
             Ok(())
         })
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()))
         .on_window_event(|window, event| match event {
             // Einstellungen schliessen sich wirklich (beim nächsten Öffnen frisch).
             WindowEvent::CloseRequested { .. } if window.label() == tray::SETTINGS => {
+                log::info!("Einstellungen geschlossen");
                 tray::update_activation(window.app_handle(), tray::SETTINGS);
             }
             // Sonst: schliessen = verstecken; die App läuft im Tray weiter.
             WindowEvent::CloseRequested { api, .. } => {
+                log::debug!("Fenster {} schliessen → verstecken", window.label());
                 api.prevent_close();
                 if window.label() == tray::POPOVER {
                     tray::hide_popover(window.app_handle());
@@ -181,14 +209,46 @@ pub fn run() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("Grabmark konnte nicht gestartet werden");
+        .build(tauri::generate_context!())
+        .inspect_err(|e| log::error!("Start fehlgeschlagen: {e}"))
+        .expect("Grabmark konnte nicht gestartet werden")
+        .run(|_app, event| {
+            if let RunEvent::Exit = event {
+                log::info!("Grabmark beendet");
+                log::logger().flush();
+            }
+        });
+}
+
+/// Monitore beim Start (Anzahl, Grösse, Massstab) – über Tauri, ohne
+/// Bildschirm-Freigabe.
+fn log_displays(app: &tauri::AppHandle) {
+    match app.available_monitors() {
+        Ok(monitors) => {
+            log::info!("{} Monitor(e)", monitors.len());
+            for m in monitors {
+                let size = m.size();
+                log::info!(
+                    "Monitor: {}×{} px bei ({}, {}), Massstab {}",
+                    size.width,
+                    size.height,
+                    m.position().x,
+                    m.position().y,
+                    m.scale_factor()
+                );
+            }
+        }
+        Err(e) => log::warn!("Monitore abfragen: {e}"),
+    }
 }
 
 /// Befehle aus der Kommandozeile: `capture region|screen|window|scroll|text|video`
 /// oder `gallery`.
 fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
     let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+    if !args.is_empty() {
+        log::info!("Kommandozeile: {}", args.join(" "));
+    }
     let mode = match args.as_slice() {
         ["capture", "region", ..] => Some(capture::Mode::Region),
         ["capture", "screen", ..] => Some(capture::Mode::Screen),
@@ -205,7 +265,11 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
             tray::open_settings(app);
             None
         }
-        _ => None,
+        [] => None,
+        _ => {
+            log::debug!("Kommandozeile: kein bekannter Befehl");
+            None
+        }
     };
     if let Some(mode) = mode {
         let app = app.clone();
@@ -215,7 +279,9 @@ fn handle_args(app: &tauri::AppHandle, argv: &[String]) {
             capture::start(&app, mode);
         });
     }
-    let _ = app.emit("cli", args.join(" "));
+    if let Err(e) = app.emit("cli", args.join(" ")) {
+        log::debug!("Ereignis cli: {e}");
+    }
 }
 
 #[cfg(test)]

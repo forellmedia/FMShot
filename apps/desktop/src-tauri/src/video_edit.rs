@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use grabmark_core::{
     AssetRef, Document, FaceTrack, InputTrack, LayerKind, RgbaImage, VideoDoc, VideoEncoding,
@@ -14,6 +14,7 @@ use grabmark_core::{
 };
 use grabmark_library::{CaptureRecord, Library, NewCapture};
 use grabmark_media::{AudioInput, RecordFiles};
+use grabmark_video::audio::AudioTrack;
 use grabmark_video::cursor::CURSOR_POINTS;
 use grabmark_video::overlay::LayerOverlay;
 use grabmark_video::timeline::{kept, output_duration};
@@ -66,8 +67,19 @@ fn sidecar(files: &RecordFiles, suffix: &str) -> Option<PathBuf> {
     Some(PathBuf::from(webcam.replace("_webcam.mp4", suffix)))
 }
 
+/// Fehlt die Datei, ist das kein Fehler (z. B. keine Mausspur).
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            log::warn!("{}: {e}", path.display());
+            return None;
+        }
+    };
+    serde_json::from_slice(&bytes)
+        .map_err(|e| log::warn!("{}: {e}", path.display()))
+        .ok()
 }
 
 /// Bilder, die in die Ebenen hineingezogen wurden (`<id>_asset_<hash>.png`).
@@ -109,11 +121,14 @@ pub fn extras(
             let faces: FaceTrack = read_json(files.faces.as_deref()?)?;
             HeadPath::new(&faces, w.layout.follow)
         });
-    let segmenter = video
+    let wants_segmenter = video
         .webcam
         .as_ref()
-        .filter(|w| w.layout.background != WebcamBackground::Original)
-        .and_then(|_| grabmark_media::segmenter());
+        .is_some_and(|w| w.layout.background != WebcamBackground::Original);
+    let segmenter = wants_segmenter.then(grabmark_media::segmenter).flatten();
+    if wants_segmenter && segmenter.is_none() {
+        log::warn!("Video: Webcam-Hintergrund gewünscht, aber keine Freistellung verfügbar");
+    }
     let cursor = sidecar(files, "_input.json")
         .and_then(|p| read_json::<InputTrack>(&p))
         .map(|t| CursorTrack::new(&t))
@@ -121,6 +136,13 @@ pub fn extras(
     let overlay = layers
         .and_then(|(doc, assets)| LayerOverlay::new(doc, assets))
         .map(|o| Box::new(o) as Box<dyn grabmark_video::OverlaySource>);
+    log::debug!(
+        "Video: Zusätze – Kopf {}, Freistellung {}, Zeiger {}, Ebenen {}",
+        head.is_some(),
+        segmenter.is_some(),
+        cursor.is_some(),
+        overlay.is_some()
+    );
     ExportExtras {
         head,
         segmenter,
@@ -149,7 +171,7 @@ fn compose_into(
         (Some(_), Some(path)) => match grabmark_media::open_video(path) {
             Ok(w) => Some(w),
             Err(e) => {
-                log::warn!("Webcam lesen: {e}");
+                log::warn!("Webcam lesen: {e} – Export ohne Webcam");
                 None
             }
         },
@@ -187,18 +209,26 @@ pub fn compose(
     let size = grabmark_video::encode_size(frame_size(files, video)?, encoding);
     extras.size = Some(size);
     let mut audio = Vec::new();
-    if let Some(p) = &files.system_audio {
-        audio.push(AudioInput {
-            path: p.clone(),
-            volume: video.audio.system,
-        });
+    for (path, track) in [
+        (&files.system_audio, AudioTrack::System),
+        (&files.microphone, AudioTrack::Microphone),
+    ] {
+        if let Some(p) = path {
+            audio.push(AudioInput {
+                path: p.clone(),
+                volume: track.base(video),
+                ramps: grabmark_video::audio::export_ramps(video, track),
+            });
+        }
     }
-    if let Some(p) = &files.microphone {
-        audio.push(AudioInput {
-            path: p.clone(),
-            volume: video.audio.microphone,
-        });
-    }
+    log::debug!(
+        "Video: MP4 {}×{} @ {} fps, {:?}, {} Tonspuren",
+        size.0,
+        size.1,
+        video.fps,
+        encoding,
+        audio.len()
+    );
     let mut sink = grabmark_media::create_mp4(
         out,
         size,
@@ -230,9 +260,19 @@ pub struct VideoTracks {
 #[tauri::command]
 #[specta::specta]
 pub fn video_tracks(app: AppHandle, id: String) -> Result<VideoTracks, String> {
-    let rec = library(&app).get(&id).map_err(err)?;
+    let rec = library(&app).get(&id).map_err(|e| {
+        log::error!("Video-Editor {id}: {e}");
+        err(e)
+    })?;
     let s = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().into_owned());
     let files = record_files(&rec);
+    log::info!(
+        "Video-Editor: {id} geöffnet (Bildschirm {}, Webcam {}, Systemton {}, Mikrofon {})",
+        files.screen.is_some(),
+        files.webcam.is_some(),
+        files.system_audio.is_some(),
+        files.microphone.is_some()
+    );
     Ok(VideoTracks {
         screen: s(files.screen),
         webcam: s(files.webcam),
@@ -279,6 +319,7 @@ fn begin_export(app: &AppHandle, id: &str) -> Arc<AtomicBool> {
     let state = app.state::<VideoEditState>();
     let mut running = state.running.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(old) = running.insert(id.to_string(), cancel.clone()) {
+        log::info!("Export {id}: laufender Auftrag wird ersetzt");
         old.store(true, Ordering::Release);
     }
     cancel
@@ -311,11 +352,22 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
     );
     let mut progress = progress_reporter(app, id, cancel);
     let encoding = crate::settings::get(app).video.encoding;
-    let started = std::time::Instant::now();
+    log::info!(
+        "Video-Export {id}: startet ({:.1} s, {:?}, {:?}, {:?})",
+        output_duration(&video) as f64 / 1000.0,
+        encoding.codec,
+        encoding.resolution,
+        encoding.quality
+    );
+    let started = Instant::now();
     let stats = match compose(&files, &video, extras, &encoding, &temp, &mut progress) {
         Ok(stats) => stats,
         Err(e) => {
-            let _ = std::fs::remove_file(&temp);
+            if let Err(r) = std::fs::remove_file(&temp)
+                && r.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("{}: {r}", temp.display());
+            }
             return Err(e);
         }
     };
@@ -341,20 +393,39 @@ fn render_video(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<()
             stats.times,
         ),
     );
-    let _ = app.emit("library-changed", ());
+    if let Err(e) = app.emit("library-changed", ()) {
+        log::warn!("library-changed: {e}");
+    }
     Ok(())
 }
 
 /// Vor Kopieren, Sichern usw.: das fertige Video zusammensetzen, falls es
 /// nicht mehr zum Dokument passt. Läuft schon ein Auftrag, wird er ersetzt.
 pub fn ensure_current(app: &AppHandle, id: &str) -> Result<(), String> {
-    if library(app).video_is_current(id).unwrap_or(false) {
+    if is_current(app, id) {
+        log::debug!("Video {id}: fertiges Video ist aktuell");
         return Ok(());
     }
     let cancel = begin_export(app, id);
+    let started = Instant::now();
     let result = render_video(app, id, cancel.clone());
     end_export(app, id, &cancel);
+    if let Err(e) = &result {
+        let ms = started.elapsed().as_millis();
+        if cancel.load(Ordering::Acquire) {
+            log::info!("Video-Export {id}: abgebrochen nach {ms} ms");
+        } else {
+            log::error!("Video-Export {id}: {e} (nach {ms} ms)");
+        }
+    }
     result
+}
+
+fn is_current(app: &AppHandle, id: &str) -> bool {
+    library(app).video_is_current(id).unwrap_or_else(|e| {
+        log::warn!("Video {id}: Stand unbekannt: {e}");
+        false
+    })
 }
 
 /// Erst auf Wunsch (Kopieren, Sichern, Einzelbild): Video aus dem
@@ -365,17 +436,24 @@ pub fn ensure_current(app: &AppHandle, id: &str) -> Result<(), String> {
 pub async fn export_video(app: AppHandle, id: String) -> Result<CaptureInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
         ensure_current(&app, &id)?;
-        Ok(CaptureInfo::from(&library(&app).get(&id).map_err(err)?))
+        let rec = library(&app).get(&id).map_err(|e| {
+            log::error!("Video-Export {id}: {e}");
+            err(e)
+        })?;
+        Ok(CaptureInfo::from(&rec))
     })
     .await
-    .map_err(err)?
+    .map_err(|e| {
+        log::error!("Video-Export: {e}");
+        err(e)
+    })?
 }
 
 /// Passt das fertige Video zum gespeicherten Dokument?
 #[tauri::command]
 #[specta::specta]
 pub fn video_is_current(app: AppHandle, id: String) -> bool {
-    library(&app).video_is_current(&id).unwrap_or(false)
+    is_current(&app, &id)
 }
 
 /// Laufendes Zusammensetzen (Video oder GIF) abbrechen.
@@ -384,8 +462,12 @@ pub fn video_is_current(app: AppHandle, id: String) -> bool {
 pub fn cancel_video_export(app: AppHandle, id: String) {
     let state = app.state::<VideoEditState>();
     let running = state.running.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(cancel) = running.get(&id) {
-        cancel.store(true, Ordering::Release);
+    match running.get(&id) {
+        Some(cancel) => {
+            log::info!("Export {id}: Abbruch angefordert");
+            cancel.store(true, Ordering::Release);
+        }
+        None => log::debug!("Export {id}: Abbruch, aber kein Auftrag läuft"),
     }
 }
 
@@ -401,34 +483,74 @@ pub async fn export_gif(app: AppHandle, id: String) -> Result<Option<String>, St
             .add_filter("GIF", &["gif"])
             .blocking_save_file()
         else {
+            log::info!("GIF-Export {id}: Dialog abgebrochen");
             return Ok(None);
         };
         let path = path.into_path().map_err(err)?;
-        let lib = library(&app);
-        let rec = lib.get(&id).map_err(err)?;
-        let doc = lib.load_document(&id).map_err(err)?;
-        let video = doc.video.clone().ok_or("kein Video")?;
-        let files = record_files(&rec);
-        let mut sink = grabmark_video::GifSink::create(&path, frame_size(&files, &video)?)?;
-        let extras = extras(
-            &files,
-            &video,
-            rec.scale_factor,
-            Some((&doc, layer_assets(&rec, &doc))),
-        );
-        let cancel = begin_export(&app, &id);
-        let mut progress = progress_reporter(&app, &id, cancel.clone());
-        let result = compose_into(&files, &video, extras, &mut sink, &mut progress);
-        end_export(&app, &id, &cancel);
-        if let Err(e) = result {
-            drop(sink);
-            let _ = std::fs::remove_file(&path);
-            return Err(e);
+        let started = Instant::now();
+        let result = write_gif(&app, &id, &path);
+        let ms = started.elapsed().as_millis();
+        match &result {
+            Ok(()) => {
+                let bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
+                log::info!(
+                    "GIF-Export {id}: fertig in {ms} ms, {:.1} MB",
+                    bytes as f64 / 1e6
+                );
+            }
+            Err(e) if is_cancelled(e) => log::info!("GIF-Export {id}: abgebrochen nach {ms} ms"),
+            Err(e) => log::error!("GIF-Export {id}: {e} (nach {ms} ms)"),
         }
-        Ok(Some(path.to_string_lossy().into_owned()))
+        result.map(|()| Some(path.to_string_lossy().into_owned()))
     })
     .await
-    .map_err(err)?
+    .map_err(|e| {
+        log::error!("GIF-Export: {e}");
+        err(e)
+    })?
+}
+
+fn is_cancelled(e: &str) -> bool {
+    e == grabmark_video::VideoError::Cancelled.to_string()
+}
+
+fn write_gif(app: &AppHandle, id: &str, path: &Path) -> Result<(), String> {
+    let lib = library(app);
+    let rec = lib.get(id).map_err(err)?;
+    let doc = lib.load_document(id).map_err(err)?;
+    let video = doc.video.clone().ok_or("kein Video")?;
+    let files = record_files(&rec);
+    let size = frame_size(&files, &video)?;
+    log::info!(
+        "GIF-Export {id}: startet ({:.1} s, {}×{})",
+        output_duration(&video) as f64 / 1000.0,
+        size.0,
+        size.1
+    );
+    let mut sink = grabmark_video::GifSink::create(path, size)?;
+    let extras = extras(
+        &files,
+        &video,
+        rec.scale_factor,
+        Some((&doc, layer_assets(&rec, &doc))),
+    );
+    let cancel = begin_export(app, id);
+    let mut progress = progress_reporter(app, id, cancel.clone());
+    let result = compose_into(&files, &video, extras, &mut sink, &mut progress);
+    end_export(app, id, &cancel);
+    match result {
+        Ok(stats) => {
+            log::debug!("GIF-Export {id}: {} Bilder, {}", stats.frames, stats.times);
+            Ok(())
+        }
+        Err(e) => {
+            drop(sink);
+            if let Err(r) = std::fs::remove_file(path) {
+                log::debug!("{}: {r}", path.display());
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Bild an der Stelle `output_ms` des fertigen Videos als neue Aufnahme in
@@ -442,22 +564,42 @@ pub async fn video_snapshot(
 ) -> Result<CaptureInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
         ensure_current(&app, &id)?;
-        let lib = library(&app);
-        let rec = lib.get(&id).map_err(err)?;
-        let at = Duration::from_secs_f64(output_ms.max(0.0) / 1000.0);
-        let image = grabmark_media::frame_at(&rec.video_path(), at).map_err(err)?;
-        let capture = NewCapture {
-            image,
-            scale_factor: rec.scale_factor,
-            mode: "screen".into(),
-            created_at_ms: now_ms(),
-        };
-        let saved = lib.save_capture(&capture).map_err(err)?;
-        let _ = app.emit("capture-saved", saved.id.clone());
+        let started = Instant::now();
+        let result = snapshot(&app, &id, output_ms);
+        match &result {
+            Ok(saved) => log::info!(
+                "Video {id}: Einzelbild bei {:.1} s → {} ({} ms)",
+                output_ms / 1000.0,
+                saved.id,
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::error!("Video {id}: Einzelbild: {e}"),
+        }
+        let saved = result?;
+        if let Err(e) = app.emit("capture-saved", saved.id.clone()) {
+            log::warn!("capture-saved: {e}");
+        }
         Ok(CaptureInfo::from(&saved))
     })
     .await
-    .map_err(err)?
+    .map_err(|e| {
+        log::error!("Einzelbild: {e}");
+        err(e)
+    })?
+}
+
+fn snapshot(app: &AppHandle, id: &str, output_ms: f64) -> Result<CaptureRecord, String> {
+    let lib = library(app);
+    let rec = lib.get(id).map_err(err)?;
+    let at = Duration::from_secs_f64(output_ms.max(0.0) / 1000.0);
+    let image = grabmark_media::frame_at(&rec.video_path(), at).map_err(err)?;
+    let capture = NewCapture {
+        image,
+        scale_factor: rec.scale_factor,
+        mode: "screen".into(),
+        created_at_ms: now_ms(),
+    };
+    lib.save_capture(&capture).map_err(err)
 }
 
 fn now_ms() -> i64 {

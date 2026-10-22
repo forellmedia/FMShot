@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use grabmark_core::RgbaImage;
 use ort::session::Session;
@@ -15,10 +16,23 @@ use crate::{
 };
 
 fn session(path: &Path, threads: usize) -> Result<Session, VisionError> {
-    Ok(Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(threads.max(1))?
-        .commit_from_file(path)?)
+    let started = Instant::now();
+    let result = (|| -> Result<Session, VisionError> {
+        Ok(Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(threads.max(1))?
+            .commit_from_file(path)?)
+    })();
+    match &result {
+        Ok(_) => log::info!(
+            "Modell {} geladen ({} Thread(s)) in {} ms",
+            path.display(),
+            threads.max(1),
+            started.elapsed().as_millis()
+        ),
+        Err(e) => log::error!("Modell {} laden fehlgeschlagen: {e}", path.display()),
+    }
+    result
 }
 
 fn pooled(outputs: &ort::session::SessionOutputs) -> Result<Embedding, VisionError> {
@@ -49,13 +63,28 @@ impl ImageEncoder {
 
     /// Ganzes Bild und Ausschnitte ([`crate::parts`]) – für die Stichwörter.
     pub fn embed_all(&self, image: &RgbaImage) -> Result<ImageVectors, VisionError> {
-        Ok(ImageVectors {
-            whole: self.embed(image)?,
-            parts: crate::parts(image)
-                .iter()
-                .map(|p| self.embed(p))
-                .collect::<Result<_, _>>()?,
-        })
+        let started = Instant::now();
+        let parts = crate::parts(image);
+        let result = (|| {
+            Ok(ImageVectors {
+                whole: self.embed(image)?,
+                parts: parts
+                    .iter()
+                    .map(|p| self.embed(p))
+                    .collect::<Result<_, _>>()?,
+            })
+        })();
+        match &result {
+            Ok(_) => log::debug!(
+                "Bildinhalt {}×{}: ganzes Bild + {} Ausschnitte in {} ms",
+                image.width(),
+                image.height(),
+                parts.len(),
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::warn!("Bildinhalt berechnen fehlgeschlagen: {e}"),
+        }
+        result
     }
 }
 
@@ -67,8 +96,13 @@ pub struct TextEncoder {
 
 impl TextEncoder {
     pub fn load(model_dir: &Path, threads: usize) -> Result<Self, VisionError> {
-        let tokenizer = Tokenizer::from_file(model_dir.join(TOKENIZER_FILE))
-            .map_err(|e| VisionError::Tokenizer(e.to_string()))?;
+        let tokenizer = Tokenizer::from_file(model_dir.join(TOKENIZER_FILE)).map_err(|e| {
+            log::error!(
+                "Tokenizer in {} laden fehlgeschlagen: {e}",
+                model_dir.display()
+            );
+            VisionError::Tokenizer(e.to_string())
+        })?;
         Ok(TextEncoder {
             session: Mutex::new(session(&model_dir.join(TEXT_FILE), threads)?),
             tokenizer,

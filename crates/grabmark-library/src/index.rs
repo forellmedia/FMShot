@@ -84,9 +84,15 @@ fn add_column_to(conn: &Connection, table: &str, name: &str, def: &str) -> rusql
         ))?
         .exists([name])?;
     if !exists {
+        log::info!("Index: Spalte {table}.{name} ergänzt");
         conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {def}"))?;
     }
     Ok(())
+}
+
+/// Anzahl Aufnahmen im Index (fürs Protokoll).
+pub(crate) fn count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM captures", [], |r| r.get(0))
 }
 
 /// Aufnahmen ohne Texterkennung, neueste zuerst.

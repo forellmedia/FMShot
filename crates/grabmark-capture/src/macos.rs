@@ -9,7 +9,7 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use grabmark_core::{Rect, RgbaImage};
@@ -20,13 +20,13 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage, CGImageAlphaInfo,
-    CGImageByteOrderInfo, CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess,
-    CGPreflightScreenCaptureAccess, CGRectMakeWithDictionaryRepresentation,
-    CGRequestPostEventAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit,
-    CGWarpMouseCursorPosition, CGWindowListCopyWindowInfo, CGWindowListCreate, CGWindowListOption,
-    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber,
-    kCGWindowOwnerPID,
+    CGError, CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage,
+    CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID, CGMouseButton,
+    CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess,
+    CGRectMakeWithDictionaryRepresentation, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
+    CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCopyWindowInfo, CGWindowListCreate,
+    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+    kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -73,7 +73,9 @@ impl MacCapturer {
     }
 
     fn fresh_content(&self) -> Result<Content> {
-        let content = Arc::new(SendRetained(fetch_shareable_content()?));
+        let content = Arc::new(SendRetained(fetch_shareable_content().inspect_err(
+            |e| log::warn!("Bildschirminhalt abfragen fehlgeschlagen: {e}"),
+        )?));
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(content.clone());
         Ok(content)
     }
@@ -81,10 +83,11 @@ impl MacCapturer {
     /// Erneuert den Cache im Hintergrund.
     fn refresh_later(&self) {
         let cache = self.cache.clone();
-        std::thread::spawn(move || {
-            if let Ok(c) = fetch_shareable_content() {
+        std::thread::spawn(move || match fetch_shareable_content() {
+            Ok(c) => {
                 *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(SendRetained(c)));
             }
+            Err(e) => log::debug!("Bildschirminhalt im Hintergrund nicht erneuert: {e}"),
         });
     }
 
@@ -110,7 +113,9 @@ impl ScreenCapturer for MacCapturer {
     }
 
     fn request_permission(&self) -> bool {
-        CGRequestScreenCaptureAccess()
+        let granted = CGRequestScreenCaptureAccess();
+        log::info!("Freigabe Bildschirmaufnahme angefragt: erteilt={granted}");
+        granted
     }
 
     fn cursor_position(&self) -> Option<(f32, f32)> {
@@ -137,10 +142,25 @@ impl ScreenCapturer for MacCapturer {
     fn displays(&self) -> Result<Vec<Display>> {
         let content = self.content()?;
         let displays = unsafe { content.0.displays() };
-        Ok(displays.iter().map(|d| display_info(&d)).collect())
+        let displays: Vec<Display> = displays.iter().map(|d| display_info(&d)).collect();
+        log::debug!("{} Monitor(e)", displays.len());
+        for d in &displays {
+            log::debug!(
+                "Monitor {}: {}×{} bei ({}, {}), Skalierung {}, Hauptmonitor={}",
+                d.id,
+                d.bounds.width,
+                d.bounds.height,
+                d.bounds.x,
+                d.bounds.y,
+                d.scale_factor,
+                d.is_primary
+            );
+        }
+        Ok(displays)
     }
 
     fn windows(&self, own_windows: OwnWindows) -> Result<Vec<WindowInfo>> {
+        let started = Instant::now();
         let content = self.fresh_content()?;
         let own_pid = std::process::id() as i32;
         let sc_windows = unsafe { content.0.windows() };
@@ -184,6 +204,11 @@ impl ScreenCapturer for MacCapturer {
                     .unwrap_or_default(),
             });
         }
+        log::debug!(
+            "{} Fenster aufgelistet ({own_windows:?}) in {} ms",
+            result.len(),
+            started.elapsed().as_millis()
+        );
         Ok(result)
     }
 
@@ -216,15 +241,27 @@ impl ScreenCapturer for MacCapturer {
     }
 
     fn capture_window(&self, window_id: u32) -> Result<Frame> {
+        let started = Instant::now();
         let content = self.fresh_content()?;
         let window = unsafe { content.0.windows() }
             .iter()
             .find(|w| unsafe { w.windowID() } == window_id)
-            .ok_or(CaptureError::Backend(format!(
-                "Fenster {window_id} nicht gefunden"
-            )))?;
+            .ok_or_else(|| {
+                log::warn!("Fenster {window_id} zum Aufnehmen nicht gefunden");
+                CaptureError::Backend(format!("Fenster {window_id} nicht gefunden"))
+            })?;
         let rx = start_window_capture(&window, &content.0);
         let frame = wait_frame(rx);
+        match &frame {
+            Ok(f) => log::info!(
+                "Fenster {window_id} aufgenommen: {}×{} px, Skalierung {} in {} ms",
+                f.image.width(),
+                f.image.height(),
+                f.scale_factor,
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::error!("Fenster {window_id} aufnehmen fehlgeschlagen: {e}"),
+        }
         self.refresh_later();
         frame
     }
@@ -234,7 +271,10 @@ impl ScreenCapturer for MacCapturer {
         let display = unsafe { content.0.displays() }
             .iter()
             .find(|d| unsafe { d.displayID() } == display_id)
-            .ok_or(CaptureError::UnknownDisplay(display_id))?;
+            .ok_or_else(|| {
+                log::warn!("Ausschnitt: Monitor {display_id} nicht gefunden");
+                CaptureError::UnknownDisplay(display_id)
+            })?;
         let info = display_info(&display);
         let excluded = Excluded::new(&content.0, OwnWindows::Hidden);
         let scale = info.scale_factor.max(1.0) as f64;
@@ -262,10 +302,16 @@ impl ScreenCapturer for MacCapturer {
         let point = CGPoint::new(at.0 as f64, at.1 as f64);
         // Mauszeiger über den Bereich – Scroll-Ereignisse gehen an das Fenster
         // unter dem Zeiger.
-        let _ = CGWarpMouseCursorPosition(point);
+        let warped = CGWarpMouseCursorPosition(point);
+        if warped != CGError::Success {
+            log::debug!("Mauszeiger versetzen fehlgeschlagen: CGError {}", warped.0);
+        }
         let event =
             CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 1, -delta, 0, 0)
-                .ok_or_else(|| CaptureError::Backend("Scroll-Ereignis".into()))?;
+                .ok_or_else(|| {
+                    log::warn!("Scroll-Ereignis konnte nicht erzeugt werden");
+                    CaptureError::Backend("Scroll-Ereignis".into())
+                })?;
         CGEvent::set_location(Some(&event), point);
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
         Ok(())
@@ -279,6 +325,7 @@ impl ScreenCapturer for MacCapturer {
     }
 
     fn capture_all(&self, own: OwnWindows) -> Result<Vec<Frame>> {
+        let started = Instant::now();
         let mut content = self.content()?;
         // Ein eigenes Fenster, das erst nach dem Schnappschuss aufging, kennt
         // dieser noch nicht – dann frisch abfragen.
@@ -288,14 +335,39 @@ impl ScreenCapturer for MacCapturer {
                 .iter()
                 .any(|id| !known.iter().any(|w| unsafe { w.windowID() } == *id))
             {
+                log::debug!("Neues eigenes Fenster – Bildschirminhalt frisch abfragen");
                 content = self.fresh_content()?;
             }
         }
         let frames = match self.capture_all_with(&content.0, own) {
             Ok(f) => f,
             // Veralteter Schnappschuss (z. B. Monitor abgesteckt) – frisch versuchen.
-            Err(_) => self.capture_all_with(&self.fresh_content()?.0, own)?,
+            Err(e) => {
+                log::warn!(
+                    "Aufnahme mit zwischengespeichertem Inhalt fehlgeschlagen, neuer Versuch: {e}"
+                );
+                self.capture_all_with(&self.fresh_content()?.0, own)
+                    .inspect_err(|e| log::error!("Monitore aufnehmen fehlgeschlagen: {e}"))?
+            }
         };
+        let sizes = frames
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}: {}×{} @{}",
+                    f.display_id,
+                    f.image.width(),
+                    f.image.height(),
+                    f.scale_factor
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        log::info!(
+            "{} Monitor(e) aufgenommen ({own:?}) in {} ms [{sizes}]",
+            frames.len(),
+            started.elapsed().as_millis()
+        );
         self.refresh_later();
         Ok(frames)
     }
@@ -303,8 +375,10 @@ impl ScreenCapturer for MacCapturer {
 
 fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
     if !CGPreflightScreenCaptureAccess() {
+        log::warn!("Bildschirmaufnahme nicht freigegeben");
         return Err(CaptureError::PermissionDenied);
     }
+    let started = Instant::now();
     let (tx, rx) = mpsc::sync_channel::<std::result::Result<SendRetained<_>, String>>(1);
     let block = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -318,7 +392,17 @@ fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
     );
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
     match rx.recv_timeout(TIMEOUT) {
-        Ok(Ok(content)) => Ok(content.0),
+        Ok(Ok(content)) => {
+            let content = content.0;
+            log::debug!(
+                "Bildschirminhalt abgefragt in {} ms: {} Monitor(e), {} Fenster, {} Apps",
+                started.elapsed().as_millis(),
+                unsafe { content.displays() }.count(),
+                unsafe { content.windows() }.count(),
+                unsafe { content.applications() }.count()
+            );
+            Ok(content)
+        }
         Ok(Err(e)) => Err(CaptureError::Backend(e)),
         Err(_) => Err(CaptureError::Backend(
             "ScreenCaptureKit antwortet nicht".into(),
@@ -522,7 +606,10 @@ fn start_window_capture(window: &SCWindow, content: &SCShareableContent) -> Pend
             let info = display_info(&d);
             (info.id, info.scale_factor)
         })
-        .unwrap_or((CGMainDisplayID(), 2.0));
+        .unwrap_or_else(|| {
+            log::debug!("Fenstermitte auf keinem Monitor – nehme Hauptmonitor, Skalierung 2");
+            (CGMainDisplayID(), 2.0)
+        });
 
     let filter = unsafe {
         SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window)
@@ -561,7 +648,9 @@ fn screenshot(
             }
             None => Err(error_text(error)),
         };
-        let _ = tx.send(result);
+        if tx.send(result).is_err() {
+            log::debug!("Bildschirmaufnahme kam erst nach dem Zeitlimit");
+        }
     });
     unsafe {
         SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
@@ -577,9 +666,15 @@ fn wait_frame(rx: PendingFrame) -> Result<Frame> {
     match rx.recv_timeout(TIMEOUT) {
         Ok(Ok(frame)) => Ok(frame),
         Ok(Err(e)) => Err(CaptureError::Backend(e)),
-        Err(_) => Err(CaptureError::Backend(
-            "Bildschirmaufnahme hat zu lange gedauert".into(),
-        )),
+        Err(_) => {
+            log::warn!(
+                "Bildschirmaufnahme: keine Antwort nach {} s",
+                TIMEOUT.as_secs()
+            );
+            Err(CaptureError::Backend(
+                "Bildschirmaufnahme hat zu lange gedauert".into(),
+            ))
+        }
     }
 }
 

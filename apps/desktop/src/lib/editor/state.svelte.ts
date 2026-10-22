@@ -149,6 +149,10 @@ export class Editor {
   private messageTimer: ReturnType<typeof setTimeout> | null = null;
   /** Sichtfenster-Grösse in CSS-Pixeln (von der Leinwand gesetzt). */
   viewport = { width: 800, height: 600 };
+  /** Ansicht ist eingepasst (nicht von Hand gezoomt): Ändert sich die Grösse
+   *  des Fensters, etwa weil die Video-Zeitleiste erscheint, wird neu
+   *  eingepasst statt abgeschnitten. */
+  fitted = false;
 
   get ratio(): number {
     return this.doc?.pixel_ratio ?? 1;
@@ -302,17 +306,22 @@ export class Editor {
 
   // --- Ansicht --------------------------------------------------------------
 
-  /** Ganze Zeichenfläche ins Fenster einpassen (nie grösser als 100 %). */
+  /**
+   * Ganze Zeichenfläche ins Fenster einpassen. Bilder nie grösser als 100 %;
+   * Videos füllen den Platz ganz aus, wie in einem Abspielprogramm.
+   */
   fit() {
     if (!this.doc) return;
     const r = this.doc.artboard.rect;
-    const margin = 48;
+    const isVideo = !!(this.doc as { video?: unknown }).video;
+    const margin = isVideo ? 16 : 48;
     const z = Math.min(
       (this.viewport.width - margin) / r.width,
       (this.viewport.height - margin) / r.height,
-      1 / this.ratio,
+      isVideo ? Infinity : 1 / this.ratio,
     );
     this.zoom = Math.max(0.02, z);
+    this.fitted = true;
     this.panX = r.x + r.width / 2 - this.viewport.width / 2 / this.zoom;
     this.panY = r.y + r.height / 2 - this.viewport.height / 2 / this.zoom;
   }
@@ -323,6 +332,7 @@ export class Editor {
     const dx = this.panX + sx / this.zoom;
     const dy = this.panY + sy / this.zoom;
     this.zoom = z;
+    this.fitted = false;
     this.setPan(dx - sx / z, dy - sy / z);
   }
 

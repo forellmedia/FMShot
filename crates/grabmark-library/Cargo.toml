@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 grabmark-core.workspace = true
+log = "0.4"
 thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image-webp = "0.2"
