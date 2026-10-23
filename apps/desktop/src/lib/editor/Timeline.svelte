@@ -168,8 +168,12 @@
   const AUDIO_LABEL: Record<AudioName, MessageKey> = { system: "video.track_system", mic: "video.track_mic" };
   const audioLanes = $derived(AUDIO_TRACKS.filter((n) => !!(n === "system" ? player.urls?.system : player.urls?.mic)));
 
+  /** Schnitte als Text: Jede Bearbeitung ersetzt das Video-Dokument, die
+   *  Wellenform muss aber nur bei anderen Schnitten neu gerechnet werden. */
+  const cutsKey = $derived(JSON.stringify(video?.cuts ?? []));
+
   const waves = $derived.by(() => {
-    void video?.cuts;
+    void cutsKey;
     const out: Record<string, string> = {};
     for (const n of audioLanes) {
       const p = player.peaks[n];
@@ -412,26 +416,30 @@
     };
   }
 
-  // Höhe am oberen Rand ziehen; Doppelklick = wieder automatisch.
-  let wrap = $state<HTMLDivElement | null>(null);
+  // Feste Höhe, nur am oberen Rand verstellbar; Doppelklick = Standardhöhe.
+  // Mehr Zeilen oder eine eingeblendete Leiste (z. B. „Löschen“) machen die
+  // Zeitleiste nicht höher – die Zeilen scrollen, das Bild darüber bleibt.
+  const DEFAULT_HEIGHT = 240;
+  /** Darunter klappt die Zeitleiste beim Ziehen ein (nur noch die Leiste). */
+  const MIN_HEIGHT = 96;
+  const height = $derived(view.height ?? DEFAULT_HEIGHT);
   let resize: { y0: number; h0: number } | null = null;
 
   function resizeDown(e: PointerEvent) {
-    if (e.button !== 0 || !wrap) return;
+    if (e.button !== 0 || !root) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    resize = { y0: e.clientY, h0: view.collapsed ? 0 : wrap.clientHeight };
-    view.collapsed = false;
+    resize = { y0: e.clientY, h0: root.offsetHeight };
   }
 
   function resizeMove(e: PointerEvent) {
     if (!resize) return;
     const h = resize.h0 + resize.y0 - e.clientY;
-    if (h < 16) {
+    if (h < MIN_HEIGHT * 0.75) {
       view.collapsed = true;
       return;
     }
     view.collapsed = false;
-    view.height = Math.round(Math.min(window.innerHeight * 0.75, Math.max(24, h)));
+    view.height = Math.round(Math.min(window.innerHeight * 0.7, Math.max(MIN_HEIGHT, h)));
   }
 
   function resizeUp() {
@@ -567,7 +575,13 @@
   </button>
 {/snippet}
 
-<section class="timeline" aria-label={t("video.timeline")} bind:this={root}>
+<section
+  class="timeline"
+  class:collapsed={view.collapsed}
+  aria-label={t("video.timeline")}
+  bind:this={root}
+  style:height={view.collapsed ? null : `${height}px`}
+>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="resize"
@@ -697,12 +711,7 @@
     </div>
   {/if}
 
-  <div
-    class="lanes-wrap"
-    class:collapsed={view.collapsed}
-    bind:this={wrap}
-    style:max-height={view.height != null ? `${view.height}px` : null}
-  >
+  <div class="lanes-wrap" class:collapsed={view.collapsed}>
   <div
     class="lanes"
     bind:this={lanes}
@@ -942,6 +951,12 @@
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     font-size: 12px;
     user-select: none;
+    box-sizing: border-box;
+    /* Kleines Fenster: Die Leinwand behält genug Platz. */
+    max-height: 70vh;
+  }
+  .timeline > :not(.lanes-wrap) {
+    flex: none;
   }
   .bar,
   .panel {
@@ -1081,7 +1096,8 @@
     opacity: 1;
   }
   .lanes-wrap {
-    max-height: 40vh;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: thin;

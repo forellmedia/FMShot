@@ -105,6 +105,8 @@ export class VideoPlayer {
   private media: { screen?: HTMLVideoElement; webcam?: HTMLVideoElement; system?: HTMLAudioElement; mic?: HTMLAudioElement } = {};
   private frame = 0;
   private docJson = "";
+  /** Zuletzt gerechnete Szene: unverändert = nichts neu zeichnen. */
+  private sceneJson = "";
   /** Zählt die Exporte; nur der neueste darf den Zustand setzen. */
   private exportToken = 0;
   /** Ebenen beim letzten Abgleich – neue bekommen einen Zeitbereich. */
@@ -135,6 +137,7 @@ export class VideoPlayer {
     this.peaks = { system: null, mic: null };
     this.media = {};
     this.docJson = "";
+    this.sceneJson = "";
     this.knownLayers = new Set();
     await wasmModule();
     this.preview ??= new VideoPreview();
@@ -203,6 +206,7 @@ export class VideoPlayer {
     revoke(this.urls?.system, this.urls?.mic);
     this.urls = null;
     this.docJson = "";
+    this.sceneJson = "";
     this.knownLayers = new Set();
   }
 
@@ -271,12 +275,17 @@ export class VideoPlayer {
       return out;
     };
     const preview = this.preview;
-    this.volume = {
+    // Nur bei Änderung neu setzen: Ein neuer Pfeil ändert das Video-Dokument
+    // (Zeitbereich), aber weder Ton noch Klicks – die Zeitleiste bleibt ruhig.
+    const volume = {
       system: { keys: points(preview.volumeKeys("system")), curve: points(preview.volumeCurve("system")) },
       mic: { keys: points(preview.volumeKeys("mic")), curve: points(preview.volumeCurve("mic")) },
     };
-    this.clicks = Array.from(this.preview.clickTimes());
-    this.clickSources = Array.from(this.preview.clickSources());
+    if (JSON.stringify(volume) !== JSON.stringify($state.snapshot(this.volume))) this.volume = volume;
+    const clicks = Array.from(this.preview.clickTimes());
+    if (!sameNumbers(clicks, this.clicks)) this.clicks = clicks;
+    const clickSources = Array.from(this.preview.clickSources());
+    if (!sameNumbers(clickSources, this.clickSources)) this.clickSources = clickSources;
     this.outputMs = Math.min(this.outputMs, this.durationMs);
     this.updateScene();
   }
@@ -300,24 +309,27 @@ export class VideoPlayer {
     if (!(this.video?.camera_only ? this.cameraSize : this.screenSize)) {
       // Videos noch nicht geladen: wenigstens die Zeit stimmt (Ebenen).
       this.scene = { sourceMs: this.preview.sourceTime(this.outputMs), layers: [] };
+      this.sceneJson = "";
       return;
     }
     const frame = doc.artboard.rect;
     const cam = this.cameraSize ?? [0, 0];
     // Nur Webcam: Es gibt keinen Bildschirm, die Kamera gibt den Takt.
     const screen = this.screenSize ?? [0, 0];
-    this.scene = JSON.parse(
-      this.preview.scene(
-        this.outputMs,
-        frame.width,
-        frame.height,
-        screen[0],
-        screen[1],
-        cam[0],
-        cam[1],
-        CURSOR_POINTS * (doc.pixel_ratio || 1),
-      ),
+    const json = this.preview.scene(
+      this.outputMs,
+      frame.width,
+      frame.height,
+      screen[0],
+      screen[1],
+      cam[0],
+      cam[1],
+      CURSOR_POINTS * (doc.pixel_ratio || 1),
     );
+    // Beim Zeichnen ändert sich jedes Bild das Dokument, die Szene aber nicht.
+    if (json === this.sceneJson) return;
+    this.sceneJson = json;
+    this.scene = JSON.parse(json);
   }
 
   // --- Wiedergabe -------------------------------------------------------------
@@ -532,6 +544,10 @@ async function decodePeaks(bytes: ArrayBuffer): Promise<Peaks | null> {
     console.warn(`Wellenform: ${e}`);
     return null;
   }
+}
+
+function sameNumbers(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function revoke(...urls: (string | null | undefined)[]) {

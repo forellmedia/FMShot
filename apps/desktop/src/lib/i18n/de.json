@@ -571,7 +571,7 @@
   "video.lanes_expand": "Spuren aufklappen",
   "video.lane_solo": "Nur diese Spur zeigen",
   "video.lane_solo_off": "Wieder alle Spuren zeigen",
-  "video.resize_hint": "Ziehen: Höhe ändern · Doppelklick: automatisch",
+  "video.resize_hint": "Ziehen: Höhe ändern · Doppelklick: Standardhöhe",
   "video.track_system": "Ton",
   "video.track_mic": "Mikrofon",
   "video.audio_lane_hint": "Doppelklick: Lautstärke-Punkt · ziehen: verschieben · Rechtsklick: Menü",

@@ -571,7 +571,7 @@
   "video.lanes_expand": "Expand tracks",
   "video.lane_solo": "Show only this track",
   "video.lane_solo_off": "Show all tracks again",
-  "video.resize_hint": "Drag: change height · double-click: automatic",
+  "video.resize_hint": "Drag: change height · double-click: default height",
   "video.track_system": "Sound",
   "video.track_mic": "Microphone",
   "video.audio_lane_hint": "Double-click: volume point · drag: move · right-click: menu",

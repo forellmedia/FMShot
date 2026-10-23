@@ -109,6 +109,9 @@
   /** Video: Die Aufnahme liegt als Video darunter; Ebenen nur in ihrer Zeit. */
   const isVideo = $derived(!!editor.current?.videoPath);
   const videoLayers = $derived(isVideo && editor.doc ? visibleVideoLayers(editor.doc, player.scene.sourceMs) : null);
+  /** Dieselben Ebenen als Text: ändert sich nur, wenn andere sichtbar werden.
+   *  (Die Liste selbst ist nach jeder Änderung am Dokument neu.) */
+  const videoLayersKey = $derived(videoLayers?.join(",") ?? "");
 
   /** Dokument zum Zeichnen: Text in Bearbeitung wird ausgeblendet. */
   function renderDoc(): { doc: Doc; skip: number } {
@@ -201,9 +204,10 @@
     scheduleRender();
   });
 
-  // Video: andere Ebenen sichtbar (Zeit läuft) – alles neu zeichnen.
+  // Video: andere Ebenen sichtbar (Zeit läuft) – alles neu zeichnen. Nicht
+  // bei jedem Bild beim Ziehen, sonst zeichnet jedes Bild alle Ebenen.
   $effect(() => {
-    void videoLayers?.join(",");
+    void videoLayersKey;
     untrack(() => {
       cache.invalidate();
       scheduleRender();
