@@ -19,7 +19,7 @@ jobs:
   # verteilt (so geschehen bei v0.1.0).
   draft:
     name: Release-Entwurf anlegen
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       release-id: ${{ steps.create.outputs.id }}
     steps:
@@ -41,16 +41,20 @@ jobs:
   # so bekommt jede Plattform dieselben Dateien.
   model:
     name: Bildmodell
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          # Kein Python-Projekt mit Lock-Datei – das Modell hat seinen eigenen
+          # Cache darunter.
+          enable-cache: false
+      - uses: actions/cache@v6
         with:
           path: models/siglip2
           key: models-${{ hashFiles('scripts/fetch-model.sh', 'scripts/model/convert.py') }}
       - run: ./scripts/fetch-model.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: siglip2
           path: models/siglip2
@@ -87,7 +91,7 @@ jobs:
             args: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown,${{ matrix.rust-targets }}
@@ -98,7 +102,7 @@ jobs:
       - name: Linux-Abhängigkeiten für Tauri
         if: runner.os == 'Linux'
         run: ./scripts/ci-linux-deps.sh
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -108,7 +112,7 @@ jobs:
         run: npm ci
 
       # Linux vorerst ohne Bildinhalt-Erkennung (ADR 0010), also ohne Modell.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: matrix.models
         with:
           name: siglip2
