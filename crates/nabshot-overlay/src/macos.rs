@@ -45,8 +45,9 @@ pub(crate) mod draw;
 
 use crate::{
     BubbleStyle, DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction,
-    PreviewPlacement, RecordAction, RecordLabels, ScrollAction, Selection, WindowTarget,
-    bubble_resize, points_to_pixels, rect_from_points, window_at,
+    PreviewPlacement, RecordAction, RecordLabels, ScreenGeometry, ScrollAction, Selection,
+    WindowTarget, bubble_resize, intersect, points_to_pixels, rect_from_points, span_result,
+    window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -199,6 +200,67 @@ struct Drag {
 }
 
 impl Session {
+    /// Lage der Monitore für [`span_result`].
+    fn geometry(&self) -> Vec<ScreenGeometry> {
+        self.screens
+            .iter()
+            .map(|st| ScreenGeometry {
+                display_id: st.display_id,
+                origin: st.origin,
+                points_size: st.points_size,
+                pixel_size: st.pixel_size(),
+            })
+            .collect()
+    }
+
+    /// Globaler Punkt, begrenzt auf das Rechteck um alle Monitore.
+    fn clamp_global(&self, p: (f64, f64)) -> (f64, f64) {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for st in &self.screens {
+            x0 = x0.min(st.origin.0);
+            y0 = y0.min(st.origin.1);
+            x1 = x1.max(st.origin.0 + st.points_size.0);
+            y1 = y1.max(st.origin.1 + st.points_size.1);
+        }
+        if x0 > x1 {
+            return p;
+        }
+        (p.0.clamp(x0, x1), p.1.clamp(y0, y1))
+    }
+
+    /// Bereich über Monitore hinweg (globale Punkte): jeder Monitor zeigt
+    /// seinen Teil; Fadenkreuz, Lupe und Grösse dort, wo die Maus ist.
+    fn update_span(&self, rect: Option<(f64, f64, f64, f64)>, pointer: (f64, f64)) {
+        // Grösse des fertigen Bildes: in der höchsten Auflösung der Monitore.
+        let label = rect.map(|r| {
+            let scale = self
+                .screens
+                .iter()
+                .filter(|st| {
+                    intersect(
+                        r,
+                        (st.origin.0, st.origin.1, st.points_size.0, st.points_size.1),
+                    )
+                    .is_some()
+                })
+                .map(|st| st.scale)
+                .fold(1.0_f64, f64::max);
+            format!("{} × {}", (r.2 * scale).round(), (r.3 * scale).round())
+        });
+        for st in &self.screens {
+            let screen = (st.origin.0, st.origin.1, st.points_size.0, st.points_size.1);
+            let local = rect
+                .and_then(|r| intersect(r, screen))
+                .map(|(x, y, w, h)| (x - st.origin.0, y - st.origin.1, w, h));
+            let p = (pointer.0 - st.origin.0, pointer.1 - st.origin.1);
+            let here =
+                p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= st.points_size.0 && p.1 <= st.points_size.1;
+            st.draw_selection(local, label.as_deref().filter(|_| here && local.is_some()));
+            st.update_guides(here.then_some(p));
+            st.update_magnifier(here.then_some(p));
+        }
+    }
+
     /// Beendet das Overlay. Gibt den Rückruf zurück – er wird erst aufgerufen,
     /// wenn kein `borrow` mehr aktiv ist.
     fn finish(&mut self, result: OverlayResult) -> Option<(DoneCallback, OverlayResult)> {
@@ -469,6 +531,15 @@ impl ScreenState {
 
     /// Zeichnet Abdunklung, Rahmen und Grössenanzeige für die Auswahl.
     fn update_selection(&self, rect: Option<(f64, f64, f64, f64)>) {
+        let label = rect.map(|r| {
+            let (_, _, pw, ph) = points_to_pixels(r, self.points_size, self.pixel_size());
+            format!("{pw} × {ph}")
+        });
+        self.draw_selection(rect, label.as_deref());
+    }
+
+    /// Wie [`Self::update_selection`]; `label` = Grössenanzeige oder keine.
+    fn draw_selection(&self, rect: Option<(f64, f64, f64, f64)>, label: Option<&str>) {
         without_animation(|| {
             let full = CGRect::new(
                 CGPoint::new(0.0, 0.0),
@@ -477,7 +548,7 @@ impl ScreenState {
             let dim_path = CGMutablePath::new();
             unsafe { CGMutablePath::add_rect(Some(&dim_path), std::ptr::null(), full) };
             match rect {
-                Some(r @ (x, y, w, h)) => {
+                Some((x, y, w, h)) => {
                     let sel = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
                     unsafe { CGMutablePath::add_rect(Some(&dim_path), std::ptr::null(), sel) };
                     self.border.setPath(Some(&rect_path(CGRect::new(
@@ -485,8 +556,12 @@ impl ScreenState {
                         CGSize::new((w - 1.0).max(0.0), (h - 1.0).max(0.0)),
                     ))));
 
-                    let (_, _, pw, ph) = points_to_pixels(r, self.points_size, self.pixel_size());
-                    let text = NSString::from_str(&format!("{pw} × {ph}"));
+                    let Some(label) = label else {
+                        self.label.setHidden(true);
+                        self.dim.setPath(Some(&dim_path));
+                        return;
+                    };
+                    let text = NSString::from_str(label);
                     unsafe { self.label.setString(Some(as_any(&text))) };
                     let lw = 12.0 + 7.0 * text.length() as f64;
                     let lh = 20.0;
@@ -673,16 +748,25 @@ define_class!(
         fn mouse_dragged(&self, event: &NSEvent) {
             let ivars = self.ivars();
             let s = ivars.session.borrow();
-            if s.mode != OverlayMode::Region {
+            if s.mode == OverlayMode::Window {
                 return;
             }
-            // Ziehen bleibt auf dem Monitor, auf dem es begonnen hat.
+            // Die Ereignisse gehen an den Monitor, auf dem das Ziehen begann –
+            // auch wenn die Maus längst auf einem anderen ist.
             let Some(drag) = s.drag.as_ref().filter(|d| d.screen == ivars.index) else {
                 return;
             };
             let Some(st) = s.screens.get(ivars.index) else {
                 return;
             };
+            if s.mode == OverlayMode::RegionAcrossScreens {
+                let p = self.location(event);
+                let pointer = s.clamp_global((st.origin.0 + p.0, st.origin.1 + p.1));
+                let start = (st.origin.0 + drag.start.0, st.origin.1 + drag.start.1);
+                s.update_span(Some(rect_from_points(start, pointer)), pointer);
+                return;
+            }
+            // Sonst bleibt das Ziehen auf dem Monitor, auf dem es begonnen hat.
             let p = st.clamp(self.location(event));
             st.update_selection(Some(rect_from_points(drag.start, p)));
             st.update_guides(Some(p));
@@ -700,6 +784,18 @@ define_class!(
                     let global = (st.origin.0 + p.0, st.origin.1 + p.1);
                     let id = window_at(&s.windows, global)?.id;
                     return s.finish(OverlayResult::Window(id));
+                }
+                if s.mode == OverlayMode::RegionAcrossScreens {
+                    let pointer = s.clamp_global((st.origin.0 + p.0, st.origin.1 + p.1));
+                    let start = (st.origin.0 + drag.start.0, st.origin.1 + drag.start.1);
+                    let rect = rect_from_points(start, pointer);
+                    if rect.2 < MIN_DRAG_POINTS || rect.3 < MIN_DRAG_POINTS {
+                        // Nur geklickt – Overlay bleibt offen.
+                        s.update_span(None, pointer);
+                        return None;
+                    }
+                    let result = span_result(rect, &s.geometry())?;
+                    return s.finish(result);
                 }
                 let rect = rect_from_points(drag.start, st.clamp(p));
                 if rect.2 < MIN_DRAG_POINTS || rect.3 < MIN_DRAG_POINTS {

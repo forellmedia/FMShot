@@ -137,6 +137,11 @@ pub(crate) fn open(
     windows: Vec<WindowTarget>,
     on_done: DoneCallback,
 ) -> Result<Handle, OverlayError> {
+    // Über Monitore hinweg gibt es hier noch nicht: wie ein gewöhnlicher Bereich.
+    let mode = match mode {
+        OverlayMode::RegionAcrossScreens => OverlayMode::Region,
+        other => other,
+    };
     let _dpi = DpiGuard::new();
     // Ein altes, nie abgeschlossenes Overlay zuerst schliessen.
     if let Some(old) = SESSION.with(|s| s.borrow_mut().take()) {

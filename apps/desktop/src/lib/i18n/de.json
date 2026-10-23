@@ -148,6 +148,8 @@
   "settings.preview_position": "Vorschau erscheint",
   "settings.preview_mouse": "An der Maus",
   "settings.preview_corner": "Unten rechts",
+  "settings.region_across_screens": "Bereich über mehrere Bildschirme aufnehmen",
+  "settings.region_across_screens_hint": "Gilt für Screenshots (Bereich, Text erfassen). Aus: Die Auswahl endet am Rand des Bildschirms, so trifft man ihn genau. Video bleibt immer auf einem Bildschirm.",
   "settings.copy_to_clipboard": "Aufnahme immer sofort in die Zwischenablage legen",
   "settings.scroll_mode": "Scroll-Aufnahme",
   "settings.scroll_manual": "Ich scrolle selbst",

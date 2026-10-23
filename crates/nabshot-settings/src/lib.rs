@@ -237,6 +237,10 @@ pub struct Settings {
     /// Aufnahme immer sofort in die Zwischenablage legen.
     pub copy_to_clipboard: bool,
     pub scroll_mode: ScrollMode,
+    /// Screenshot „Bereich“ (und „Text erfassen“) darf über mehrere Monitore
+    /// gehen. Aus: Das Ziehen endet am Rand des Monitors, auf dem es begann –
+    /// so trifft man den Rand genau. Video bleibt immer auf einem Monitor.
+    pub region_across_screens: bool,
     /// Tastenkürzel im Textformat (`Primary+Shift+2`); leer = keines.
     pub hotkeys: BTreeMap<String, String>,
     /// macOS: ⌘⇧3/4/5 statt der Ausweichkürzel ⌘⌥3/4/5.
@@ -264,6 +268,7 @@ impl Default for Settings {
             preview_position: PreviewPosition::Mouse,
             copy_to_clipboard: true,
             scroll_mode: ScrollMode::Manual,
+            region_across_screens: false,
             hotkeys: BTreeMap::new(),
             replace_mac_system_shortcuts: false,
             auto_export: AutoExport::default(),
@@ -387,6 +392,7 @@ mod tests {
         let s = Settings::load(&tmp.path().join("settings.json")).unwrap();
         assert_eq!(s, Settings::default());
         assert_eq!(s.after_capture, AfterCapture::Editor);
+        assert!(!s.region_across_screens);
     }
 
     #[test]

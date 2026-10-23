@@ -24,8 +24,11 @@ mod windows;
 /// Was im Overlay ausgewählt wird.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayMode {
-    /// Bereich aufziehen.
+    /// Bereich aufziehen – auf dem Monitor, auf dem das Ziehen beginnt.
     Region,
+    /// Bereich aufziehen, auch über mehrere Monitore hinweg (Einstellung;
+    /// bisher nur macOS, sonst wie [`OverlayMode::Region`]).
+    RegionAcrossScreens,
     /// Fenster unter der Maus hervorheben, Klick wählt es.
     Window,
 }
@@ -48,9 +51,33 @@ pub struct Selection {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Teil eines Bereichs über mehrere Monitore: Ausschnitt eines Monitors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpanPart {
+    pub display_id: u32,
+    /// Ausschnitt in physischen Pixeln des Monitors.
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Lage im ganzen Bereich in Punkten (oben links = 0, 0).
+    pub dest: (f64, f64),
+    /// Grösse im ganzen Bereich in Punkten.
+    pub dest_size: (f64, f64),
+}
+
+/// Bereich über mehrere Monitore; Grösse in Punkten.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpanSelection {
+    pub size: (f64, f64),
+    pub parts: Vec<SpanPart>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum OverlayResult {
     Selected(Selection),
+    /// Bereich über mehrere Monitore ([`OverlayMode::RegionAcrossScreens`]).
+    Spanned(SpanSelection),
     /// Fenster-Modus: dieses Fenster wurde angeklickt.
     Window(u32),
     Cancelled,
@@ -128,6 +155,12 @@ pub fn open(
                 s.x,
                 s.y,
                 s.display_id
+            ),
+            OverlayResult::Spanned(s) => log::info!(
+                "Overlay: Bereich {:.0}×{:.0} Punkte über {} Monitore gewählt nach {ms} ms",
+                s.size.0,
+                s.size.1,
+                s.parts.len()
             ),
             OverlayResult::Window(id) => {
                 log::info!("Overlay: Fenster {id} gewählt nach {ms} ms")
@@ -523,6 +556,66 @@ pub fn points_to_pixels(
     (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
 }
 
+/// Schnitt zweier Rechtecke `(x, y, w, h)`; `None`, wenn sie sich nicht
+/// überlappen.
+pub fn intersect(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> Option<(f64, f64, f64, f64)> {
+    let x0 = a.0.max(b.0);
+    let y0 = a.1.max(b.1);
+    let x1 = (a.0 + a.2).min(b.0 + b.2);
+    let y1 = (a.1 + a.3).min(b.1 + b.3);
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+}
+
+/// Ein Monitor, wie ihn die Bereichsauswahl über Monitore hinweg braucht.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenGeometry {
+    pub display_id: u32,
+    /// Ursprung und Grösse in globalen Punkten (oben links).
+    pub origin: (f64, f64),
+    pub points_size: (f64, f64),
+    pub pixel_size: (u32, u32),
+}
+
+/// Bereich in globalen Punkten → Teile je Monitor. Liegt er ganz auf einem
+/// Monitor, ist das Ergebnis eine gewöhnliche [`Selection`].
+pub fn span_result(
+    rect: (f64, f64, f64, f64),
+    screens: &[ScreenGeometry],
+) -> Option<OverlayResult> {
+    let parts: Vec<SpanPart> = screens
+        .iter()
+        .filter_map(|sc| {
+            let screen = (sc.origin.0, sc.origin.1, sc.points_size.0, sc.points_size.1);
+            let (ix, iy, iw, ih) = intersect(rect, screen)?;
+            let local = (ix - sc.origin.0, iy - sc.origin.1, iw, ih);
+            let (x, y, width, height) = points_to_pixels(local, sc.points_size, sc.pixel_size);
+            (width > 0 && height > 0).then_some(SpanPart {
+                display_id: sc.display_id,
+                x,
+                y,
+                width,
+                height,
+                dest: (ix - rect.0, iy - rect.1),
+                dest_size: (iw, ih),
+            })
+        })
+        .collect();
+    match parts.as_slice() {
+        [] => None,
+        [one] => Some(OverlayResult::Selected(Selection {
+            display_id: one.display_id,
+            x: one.x,
+            y: one.y,
+            width: one.width,
+            height: one.height,
+        })),
+        _ => Some(OverlayResult::Spanned(SpanSelection {
+            size: (rect.2, rect.3),
+            parts,
+        })),
+    }
+}
+
 /// Normalisiert ein Rechteck aus zwei Eckpunkten (Ziehen in jede Richtung).
 pub fn rect_from_points(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
     let x = a.0.min(b.0);
@@ -541,6 +634,75 @@ pub fn window_at(windows: &[WindowTarget], p: (f64, f64)) -> Option<&WindowTarge
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn two_screens() -> Vec<ScreenGeometry> {
+        vec![
+            ScreenGeometry {
+                display_id: 1,
+                origin: (0.0, 0.0),
+                points_size: (100.0, 80.0),
+                pixel_size: (200, 160),
+            },
+            // Rechts daneben, 20 Punkte tiefer, ohne Retina.
+            ScreenGeometry {
+                display_id: 2,
+                origin: (100.0, 20.0),
+                points_size: (120.0, 90.0),
+                pixel_size: (120, 90),
+            },
+        ]
+    }
+
+    #[test]
+    fn bereich_auf_einem_monitor_bleibt_gewoehnliche_auswahl() {
+        let r = span_result((10.0, 10.0, 50.0, 30.0), &two_screens());
+        assert_eq!(
+            r,
+            Some(OverlayResult::Selected(Selection {
+                display_id: 1,
+                x: 20,
+                y: 20,
+                width: 100,
+                height: 60
+            }))
+        );
+    }
+
+    #[test]
+    fn bereich_ueber_zwei_monitore_wird_geteilt() {
+        let Some(OverlayResult::Spanned(s)) = span_result((80.0, 30.0, 40.0, 20.0), &two_screens())
+        else {
+            panic!("Bereich über zwei Monitore erwartet");
+        };
+        assert_eq!(s.size, (40.0, 20.0));
+        assert_eq!(s.parts.len(), 2);
+        let left = s.parts[0];
+        assert_eq!(
+            (left.display_id, left.x, left.y, left.width, left.height),
+            (1, 160, 60, 40, 40)
+        );
+        assert_eq!((left.dest, left.dest_size), ((0.0, 0.0), (20.0, 20.0)));
+        let right = s.parts[1];
+        assert_eq!(
+            (
+                right.display_id,
+                right.x,
+                right.y,
+                right.width,
+                right.height
+            ),
+            (2, 0, 10, 20, 20)
+        );
+        assert_eq!((right.dest, right.dest_size), ((20.0, 0.0), (20.0, 20.0)));
+    }
+
+    #[test]
+    fn bereich_ausserhalb_aller_monitore_ist_nichts() {
+        assert_eq!(
+            span_result((500.0, 500.0, 10.0, 10.0), &two_screens()),
+            None
+        );
+    }
 
     #[test]
     fn retina_punkte_werden_doppelte_pixel() {

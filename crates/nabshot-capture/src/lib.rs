@@ -167,6 +167,73 @@ pub trait ScreenCapturer: Send + Sync {
     }
 }
 
+/// Ausschnitt eines Monitors in einem Bereich über mehrere Monitore.
+pub struct SpanPiece<'a> {
+    /// Ganzes Bild des Monitors.
+    pub image: &'a RgbaImage,
+    /// Ausschnitt daraus.
+    pub src: PixelRect,
+    /// Lage und Grösse im ganzen Bereich in Punkten.
+    pub dest: (f64, f64),
+    pub dest_size: (f64, f64),
+    /// Massstab des Monitors (Pixel pro Punkt).
+    pub scale: f32,
+}
+
+/// Setzt einen Bereich über mehrere Monitore zu einem Bild zusammen – in
+/// der höchsten Auflösung der beteiligten Monitore; Teile von Monitoren mit
+/// weniger Pixeln werden hochgerechnet. Stellen ohne Monitor (versetzte oder
+/// verschieden hohe Monitore) bleiben durchsichtig. Gibt Bild und Massstab
+/// zurück; `None` ohne Teile.
+pub fn compose_span(size: (f64, f64), pieces: &[SpanPiece<'_>]) -> Option<(RgbaImage, f32)> {
+    let scale = pieces.iter().map(|p| p.scale).fold(0.0_f32, f32::max);
+    if pieces.is_empty() || scale <= 0.0 {
+        return None;
+    }
+    let s = scale as f64;
+    let (out_w, out_h) = ((size.0 * s).round() as u32, (size.1 * s).round() as u32);
+    if out_w == 0 || out_h == 0 {
+        return None;
+    }
+    let mut out = vec![0u8; out_w as usize * out_h as usize * 4];
+    for piece in pieces {
+        let src = piece.src;
+        let Some(crop) = piece.image.crop(src.x, src.y, src.width, src.height) else {
+            log::warn!(
+                "Bereich über Monitore: Ausschnitt {}×{} bei {},{} liegt ausserhalb",
+                src.width,
+                src.height,
+                src.x,
+                src.y
+            );
+            continue;
+        };
+        let x0 = (piece.dest.0 * s).round().max(0.0) as u32;
+        let y0 = (piece.dest.1 * s).round().max(0.0) as u32;
+        let x1 = (((piece.dest.0 + piece.dest_size.0) * s).round() as u32).min(out_w);
+        let y1 = (((piece.dest.1 + piece.dest_size.1) * s).round() as u32).min(out_h);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        let (dw, dh) = (x1 - x0, y1 - y0);
+        let data = crop.data();
+        // Nächster Nachbar: bei gleichem Massstab eine reine Kopie, bei 1× → 2×
+        // ein verdoppeltes Pixel.
+        for y in 0..dh {
+            let sy = ((y as u64 * crop.height() as u64) / dh as u64) as usize;
+            let row = (y0 + y) as usize * out_w as usize;
+            for x in 0..dw {
+                let sx = ((x as u64 * crop.width() as u64) / dw as u64) as usize;
+                let from = (sy * crop.width() as usize + sx) * 4;
+                let to = (row + (x0 + x) as usize) * 4;
+                out[to..to + 4].copy_from_slice(&data[from..from + 4]);
+            }
+        }
+    }
+    let image = RgbaImage::new(out_w, out_h, out).ok()?;
+    Some((image, scale))
+}
+
 /// Monitor, auf dem der Punkt liegt (globale Punkte).
 pub fn display_at(displays: &[Display], p: (f32, f32)) -> Option<&Display> {
     displays.iter().find(|d| {
@@ -230,6 +297,52 @@ pub fn platform_capturer() -> Box<dyn ScreenCapturer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bereich_ueber_zwei_monitore_wird_zusammengesetzt() {
+        // Links Retina (rot), rechts 1× (blau), rechts 10 Punkte tiefer.
+        let left = RgbaImage::filled(40, 40, [255, 0, 0, 255]);
+        let right = RgbaImage::filled(20, 20, [0, 0, 255, 255]);
+        let pieces = [
+            SpanPiece {
+                image: &left,
+                src: PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 40,
+                },
+                dest: (0.0, 0.0),
+                dest_size: (20.0, 20.0),
+                scale: 2.0,
+            },
+            SpanPiece {
+                image: &right,
+                src: PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 20,
+                    height: 10,
+                },
+                dest: (20.0, 10.0),
+                dest_size: (20.0, 10.0),
+                scale: 1.0,
+            },
+        ];
+        let (img, scale) = compose_span((40.0, 20.0), &pieces).unwrap();
+        assert_eq!(scale, 2.0);
+        assert_eq!((img.width(), img.height()), (80, 40));
+        assert_eq!(img.pixel(10, 10), Some([255, 0, 0, 255]));
+        // Rechts unten: hochgerechnetes Blau.
+        assert_eq!(img.pixel(70, 30), Some([0, 0, 255, 255]));
+        // Rechts oben: kein Monitor – durchsichtig.
+        assert_eq!(img.pixel(70, 5), Some([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn ohne_teile_kein_bild() {
+        assert!(compose_span((10.0, 10.0), &[]).is_none());
+    }
 
     fn display(id: u32, x: f32) -> Display {
         Display {

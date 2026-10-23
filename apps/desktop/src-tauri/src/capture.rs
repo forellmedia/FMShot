@@ -14,10 +14,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use nabshot_capture::{Frame, OwnWindows, PrivacyPane, ScreenCapturer, display_at};
+use nabshot_capture::{
+    Frame, OwnWindows, PixelRect, PrivacyPane, ScreenCapturer, SpanPiece, compose_span, display_at,
+};
 use nabshot_core::RgbaImage;
 use nabshot_library::{CaptureRecord, Library, NewCapture};
-use nabshot_overlay::{OverlayHandle, OverlayMode, OverlayResult, Selection, WindowTarget};
+use nabshot_overlay::{
+    OverlayHandle, OverlayMode, OverlayResult, Selection, SpanSelection, WindowTarget,
+};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -96,8 +100,14 @@ thread_local! {
 #[derive(Default)]
 struct Pending {
     frames: Option<Vec<Frame>>,
-    selection: Option<Selection>,
+    selection: Option<Chosen>,
     finished: bool,
+}
+
+/// Gewählter Bereich: auf einem Monitor oder über mehrere.
+enum Chosen {
+    One(Selection),
+    Span(SpanSelection),
 }
 
 /// Startet eine Aufnahme ohne die Fenster von Nabshot. Kehrt sofort zurück.
@@ -195,15 +205,29 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
 
     // 1. Overlay sofort öffnen (Haupt-Thread).
     let (app_main, pending_main) = (app.clone(), pending.clone());
+    // Über Monitore hinweg nur auf Wunsch und nur für Screenshots: Scroll-
+    // Aufnahmen bleiben auf einem Monitor.
+    let overlay_mode = if matches!(mode, Mode::Region | Mode::Text)
+        && crate::settings::get(app).region_across_screens
+    {
+        OverlayMode::RegionAcrossScreens
+    } else {
+        OverlayMode::Region
+    };
     let opened = app.run_on_main_thread(move || {
         let (app_done, pending_done) = (app_main.clone(), pending_main.clone());
         let result = nabshot_overlay::open(
-            OverlayMode::Region,
+            overlay_mode,
             Vec::new(),
             Box::new(move |result| {
                 OVERLAY.with(|o| o.borrow_mut().take());
-                match result {
-                    OverlayResult::Selected(sel) => {
+                let chosen = match result {
+                    OverlayResult::Selected(sel) => Ok(Chosen::One(sel)),
+                    OverlayResult::Spanned(span) => Ok(Chosen::Span(span)),
+                    other => Err(other),
+                };
+                match chosen {
+                    Ok(chosen) => {
                         log::debug!(
                             "Bereich gewählt nach {:.0} ms",
                             started.elapsed().as_secs_f64() * 1000.0
@@ -211,10 +235,10 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                         pending_done
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .selection = Some(sel);
+                            .selection = Some(chosen);
                         try_finish_region(&app_done, &pending_done, mode, started);
                     }
-                    other => {
+                    Err(other) => {
                         log::info!("Auswahl beendet ohne Bereich: {other:?}");
                         pending_done
                             .lock()
@@ -316,7 +340,14 @@ fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode,
         (p.frames.take().unwrap_or_default(), p.selection.take())
     };
     release(app);
-    let Some(sel) = sel else { return };
+    let sel = match sel {
+        Some(Chosen::One(sel)) => sel,
+        Some(Chosen::Span(span)) => {
+            finish_span(app, mode, &frames, &span, started);
+            return;
+        }
+        None => return,
+    };
     let Some(frame) = frames.into_iter().find(|f| f.display_id == sel.display_id) else {
         log::warn!("Kein Bild für Monitor {} der Auswahl", sel.display_id);
         return;
@@ -348,6 +379,55 @@ fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode,
         recognize_and_copy(app, image);
     } else {
         finish(app, mode, image, frame.scale_factor, started);
+    }
+}
+
+/// Bereich über mehrere Monitore: Teile zu einem Bild zusammensetzen.
+fn finish_span(
+    app: &AppHandle,
+    mode: Mode,
+    frames: &[Frame],
+    span: &SpanSelection,
+    started: Instant,
+) {
+    let pieces: Vec<SpanPiece<'_>> = span
+        .parts
+        .iter()
+        .filter_map(|part| {
+            let frame = frames.iter().find(|f| f.display_id == part.display_id);
+            if frame.is_none() {
+                log::warn!("Kein Bild für Monitor {} der Auswahl", part.display_id);
+            }
+            frame.map(|f| SpanPiece {
+                image: &f.image,
+                src: PixelRect {
+                    x: part.x,
+                    y: part.y,
+                    width: part.width,
+                    height: part.height,
+                },
+                dest: part.dest,
+                dest_size: part.dest_size,
+                scale: f.scale_factor,
+            })
+        })
+        .collect();
+    let compose_started = Instant::now();
+    let Some((image, scale)) = compose_span(span.size, &pieces) else {
+        log::warn!("Bereich über Monitore: kein Bild");
+        return;
+    };
+    log::info!(
+        "Bereich über {} Monitore: {}×{}, Massstab {scale}, zusammengesetzt in {:.0} ms",
+        pieces.len(),
+        image.width(),
+        image.height(),
+        compose_started.elapsed().as_secs_f64() * 1000.0
+    );
+    if mode == Mode::Text {
+        recognize_and_copy(app, image);
+    } else {
+        finish(app, mode, image, scale, started);
     }
 }
 

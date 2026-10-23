@@ -576,6 +576,12 @@ export type Settings = {
 	/**  Aufnahme immer sofort in die Zwischenablage legen. */
 	copy_to_clipboard?: boolean,
 	scroll_mode?: ScrollMode,
+	/**
+	 *  Screenshot „Bereich“ (und „Text erfassen“) darf über mehrere Monitore
+	 *  gehen. Aus: Das Ziehen endet am Rand des Monitors, auf dem es begann –
+	 *  so trifft man den Rand genau. Video bleibt immer auf einem Monitor.
+	 */
+	region_across_screens?: boolean,
 	/**  Tastenkürzel im Textformat (`Primary+Shift+2`); leer = keines. */
 	hotkeys?: { [key in string]: string },
 	/**  macOS: ⌘⇧3/4/5 statt der Ausweichkürzel ⌘⌥3/4/5. */

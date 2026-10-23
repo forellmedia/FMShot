@@ -230,6 +230,13 @@
               <option value="auto">{t("settings.scroll_auto")}</option>
             </select>
           </label>
+          {#if isMac}
+            <label class="row check">
+              <input type="checkbox" bind:checked={settings.region_across_screens} onchange={save} />
+              <span>{t("settings.region_across_screens")}</span>
+            </label>
+            <p class="hint">{t("settings.region_across_screens_hint")}</p>
+          {/if}
         {:else if tab === "hotkeys"}
           <p class="hint">{t("settings.hotkeys_hint", { backspace: formatShortcut("Backspace") })}</p>
           {#each hotkeys as hk (hk.action)}

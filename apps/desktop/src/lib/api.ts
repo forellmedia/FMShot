@@ -249,6 +249,7 @@ const mock = (() => {
     settings: {
       language: null,
       after_capture: "editor",
+      region_across_screens: false,
       preview_position: "mouse",
       copy_to_clipboard: true,
       scroll_mode: "manual",

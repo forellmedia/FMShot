@@ -148,6 +148,8 @@
   "settings.preview_position": "Preview appears",
   "settings.preview_mouse": "At the mouse",
   "settings.preview_corner": "Bottom right",
+  "settings.region_across_screens": "Select regions across multiple screens",
+  "settings.region_across_screens_hint": "Applies to screenshots (region, capture text). Off: the selection stops at the screen edge, so you hit it exactly. Video always stays on one screen.",
   "settings.copy_to_clipboard": "Always copy captures to the clipboard right away",
   "settings.scroll_mode": "Scrolling capture",
   "settings.scroll_manual": "I scroll myself",

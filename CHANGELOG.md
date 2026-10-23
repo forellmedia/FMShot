@@ -2,6 +2,12 @@
 
 ## Unveröffentlicht
 
+**Neu**
+- **Bereich über mehrere Bildschirme** (Einstellungen → Allgemein, macOS,
+  standardmässig aus): Screenshot „Bereich“ und „Text erfassen“ dürfen über
+  den Rand auf den nächsten Bildschirm gehen; die Teile werden zu einem Bild
+  zusammengesetzt. Video bleibt auf einem Bildschirm.
+
 **Verbessert**
 - Nach der Aufnahme öffnet sich standardmässig der Editor (bisher die
   Vorschau). Wer die Einstellung schon geändert hat, behält seine Wahl.
