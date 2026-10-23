@@ -576,6 +576,36 @@ pub struct ScreenGeometry {
     pub pixel_size: (u32, u32),
 }
 
+/// Reichweite des Magneten an Monitorrändern (Punkte), siehe [`magnet`].
+pub const MAGNET_POINTS: f64 = 12.0;
+
+/// Über Monitore hinweg: Liegt der Punkt höchstens `reach` vor oder hinter
+/// einer Kante eines Monitors, klebt er an ihr. So trifft man den Rand bzw.
+/// die Ecke eines Monitors genau und muss etwas weiter ziehen, um auf den
+/// nächsten zu kommen.
+pub fn magnet(p: (f64, f64), screens: &[ScreenGeometry], reach: f64) -> (f64, f64) {
+    let snap = |v: f64, edges: &mut dyn Iterator<Item = f64>| {
+        edges
+            .map(|e| (e, (v - e).abs()))
+            .filter(|(_, d)| *d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or(v, |(e, _)| e)
+    };
+    let x = snap(
+        p.0,
+        &mut screens
+            .iter()
+            .flat_map(|s| [s.origin.0, s.origin.0 + s.points_size.0]),
+    );
+    let y = snap(
+        p.1,
+        &mut screens
+            .iter()
+            .flat_map(|s| [s.origin.1, s.origin.1 + s.points_size.1]),
+    );
+    (x, y)
+}
+
 /// Bereich in globalen Punkten → Teile je Monitor. Liegt er ganz auf einem
 /// Monitor, ist das Ergebnis eine gewöhnliche [`Selection`].
 pub fn span_result(
@@ -694,6 +724,23 @@ mod tests {
             (2, 0, 10, 20, 20)
         );
         assert_eq!((right.dest, right.dest_size), ((20.0, 0.0), (20.0, 20.0)));
+    }
+
+    #[test]
+    fn magnet_haelt_an_der_kante_zwischen_monitoren() {
+        let screens = two_screens();
+        // Knapp über die Kante bei x = 100 hinaus: bleibt an der Kante.
+        assert_eq!(
+            magnet((108.0, 50.0), &screens, MAGNET_POINTS),
+            (100.0, 50.0)
+        );
+        // Kurz davor: springt auf die Kante (und die Unterkante bei y = 80).
+        assert_eq!(magnet((95.0, 76.0), &screens, MAGNET_POINTS), (100.0, 80.0));
+        // Weit genug drüben: frei.
+        assert_eq!(
+            magnet((130.0, 50.0), &screens, MAGNET_POINTS),
+            (130.0, 50.0)
+        );
     }
 
     #[test]

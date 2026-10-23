@@ -9,7 +9,7 @@
 //! Das Panel ist zuerst durchsichtig (laufender Bildschirm darunter) und zeigt
 //! das eingefrorene Bild, sobald [`Handle::set_frozen`] es liefert.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
@@ -44,10 +44,10 @@ use objc2_quartz_core::{
 pub(crate) mod draw;
 
 use crate::{
-    BubbleStyle, DoneCallback, OverlayError, OverlayMode, OverlayResult, PreviewAction,
-    PreviewPlacement, RecordAction, RecordLabels, ScreenGeometry, ScrollAction, Selection,
-    WindowTarget, bubble_resize, intersect, points_to_pixels, rect_from_points, span_result,
-    window_at,
+    BubbleStyle, DoneCallback, MAGNET_POINTS, OverlayError, OverlayMode, OverlayResult,
+    PreviewAction, PreviewPlacement, RecordAction, RecordLabels, ScreenGeometry, ScrollAction,
+    Selection, WindowTarget, bubble_resize, intersect, magnet, points_to_pixels, rect_from_points,
+    span_result, window_at,
 };
 
 /// Escape-Taste (virtueller Tastencode).
@@ -213,6 +213,12 @@ impl Session {
             .collect()
     }
 
+    /// Mausposition beim Ziehen über Monitore: im Rechteck um alle Monitore,
+    /// an Monitorrändern magnetisch.
+    fn drag_point(&self, p: (f64, f64)) -> (f64, f64) {
+        magnet(self.clamp_global(p), &self.geometry(), MAGNET_POINTS)
+    }
+
     /// Globaler Punkt, begrenzt auf das Rechteck um alle Monitore.
     fn clamp_global(&self, p: (f64, f64)) -> (f64, f64) {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -255,9 +261,19 @@ impl Session {
             let p = (pointer.0 - st.origin.0, pointer.1 - st.origin.1);
             let here =
                 p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= st.points_size.0 && p.1 <= st.points_size.1;
-            st.draw_selection(local, label.as_deref().filter(|_| here && local.is_some()));
-            st.update_guides(here.then_some(p));
-            st.update_magnifier(here.then_some(p));
+            let shown = (local, label.clone().filter(|_| here && local.is_some()));
+            // Nur neu zeichnen, was sich ändert: Die Abdunklung eines grossen
+            // Monitors (6K) bei jeder Mausbewegung neu zu rastern, liess die
+            // Maus stocken.
+            if st.span_drawn.borrow().as_ref() != Some(&shown) {
+                st.draw_selection(shown.0, shown.1.as_deref());
+                *st.span_drawn.borrow_mut() = Some(shown);
+            }
+            if here || st.span_pointer.replace(false) {
+                st.update_guides(here.then_some(p));
+                st.update_magnifier(here.then_some(p));
+                st.span_pointer.set(here);
+            }
         }
     }
 
@@ -296,6 +312,9 @@ fn with_session(
     }
 }
 
+/// Teil der Auswahl auf einem Monitor (Punkte) und Grössenanzeige.
+type SpanDrawn = (Option<(f64, f64, f64, f64)>, Option<String>);
+
 struct ScreenState {
     display_id: u32,
     /// Ursprung des Monitors in globalen Punkten (oben links).
@@ -314,6 +333,10 @@ struct ScreenState {
     magnifier: Retained<CALayer>,
     magnifier_image: Retained<CALayer>,
     frozen: RefCell<bool>,
+    /// Über Monitore hinweg: zuletzt gezeichneter Teil der Auswahl und
+    /// Grössenanzeige, und ob die Maus zuletzt hier war.
+    span_drawn: RefCell<Option<SpanDrawn>>,
+    span_pointer: Cell<bool>,
 }
 
 impl ScreenState {
@@ -443,6 +466,8 @@ impl ScreenState {
             magnifier,
             magnifier_image,
             frozen: RefCell::new(false),
+            span_drawn: RefCell::new(None),
+            span_pointer: Cell::new(false),
         };
         state.update_selection(None);
         state
@@ -761,8 +786,8 @@ define_class!(
             };
             if s.mode == OverlayMode::RegionAcrossScreens {
                 let p = self.location(event);
-                let pointer = s.clamp_global((st.origin.0 + p.0, st.origin.1 + p.1));
-                let start = (st.origin.0 + drag.start.0, st.origin.1 + drag.start.1);
+                let pointer = s.drag_point((st.origin.0 + p.0, st.origin.1 + p.1));
+                let start = s.drag_point((st.origin.0 + drag.start.0, st.origin.1 + drag.start.1));
                 s.update_span(Some(rect_from_points(start, pointer)), pointer);
                 return;
             }
@@ -786,8 +811,8 @@ define_class!(
                     return s.finish(OverlayResult::Window(id));
                 }
                 if s.mode == OverlayMode::RegionAcrossScreens {
-                    let pointer = s.clamp_global((st.origin.0 + p.0, st.origin.1 + p.1));
-                    let start = (st.origin.0 + drag.start.0, st.origin.1 + drag.start.1);
+                    let pointer = s.drag_point((st.origin.0 + p.0, st.origin.1 + p.1));
+                    let start = s.drag_point((st.origin.0 + drag.start.0, st.origin.1 + drag.start.1));
                     let rect = rect_from_points(start, pointer);
                     if rect.2 < MIN_DRAG_POINTS || rect.3 < MIN_DRAG_POINTS {
                         // Nur geklickt – Overlay bleibt offen.
