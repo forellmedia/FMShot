@@ -166,7 +166,8 @@
   {@const title = t("tray.shutter", { shortcut: shortcut(hotkey) })}
   <button class="shutter" {title} aria-label={title} onclick={() => api.startCapture(mode)}>
     <span class="disc"></span>
-    <kbd>{shortcut(hotkey)}</kbd>
+    <!-- Lange Kürzel („Strg+Umschalt+6“) brechen nach dem „+“ um. -->
+    <kbd>{shortcut(hotkey).replaceAll("+", "+\u200b")}</kbd>
   </button>
 {/snippet}
 
@@ -617,12 +618,16 @@
     color: var(--text);
   }
 
-  /* Innen statt aussen verstärkt: Der Rand bleibt innerhalb des Knopfs und
-     wird vom scrollenden Bereich nicht abgeschnitten. */
+  /* Gewählt wie die Chips darunter: getönte Fläche und farbiger Rand – auch
+     ohne Glas (Windows, Linux) gut zu sehen. Der Rand bleibt innerhalb des
+     Knopfs und wird vom scrollenden Bereich nicht abgeschnitten. */
   .targets button.on {
-    background: var(--glass-strong);
-    color: var(--active);
-    box-shadow: 0 4px 12px rgb(30 40 90 / 0.12);
+    border-color: color-mix(in srgb, var(--active) 35%, transparent);
+    background: color-mix(in srgb, var(--active) 14%, transparent);
+    color: color-mix(in srgb, var(--active) 75%, var(--text));
+  }
+  .targets button.on:hover {
+    background: color-mix(in srgb, var(--active) 22%, transparent);
   }
 
   /* Runder Auslöser wie an einer Kamera: roter Kern im Ring. */
@@ -673,7 +678,12 @@
 
   .shutter kbd {
     margin: 0;
+    max-width: 100%;
     font-size: 11px;
+    line-height: 1.25;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .chips {

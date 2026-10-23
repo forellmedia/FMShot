@@ -114,6 +114,14 @@
     await api.pauseHotkeys(false);
   }
 
+  /** Kürzel ganz entfernen: Die Funktion gibt es dann nur noch im Menü. */
+  async function clearHotkey(action: string) {
+    if (!settings) return;
+    if (recording === action) await stopRecording();
+    settings.hotkeys = { ...settings.hotkeys, [action]: "" };
+    await save();
+  }
+
   async function resetHotkey(action: string) {
     if (!settings) return;
     const copy = { ...settings.hotkeys };
@@ -237,6 +245,17 @@
                   onblur={() => recording === hk.action && stopRecording()}
                 >
                   {recording === hk.action ? t("settings.press_keys") : hk.label || t("settings.none")}
+                </button>
+                <!-- Ohne Kürzel unsichtbar, damit die Spalten bündig bleiben. -->
+                <button
+                  class="clear"
+                  class:gone={!hk.label}
+                  disabled={!hk.label}
+                  title={t("settings.remove_hotkey")}
+                  aria-label={t("settings.remove_hotkey")}
+                  onclick={() => clearHotkey(hk.action)}
+                >
+                  ✕
                 </button>
                 <button class="link" onclick={() => resetHotkey(hk.action)}>{t("settings.reset")}</button>
               </div>
@@ -644,6 +663,25 @@
     color: var(--text);
     font: inherit;
     cursor: pointer;
+  }
+  .clear {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .clear:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .clear.gone {
+    visibility: hidden;
   }
   .key.rec {
     border-color: var(--selection);

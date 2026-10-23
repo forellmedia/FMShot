@@ -5,6 +5,11 @@
 **Verbessert**
 - Nach der Aufnahme öffnet sich standardmässig der Editor (bisher die
   Vorschau). Wer die Einstellung schon geändert hat, behält seine Wahl.
+- Tastenkürzel lassen sich mit ✕ ganz entfernen; die Funktion bleibt im
+  Menü. „Pause / Weiter“ zeigt, dass dasselbe Kürzel die Aufnahme fortsetzt.
+- Tray: Das gewählte Ziel (Bereich, Fenster, Vollbild) ist auch unter
+  Windows und Linux deutlich markiert, lange Kürzel unter dem Auslöser
+  brechen um statt abgeschnitten zu werden.
 
 ## 0.2.0-beta.3
 
