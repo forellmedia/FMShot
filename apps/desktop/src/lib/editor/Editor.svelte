@@ -328,7 +328,10 @@
   .editor > :global(.timeline) {
     grid-column: 1;
   }
+  /* Über der Leinwand, damit Aufklappmenüs der Kapseln darüber liegen. */
   header {
+    position: relative;
+    z-index: 10;
     grid-column: 1;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -369,9 +372,23 @@
     gap: 2px;
     padding: 3px;
     border-radius: 999px;
-    background: var(--glass);
+    position: relative;
+    isolation: isolate;
     border: 1px solid var(--glass-edge);
     box-shadow: var(--glass-shadow);
+  }
+  /* Unschärfe auf einer eigenen Ebene: `backdrop-filter` direkt auf der Kapsel
+     machte sie zum Bezugsrahmen für `position: fixed` – die Aufklappmenüs
+     darin wären abgeschnitten. */
+  .capture::before,
+  .actions::before,
+  header :global(.props)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--glass);
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
   }

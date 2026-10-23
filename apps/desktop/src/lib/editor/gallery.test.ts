@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByDay, periodRange, startOfDay } from "./gallery";
+import { fitInRow, groupByDay, periodRange, startOfDay } from "./gallery";
 
 // Freitag, 16. Oktober 2026, 15:30 Ortszeit.
 const now = new Date(2026, 9, 16, 15, 30).getTime();
@@ -31,5 +31,22 @@ describe("Nach Tagen gruppieren", () => {
       ["Donnerstag, 1. Oktober 2026", 1],
     ]);
     expect(groups[0].key).toBe(String(startOfDay(now)));
+  });
+});
+
+describe("Filter in einer Zeile", () => {
+  const w = [40, 100, 100, 100, 100];
+
+  it("alle, wenn sie passen", () => {
+    expect(fitInRow(w, 500, 6, 60)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("sonst so viele, dass „Mehr…“ daneben passt", () => {
+    // 40 + 6 + 100 + 6 + 100 = 252; dazu 6 + 60 = 318 ≤ 330
+    expect(fitInRow(w, 330, 6, 60)).toEqual([0, 1, 2]);
+  });
+
+  it("der gewählte Filter bleibt sichtbar", () => {
+    expect(fitInRow(w, 330, 6, 60, 4)).toEqual([0, 1, 4]);
   });
 });

@@ -7,7 +7,7 @@
   import { api, fileUrl, on, type CaptureInfo, type ContentSearchStatus, type GalleryItem, type GalleryResult } from "$lib/api";
   import { locale, t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
-  import { groupByDay, periodRange, PERIODS, type Period } from "./gallery";
+  import { fitInRow, groupByDay, periodRange, PERIODS, type Period } from "./gallery";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
   import StorageMeter from "./StorageMeter.svelte";
@@ -25,6 +25,35 @@
   let oldestFirst = $state(false);
   let filter = $state<string | null>(null);
   let filters = $state<GalleryResult["groups"]>([]);
+  /** Schnellfilter alle zeigen (umbrechend) oder nur eine Zeile mit „Mehr…“. */
+  let filtersOpen = $state(false);
+  let chipsWidth = $state(0);
+  let measure = $state<HTMLElement>();
+  /** Indizes der Filter, die eingeklappt in die Zeile passen. */
+  let fitting = $state<number[] | null>(null);
+
+  const chips = $derived([
+    { key: "", label: t("gallery.groups.all"), count: null as number | null, on: filter === null, pick: () => (filter = null) },
+    ...filters.map((f) => ({
+      key: f.group,
+      label: t(`group.${f.group}` as MessageKey),
+      count: f.count as number | null,
+      on: filter === f.group,
+      pick: () => (filter = filter === f.group ? null : f.group),
+    })),
+  ]);
+  const overflow = $derived(fitting != null && fitting.length < chips.length);
+
+  // Breiten aus der unsichtbaren Messzeile: so viele Filter, wie mit
+  // „Mehr…“ in eine Zeile passen; der gewählte bleibt immer dabei.
+  $effect(() => {
+    void chips;
+    if (!measure || chipsWidth <= 0) return;
+    const widths = [...measure.children].map((el) => (el as HTMLElement).offsetWidth);
+    const more = widths.pop() ?? 0;
+    const keep = chips.findIndex((c) => c.on);
+    fitting = fitInRow(widths, chipsWidth, 6, more, keep < 0 ? null : keep);
+  });
   let status = $state<ContentSearchStatus | null>(null);
   /** Bildinhalt-Erkennung eingeschaltet (Einstellungen). */
   let contentOn = $state(false);
@@ -174,7 +203,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="gallery" role="dialog" aria-label={t("gallery.title")}>
-  <header>
+  <header data-tauri-drag-region>
     <h1>{t("gallery.title")}</h1>
     <input
       bind:this={searchInput}
@@ -215,13 +244,34 @@
   </header>
 
   {#if filters.length && contentOn && status?.available}
-    <div class="filters" role="toolbar" aria-label={t("gallery.groups")}>
-      <button class="chip" class:on={filter === null} onclick={() => (filter = null)}>{t("gallery.groups.all")}</button>
-      {#each filters as f (f.group)}
-        <button class="chip" class:on={filter === f.group} onclick={() => (filter = filter === f.group ? null : f.group)}>
-          {t(`group.${f.group}` as MessageKey)} <span class="n">{f.count}</span>
-        </button>
-      {/each}
+    <div class="filters">
+      <!-- Unsichtbare Zeile mit allen Filtern, nur zum Messen der Breiten. -->
+      <div class="measure" aria-hidden="true" bind:this={measure}>
+        {#each chips as c (c.key)}
+          <span class="chip">{c.label}{#if c.count != null} <span class="n">{c.count}</span>{/if}</span>
+        {/each}
+        <span class="chip more">{t("gallery.more")}</span>
+      </div>
+      <div
+        class="chips"
+        class:open={filtersOpen}
+        role="toolbar"
+        aria-label={t("gallery.groups")}
+        bind:clientWidth={chipsWidth}
+      >
+        {#each chips as c, i (c.key)}
+          {#if filtersOpen || !fitting || fitting.includes(i)}
+            <button class="chip" class:on={c.on} onclick={c.pick}>
+              {c.label}{#if c.count != null} <span class="n">{c.count}</span>{/if}
+            </button>
+          {/if}
+        {/each}
+        {#if overflow}
+          <button class="chip more" aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>
+            {filtersOpen ? t("gallery.less") : t("gallery.more")}
+          </button>
+        {/if}
+      </div>
     </div>
   {/if}
 
@@ -335,6 +385,10 @@
     background: var(--surface);
     border-bottom: 1px solid var(--border);
   }
+  /* Platz für die Fensterknöpfe von macOS (Titelleiste über dem Inhalt). */
+  :global(.glass) header {
+    padding-left: 84px;
+  }
   h1 {
     margin: 0 var(--space-3) 0 0;
     font-size: 18px;
@@ -383,17 +437,43 @@
   .indexing {
     font-size: 12px;
   }
+  /* Schnellfilter: kein Querscrollen. Eingeklappt eine Zeile mit „Mehr…“,
+     aufgeklappt umbrechend, höchstens vier Zeilen hoch, dann scrollt sie. */
   .filters {
-    display: flex;
-    gap: 6px;
+    position: relative;
     padding: var(--space-2) var(--space-4);
-    overflow-x: auto;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    scrollbar-width: none;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 30px;
+    overflow: hidden;
+  }
+  .chips.open {
+    max-height: calc(4 * 30px + 3 * 6px);
+    overflow-y: auto;
+  }
+  .measure {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    gap: 6px;
+    visibility: hidden;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .chip.more {
+    color: var(--active);
+    border-color: transparent;
   }
   .chip {
     flex: none;
+    box-sizing: border-box;
+    height: 30px;
     padding: 4px 12px;
     border: 1px solid var(--border);
     border-radius: 999px;

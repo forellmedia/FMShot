@@ -76,3 +76,25 @@ export function groupByDay<T extends { createdAt: number | null }>(
   }
   return groups;
 }
+
+/**
+ * Welche Filter-Knöpfe in eine Zeile passen (Indizes, in Reihenfolge).
+ * Passen alle, kommen alle; sonst so viele, dass daneben noch „Mehr…“
+ * (`moreWidth`) Platz hat. Der gewählte Knopf (`keep`) bleibt immer sichtbar.
+ */
+export function fitInRow(widths: number[], available: number, gap: number, moreWidth: number, keep: number | null = null): number[] {
+  const all = widths.map((_, i) => i);
+  const total = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
+  if (total <= available) return all;
+  let room = available - moreWidth - gap;
+  if (keep != null && keep < widths.length) room -= widths[keep] + gap;
+  const shown: number[] = [];
+  for (const i of all) {
+    if (i === keep) continue;
+    if (widths[i] > room) break;
+    shown.push(i);
+    room -= widths[i] + gap;
+  }
+  if (keep != null && keep < widths.length) shown.push(keep);
+  return shown.sort((a, b) => a - b);
+}

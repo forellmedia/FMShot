@@ -581,8 +581,37 @@
   .inner {
     display: flex;
     align-items: center;
-    gap: var(--space-4);
+    gap: 1px;
     width: max-content;
+  }
+  /* In der Kapsel keine Kästchen: Auswahlen als flache Knöpfe, dazwischen
+     nur feine senkrechte Linien. */
+  .props .inner > :global(.trigger),
+  .props .inner > .toggle {
+    position: relative;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+  }
+  .props .inner > :global(.trigger:hover),
+  .props .inner > :global(.trigger.on),
+  .props .inner > .toggle:hover:not(.on) {
+    background: var(--hover);
+  }
+  .props .inner > .toggle.on {
+    background: var(--active);
+    color: var(--on-active);
+  }
+  .props .inner > :global(:is(.trigger, .toggle):not(:first-child))::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background: color-mix(in srgb, var(--text) 16%, transparent);
   }
   .group {
     display: flex;
@@ -639,7 +668,7 @@
   .toggle {
     padding: 3px 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 999px;
     background: transparent;
     color: var(--text);
     font: inherit;
