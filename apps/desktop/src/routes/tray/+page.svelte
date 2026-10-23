@@ -1,7 +1,7 @@
 <script lang="ts">
   // Tray-Fenster: öffnet sich beim Klick aufs Symbol in der Menüleiste
   // (Windows: Taskleiste). Tabs Bild, Bildschirm (Video), Webcam (Video nur
-  // mit der Kamera), Einstellungen. Bei Video und Webcam steht der runde
+  // mit der Kamera); die Einstellungen öffnet die Fusszeile. Bei Video und Webcam steht der runde
   // Auslöser gleich neben der Zielwahl, Schalter sind Chips darunter – so
   // passt alles ohne Scrollen ins Fenster.
 
@@ -22,7 +22,7 @@
   import { DEFAULT_FPS, nextFps } from "$lib/fps";
   import { t, type MessageKey } from "$lib/i18n";
 
-  type Tab = "image" | "screen" | "webcam" | "settings";
+  type Tab = "image" | "screen" | "webcam";
   // Schlüssel aus der Zeit als FMShot – bleibt absichtlich gleich.
   const TAB_KEY = "fmshot.tray.tab";
 
@@ -30,7 +30,6 @@
     ["image", "tray.tab_image", "image"],
     ["screen", "tray.tab_screen", "video"],
     ["webcam", "tray.tab_webcam", "webcam"],
-    ["settings", "tray.tab_settings", "settings"],
   ];
 
   const IMAGE_ACTIONS: { mode: CaptureMode; hotkey: string; label: MessageKey; icon: IconName }[] = [
@@ -87,7 +86,7 @@
       const v = localStorage.getItem(TAB_KEY);
       // Früher hiess der Tab „Bildschirm“ „Video“.
       if (v === "video") return "screen";
-      if (v === "image" || v === "screen" || v === "webcam" || v === "settings") return v;
+      if (v === "image" || v === "screen" || v === "webcam") return v;
     } catch {
       // Ohne Speicher: Standard.
     }
@@ -99,7 +98,6 @@
   let hotkeys = $state<HotkeyInfo[]>([]);
   let microphones = $state<Microphone[]>([]);
   let cameras = $state<Camera[]>([]);
-  let launchAtLogin = $state(false);
 
   $effect(() => {
     try {
@@ -110,11 +108,7 @@
   });
 
   async function refresh() {
-    [settings, hotkeys, launchAtLogin] = await Promise.all([
-      api.getSettings(),
-      api.getHotkeys(),
-      api.getLaunchAtLogin(),
-    ]);
+    [settings, hotkeys] = await Promise.all([api.getSettings(), api.getHotkeys()]);
     [microphones, cameras] = await Promise.all([api.listMicrophones(), api.listCameras()]);
   }
 
@@ -157,14 +151,6 @@
 
   async function setCamera(patch: Partial<CameraSettings>) {
     await setVideo({ camera: { ...camera, ...patch } });
-  }
-
-  async function toggleLaunchAtLogin(enabled: boolean) {
-    try {
-      await api.setLaunchAtLogin(enabled);
-    } finally {
-      launchAtLogin = await api.getLaunchAtLogin();
-    }
   }
 </script>
 
@@ -474,32 +460,6 @@
         </div>
         <p class="hint">{t("camera.hint")}</p>
       {/if}
-    {:else if tab === "settings"}
-      <div class="rows">
-        <label class="row">
-          <span>{t("settings.launch_at_login")}</span>
-          <input
-            type="checkbox"
-            class="switch"
-            checked={launchAtLogin}
-            onchange={(e) => toggleLaunchAtLogin(e.currentTarget.checked)}
-          />
-        </label>
-      </div>
-      <ul class="actions">
-        <li>
-          <button class="action" onclick={() => api.openMain("settings")}>
-            <Icon name="settings" size={20} />
-            <span class="label">{t("tray.settings_open")}</span>
-          </button>
-        </li>
-        <li>
-          <button class="action" onclick={() => api.openMain("library")}>
-            <Icon name="folder" size={20} />
-            <span class="label">{t("tray.open_library")}</span>
-          </button>
-        </li>
-      </ul>
     {/if}
   </section>
 
@@ -512,6 +472,10 @@
       <Icon name="gallery" size={16} />
       {t("tray.open_gallery")}
       <kbd>{shortcut("open_gallery")}</kbd>
+    </button>
+    <button class="link" onclick={() => api.openMain("settings")}>
+      <Icon name="settings" size={16} />
+      {t("tray.settings")}
     </button>
     <button class="link quiet" onclick={() => api.quitApp()}>
       <Icon name="quit" size={16} />
@@ -539,7 +503,7 @@
 
   .tabs {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     padding: 4px;
     border-radius: 999px;
     background: var(--hover);

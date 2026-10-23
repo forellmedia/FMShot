@@ -358,6 +358,7 @@
           {/each}
           <div class="buttons">
             <button onclick={() => api.openMain("cleanup")}>{t("storage.title")} …</button>
+            <button onclick={() => api.openMain("library")}>{t("tray.open_library")}</button>
           </div>
           <p class="hint">{t("settings.storage_hint")}</p>
           <label class="row check">
@@ -664,6 +665,11 @@
   }
   .hint.ok {
     color: #2e7d32;
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .buttons button {
     padding: 6px 14px;
