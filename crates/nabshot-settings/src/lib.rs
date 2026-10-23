@@ -260,7 +260,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: None,
-            after_capture: AfterCapture::Preview,
+            after_capture: AfterCapture::Editor,
             preview_position: PreviewPosition::Mouse,
             copy_to_clipboard: true,
             scroll_mode: ScrollMode::Manual,
@@ -386,7 +386,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let s = Settings::load(&tmp.path().join("settings.json")).unwrap();
         assert_eq!(s, Settings::default());
-        assert_eq!(s.after_capture, AfterCapture::Preview);
+        assert_eq!(s.after_capture, AfterCapture::Editor);
     }
 
     #[test]

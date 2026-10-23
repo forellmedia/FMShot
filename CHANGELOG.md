@@ -1,5 +1,11 @@
 # Changelog
 
+## Unveröffentlicht
+
+**Verbessert**
+- Nach der Aufnahme öffnet sich standardmässig der Editor (bisher die
+  Vorschau). Wer die Einstellung schon geändert hat, behält seine Wahl.
+
 ## 0.2.0-beta.3
 
 **Neu**

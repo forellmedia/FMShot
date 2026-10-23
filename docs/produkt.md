@@ -18,9 +18,9 @@ Schwerpunkt macOS, wo gute, günstige Screenshot-Tools fehlen.
 
 ### Nach der Aufnahme
 Einstellbar (global, pro Aufnahmemodus überschreibbar):
-- **A** Editor öffnen
+- **A** Editor öffnen (Standard)
 - **B** nur Zwischenablage
-- **C** Schnellzugriff-Vorschau (Standard) – erscheint an der Mausposition
+- **C** Schnellzugriff-Vorschau – erscheint an der Mausposition
   (Alternative: feste Ecke), stiehlt keinen Fokus, Drag & Drop in andere Apps,
   Knöpfe *Kopieren · Speichern · Bearbeiten · Text kopieren · ✕*.
   Das Bild liegt zusätzlich sofort in der Zwischenablage.

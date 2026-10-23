@@ -248,7 +248,7 @@ const mock = (() => {
   return {
     settings: {
       language: null,
-      after_capture: "preview",
+      after_capture: "editor",
       preview_position: "mouse",
       copy_to_clipboard: true,
       scroll_mode: "manual",
