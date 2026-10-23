@@ -511,18 +511,33 @@ pub fn set_starred(app: AppHandle, id: String, starred: bool) -> Result<(), Stri
         .map_err(err)
 }
 
-/// Zeigt die Originaldatei im Finder / Explorer.
+/// Zeigt die Aufnahme im Finder / Explorer: die Datei im Export-Ordner
+/// („Jede Aufnahme zusätzlich als Datei speichern“), wenn es sie gibt, sonst
+/// die Datei in der Bibliothek (bei Videos das Video).
 #[tauri::command]
 #[specta::specta]
 pub fn reveal_capture(app: AppHandle, id: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    log::info!("Aufnahme {id} im Dateimanager zeigen");
-    let rec = library(&app)
+    let lib = library(&app);
+    let rec = lib
         .get(&id)
         .inspect_err(|e| log::error!("Zeigen {id}: {e}"))
         .map_err(err)?;
+    let exported = lib
+        .export_path(&id)
+        .inspect_err(|e| log::warn!("Export-Pfad {id}: {e}"))
+        .ok()
+        .flatten()
+        .filter(|p| p.is_file());
+    let path = exported.unwrap_or_else(|| {
+        [rec.video_path(), rec.screen_path(), rec.webcam_path()]
+            .into_iter()
+            .find(|p| rec.is_video() && p.is_file())
+            .unwrap_or_else(|| rec.original_path())
+    });
+    log::info!("Aufnahme {id} im Dateimanager zeigen: {}", path.display());
     app.opener()
-        .reveal_item_in_dir(rec.original_path())
+        .reveal_item_in_dir(path)
         .inspect_err(|e| log::error!("Zeigen {id}: {e}"))
         .map_err(err)
 }

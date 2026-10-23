@@ -7,7 +7,7 @@
   import type { DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
   import { DEFAULT_FPS, FPS_CHOICES } from "$lib/fps";
   import { t, type MessageKey } from "$lib/i18n";
-  import { currentPlatform, formatShortcut } from "$lib/shortcuts";
+  import { currentPlatform, fileManager, formatShortcut } from "$lib/shortcuts";
 
   const isMac = currentPlatform() === "mac";
 
@@ -358,7 +358,7 @@
           {/each}
           <div class="buttons">
             <button onclick={() => api.openMain("cleanup")}>{t("storage.title")} …</button>
-            <button onclick={() => api.openMain("library")}>{t("tray.open_library")}</button>
+            <button onclick={() => api.openMain("library")}>{t("tray.open_library", { app: fileManager() })}</button>
           </div>
           <p class="hint">{t("settings.storage_hint")}</p>
           <label class="row check">

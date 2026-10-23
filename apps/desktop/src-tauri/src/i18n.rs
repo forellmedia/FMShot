@@ -65,6 +65,18 @@ pub fn t(key: &str, params: &[(&str, &str)]) -> String {
     text
 }
 
+/// Name des Dateimanagers für „Im … zeigen“ (wie `fileManager` im Frontend).
+pub fn file_manager() -> String {
+    let key = if cfg!(target_os = "macos") {
+        "files.finder"
+    } else if cfg!(target_os = "windows") {
+        "files.explorer"
+    } else {
+        "files.manager"
+    };
+    t(key, &[])
+}
+
 /// Kürzel zur Anzeige: Symbole auf macOS, übersetzte Tastennamen sonst
 /// („Strg+Umschalt+2“) – nie ⌘ unter Windows oder Linux.
 pub fn shortcut_label(shortcut: &nabshot_hotkeys::Shortcut) -> String {

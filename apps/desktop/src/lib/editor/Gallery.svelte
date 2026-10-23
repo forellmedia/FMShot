@@ -3,7 +3,7 @@
   // Suche im erkannten Text und im Bildinhalt (ADR 0010), Schnellfilter,
   // Zeitraum, Art, nur mit Stern, Sortierung. Gefiltert wird im Backend.
 
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { api, fileUrl, on, type CaptureInfo, type ContentSearchStatus, type GalleryItem, type GalleryResult } from "$lib/api";
   import { locale, t, type MessageKey } from "$lib/i18n";
   import { editor } from "./state.svelte";
@@ -105,10 +105,11 @@
     }
   }
 
-  // Neu suchen, sobald sich ein Filter ändert (Text leicht verzögert).
+  // Neu suchen, sobald sich ein Filter ändert (Text leicht verzögert) oder
+  // eine Aufnahme über das Kontextmenü geändert wurde.
   let timer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
-    void [text, period, customFrom, customTo, mode, starredOnly, oldestFirst, filter];
+    void [text, period, customFrom, customTo, mode, starredOnly, oldestFirst, filter, editor.galleryRevision];
     if (timer) clearTimeout(timer);
     timer = setTimeout(load, 150);
   });
@@ -126,6 +127,20 @@
       stop?.();
       stopLib?.();
     };
+  });
+
+  // „In Galerie zeigen“: zur Aufnahme scrollen und sie kurz hervorheben.
+  let flashId = $state<string | null>(null);
+  let grid: HTMLElement;
+  $effect(() => {
+    const id = editor.galleryFocus;
+    if (!id || loading || !results.some((r) => r.capture.id === id)) return;
+    editor.galleryFocus = null;
+    void tick().then(() => {
+      grid?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "center" });
+      flashId = id;
+      setTimeout(() => flashId === id && (flashId = null), 1600);
+    });
   });
 
   const indexing = $derived(contentOn && status?.available && status.done < status.total);
@@ -164,14 +179,7 @@
   }
 
   async function open(c: CaptureInfo) {
-    editor.galleryOpen = false;
-    // Steht die Aufnahme wegen der Suche nicht in der Leiste unten,
-    // die Suche dort leeren – sonst lässt sie sich nicht anzeigen.
-    if (!editor.captures.some((x) => x.id === c.id) && editor.query) {
-      editor.query = "";
-      await editor.refreshCaptures();
-    }
-    await editor.open(c.id);
+    await editor.openFromGallery(c.id);
   }
 
   async function toggleStar(e: MouseEvent, c: CaptureInfo) {
@@ -275,7 +283,7 @@
     </div>
   {/if}
 
-  <div class="scroll">
+  <div class="scroll" bind:this={grid}>
     {#if results.length === LIMIT}
       <p class="note">{t("gallery.limit", { count: String(LIMIT) })}</p>
     {/if}
@@ -289,9 +297,12 @@
             <div
               class="tile"
               class:current={editor.current?.id === c.id}
+              class:flash={flashId === c.id}
+              data-id={c.id}
               role="button"
               tabindex="0"
               onclick={() => open(c)}
+              oncontextmenu={(e) => editor.openCaptureMenu(e, c.id, c)}
               onkeydown={(e) => (e.key === "Enter" || e.key === " ") && open(c)}
             >
               <div class="image">
@@ -624,6 +635,18 @@
   .tile.current {
     border-color: var(--active);
     box-shadow: 0 0 0 1px var(--active);
+  }
+  .tile.flash {
+    animation: flash 1.6s ease-out;
+  }
+  @keyframes flash {
+    0%,
+    40% {
+      box-shadow: 0 0 0 4px var(--active);
+    }
+    100% {
+      box-shadow: 0 0 0 1px var(--active);
+    }
   }
   .image {
     position: relative;

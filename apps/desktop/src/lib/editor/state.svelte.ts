@@ -131,7 +131,12 @@ export class Editor {
   /** Anzeige der globalen Kürzel je Aktion (vom Backend, je Plattform). */
   hotkeyLabels = $state<Record<string, string>>({});
   /** Offenes Kontextmenü einer Aufnahme (Leiste unten oder Leinwand). */
-  captureMenu = $state<{ x: number; y: number; id: string } | null>(null);
+  /** Kontextmenü einer Aufnahme; `capture` aus der Galerie (steht evtl. nicht in der Leiste). */
+  captureMenu = $state<{ x: number; y: number; id: string; capture?: CaptureInfo } | null>(null);
+  /** Aufnahme, die die Galerie beim Öffnen zeigen soll („In Galerie zeigen“). */
+  galleryFocus = $state<string | null>(null);
+  /** Zählt Änderungen an Aufnahmen aus dem Kontextmenü – die Galerie lädt dann neu. */
+  galleryRevision = $state(0);
   /** Auswahl des Formats für „Speichern als …“ (⇧⌘S) offen. */
   saveAsOpen = $state(false);
   /** Kopierte Ebenen für ⌘V. */
@@ -855,10 +860,27 @@ export class Editor {
   }
 
   /** Kontextmenü der Aufnahme am Mauszeiger statt des Menüs des WebViews. */
-  openCaptureMenu(e: MouseEvent, id: string) {
+  openCaptureMenu(e: MouseEvent, id: string, capture?: CaptureInfo) {
     e.preventDefault();
     e.stopPropagation();
-    this.captureMenu = { x: e.clientX, y: e.clientY, id };
+    this.captureMenu = { x: e.clientX, y: e.clientY, id, capture };
+  }
+
+  /** Aufnahme aus der Galerie öffnen. Steht sie wegen der Suche nicht in
+   *  der Leiste unten, die Suche dort leeren – sonst fehlt sie dort. */
+  async openFromGallery(id: string) {
+    this.galleryOpen = false;
+    if (!this.captures.some((x) => x.id === id) && this.query) {
+      this.query = "";
+      await this.refreshCaptures();
+    }
+    await this.open(id);
+  }
+
+  /** Galerie öffnen und dort die Aufnahme zeigen. */
+  showInGallery(id: string) {
+    this.galleryFocus = id;
+    this.galleryOpen = true;
   }
 
   async toggleStar(c: CaptureInfo) {

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.0-beta.3
+
+**Neu**
+- **Oberfläche im Stil „Glas“** (ADR 0014): Leisten als schwebende Kapseln,
+  Bildliste als Spalte rechts; auf dem Mac durchscheinend.
+- **Speicher aufräumen:** Aufnahmen werden standardmässig 90 Tage
+  aufbewahrt, Bibliothek und Export-Ordner haben je eine Warngrenze. Eine
+  Anzeige unten zeigt den Platz, ein Klick öffnet das Aufräumen.
+- **Rechtsklick in der Galerie:** Öffnen, Stern, im Finder / Explorer
+  zeigen, Löschen. Im Editor neu **„In Galerie zeigen“**.
+- **Im Finder / Explorer zeigen** öffnet die Datei im Export-Ordner, wenn
+  Aufnahmen zusätzlich als Datei gespeichert werden; bei Videos das Video.
+- **Video-Editor:** Ton mit Wellenform und Lautstärke-Punkten, Ein- und
+  Ausblenden, Bildraten 24–60. Die Zeitleiste hat eine feste Höhe, die sich
+  am oberen Rand ziehen lässt; Spuren lassen sich ein- und ausblenden.
+- Ausführliches Log mit einstellbarer Aufbewahrung (Einstellungen → Info).
+
+**Verbessert**
+- **Windows:** Nabshot wird für alle Benutzer nach „Programme\Nabshot“
+  installiert statt unter AppData. Eine frühere Installation unter AppData
+  (auch unter dem Namen Grabmark) wird dabei entfernt; Aufnahmen und
+  Einstellungen bleiben, ebenso „Beim Anmelden starten“.
+- Zeichnen im Video-Editor ist auch mit vielen Pfeilen flüssig.
+- Videos werden deutlich schneller erstellt und lassen sich mit Rückfrage
+  abbrechen; eine abgebrochene Aufnahme lässt sich wiederherstellen.
+- Tray: Einstellungen stehen in der Fusszeile, oben nur noch Bild,
+  Bildschirm und Webcam.
+- Galerie: Schnellfilter, die nicht in eine Zeile passen, stehen hinter
+  „Mehr…“.
+- „Im Finder zeigen“ heisst unter Windows „Im Explorer zeigen“ und unter
+  Linux „Im Dateimanager zeigen“.
+
 ## 0.2.0-beta.2
 
 **Neu**

@@ -46,6 +46,11 @@ export function formatShortcut(spec: string, platform: Platform = currentPlatfor
   return [...order.map((m) => names[m]), names[key] ?? key].join("+");
 }
 
+/** Name des Dateimanagers für „Im … zeigen“: Finder, Explorer, Dateimanager. */
+export function fileManager(platform: Platform = currentPlatform()): string {
+  return t(platform === "mac" ? "files.finder" : platform === "windows" ? "files.explorer" : "files.manager");
+}
+
 /** Text mit Kürzel in Klammern, z. B. für Tooltips: „Rückgängig (⌘Z)“. */
 export function withShortcut(label: string, spec: string): string {
   return `${label} (${formatShortcut(spec)})`;

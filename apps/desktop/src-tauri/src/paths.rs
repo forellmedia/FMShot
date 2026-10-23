@@ -46,11 +46,21 @@ static MIGRATION: OnceLock<Vec<String>> = OnceLock::new();
 /// kein Kopieren; die Bibliothek speichert nur relative Pfade). Gibt es den
 /// neuen Ordner schon, bleibt alles, wie es ist. Läuft vor dem Log.
 pub fn migrate_old_name() {
-    let mut bases: Vec<Option<PathBuf>> =
-        vec![dirs::data_dir(), dirs::config_dir(), dirs::cache_dir()];
-    #[cfg(target_os = "macos")]
-    bases.push(dirs::home_dir().map(|h| h.join("Library/Logs")));
-    let mut bases: Vec<PathBuf> = bases.into_iter().flatten().collect();
+    // Logs liegen nur auf macOS in einem eigenen Ordner (~/Library/Logs).
+    let logs = if cfg!(target_os = "macos") {
+        dirs::home_dir().map(|h| h.join("Library/Logs"))
+    } else {
+        None
+    };
+    let mut bases: Vec<PathBuf> = [
+        dirs::data_dir(),
+        dirs::config_dir(),
+        dirs::cache_dir(),
+        logs,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     bases.sort();
     bases.dedup();
     let notes = bases

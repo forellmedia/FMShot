@@ -8,6 +8,7 @@
   import { api, fileUrl, type StorageDetails, type StorageItem } from "$lib/api";
   import { formatBytes, share } from "$lib/bytes";
   import { locale, t } from "$lib/i18n";
+  import { fileManager } from "$lib/shortcuts";
   import { editor } from "./state.svelte";
 
   type Tab = "library" | "export";
@@ -174,7 +175,7 @@
 
       <div class="where">
         <span class="muted">{tab === "library" ? s.libraryDir : s.exportDir}</span>
-        <button class="link" onclick={() => api.openStorageFolder(tab === "export")}>{t("storage.show_folder")}</button>
+        <button class="link" onclick={() => api.openStorageFolder(tab === "export")}>{t("storage.show_folder", { app: fileManager() })}</button>
         <span class="grow"></span>
         {#if limit}
           <span class="muted">{t("storage.limit", { limit: formatBytes(limit, locale()) })}</span>

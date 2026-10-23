@@ -5,6 +5,7 @@
 
   import { api, type CaptureInfo } from "$lib/api";
   import { t } from "$lib/i18n";
+  import { fileManager } from "$lib/shortcuts";
   import { editor } from "./state.svelte";
 
   let menuEl = $state<HTMLElement>();
@@ -14,8 +15,19 @@
   const capture = $derived.by((): CaptureInfo | null => {
     const id = editor.captureMenu?.id;
     if (!id) return null;
-    return editor.captures.find((c) => c.id === id) ?? (editor.current?.id === id ? editor.current : null);
+    return (
+      editor.captures.find((c) => c.id === id) ??
+      (editor.current?.id === id ? editor.current : null) ??
+      editor.captureMenu?.capture ??
+      null
+    );
   });
+
+  /** Stern oder Löschen: Die Galerie zeigt den neuen Stand. */
+  async function change(fn: () => Promise<unknown>) {
+    await fn();
+    editor.galleryRevision++;
+  }
 
   // Am Zeiger; reicht der Platz nicht, nach links bzw. oben aufklappen.
   $effect(() => {
@@ -63,17 +75,24 @@
     role="menu"
     onscroll={close}
   >
-    {#if editor.current?.id !== capture.id}
-      <li><button role="menuitem" onclick={() => act((c) => editor.open(c.id))}>{t("gallery.open")}</button></li>
+    {#if editor.galleryOpen || editor.current?.id !== capture.id}
+      <li><button role="menuitem" onclick={() => act((c) => editor.openFromGallery(c.id))}>{t("gallery.open")}</button></li>
+    {/if}
+    {#if !editor.galleryOpen}
+      <li>
+        <button role="menuitem" onclick={() => act(async (c) => editor.showInGallery(c.id))}>{t("gallery.show_in_gallery")}</button>
+      </li>
     {/if}
     <li>
-      <button role="menuitem" onclick={() => act((c) => editor.toggleStar(c))}>
+      <button role="menuitem" onclick={() => act((c) => change(() => editor.toggleStar(c)))}>
         {capture.starred ? t("gallery.unstar") : t("gallery.star")}
       </button>
     </li>
-    <li><button role="menuitem" onclick={() => act((c) => api.revealCapture(c.id))}>{t("gallery.reveal")}</button></li>
+    <li>
+      <button role="menuitem" onclick={() => act((c) => api.revealCapture(c.id))}>{t("gallery.reveal", { app: fileManager() })}</button>
+    </li>
     <li class="danger">
-      <button role="menuitem" onclick={() => act((c) => editor.deleteCapture(c.id))}>{t("gallery.delete")}</button>
+      <button role="menuitem" onclick={() => act((c) => change(() => editor.deleteCapture(c.id)))}>{t("gallery.delete")}</button>
     </li>
   </ul>
 {/if}

@@ -37,7 +37,11 @@ export const commands = {
 	clipboardChangeCount: () => __TAURI_INVOKE<number | null>("clipboard_change_count"),
 	deleteCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_capture", { id })),
 	setStarred: (id: string, starred: boolean) => typedError<null, string>(__TAURI_INVOKE("set_starred", { id, starred })),
-	/**  Zeigt die Originaldatei im Finder / Explorer. */
+	/**
+	 *  Zeigt die Aufnahme im Finder / Explorer: die Datei im Export-Ordner
+	 *  („Jede Aufnahme zusätzlich als Datei speichern“), wenn es sie gibt, sonst
+	 *  die Datei in der Bibliothek (bei Videos das Video).
+	 */
 	revealCapture: (id: string) => typedError<null, string>(__TAURI_INVOKE("reveal_capture", { id })),
 	/**  Aufnahme aus der Oberfläche starten (z. B. Knopf im Editor). */
 	startCapture: (mode: CaptureMode) => __TAURI_INVOKE<void>("start_capture", { mode }),

@@ -58,7 +58,16 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let video = item("capture_video", "tray.capture_video")?;
     let webcam = item("capture_webcam", "tray.capture_webcam")?;
     let open = item("open_window", "tray.open_editor")?;
-    let library = item("open_library", "tray.open_library")?;
+    let library = MenuItem::with_id(
+        app,
+        "open_library",
+        t(
+            "tray.open_library",
+            &[("app", &crate::i18n::file_manager())],
+        ),
+        true,
+        None::<&str>,
+    )?;
     let settings = item("settings", "tray.settings")?;
     let quit = item("quit", "tray.quit")?;
     let separator = PredefinedMenuItem::separator(app)?;
