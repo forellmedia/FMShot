@@ -11,6 +11,11 @@
   Windows und Linux deutlich markiert, lange Kürzel unter dem Auslöser
   brechen um statt abgeschnitten zu werden.
 
+**Behoben**
+- Ein Screenshot per Tastenkürzel konnte grau werden oder den eben
+  versteckten Editor zeigen (macOS). Jetzt kommen nur Nabshot-Fenster ins
+  Bild, die gerade zu sehen sind.
+
 ## 0.2.0-beta.3
 
 **Neu**

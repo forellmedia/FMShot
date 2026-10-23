@@ -489,7 +489,26 @@ impl Excluded {
             app: own_app(content),
             except: match own {
                 OwnWindows::Hidden => Vec::new(),
-                OwnWindows::Shown => own_app_windows(content),
+                // Nur Fenster, die jetzt zu sehen sind. Der Schnappschuss kann
+                // älter sein: Ein inzwischen verstecktes Fenster (⌘H, Editor
+                // schliessen) stünde dort noch als sichtbar, und
+                // ScreenCaptureKit zeichnete es trotzdem – mit altem Inhalt
+                // obenauf oder, wenn macOS den schon verworfen hat, als graue
+                // Fläche.
+                OwnWindows::Shown => {
+                    let visible = own_normal_window_ids();
+                    let known = own_app_windows(content);
+                    let total = known.len();
+                    let shown: Vec<_> = known
+                        .into_iter()
+                        .filter(|w| visible.contains(&unsafe { w.windowID() }))
+                        .collect();
+                    log::debug!(
+                        "Eigene Fenster im Bild: {} (im Schnappschuss {total})",
+                        shown.len()
+                    );
+                    shown
+                }
             },
         }
     }

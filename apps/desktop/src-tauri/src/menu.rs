@@ -30,6 +30,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Einträge des App-Menüs – das Tray-Menü bekommt sie ebenfalls gemeldet.
+pub fn is_app_menu_item(id: &str) -> bool {
+    matches!(id, "close_editor" | "quit_app")
+}
+
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         "close_editor" => {

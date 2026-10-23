@@ -116,8 +116,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .on_menu_event(|app, event| {
-            log::info!("Tray-Menü: {}", event.id.as_ref());
-            on_menu_event(app, event.id.as_ref())
+            let id = event.id.as_ref();
+            // Tauri schickt auch die Einträge des App-Menüs (⌘Q …) hierher.
+            if crate::menu::is_app_menu_item(id) {
+                return;
+            }
+            log::info!("Tray-Menü: {id}");
+            on_menu_event(app, id)
         });
     // Schwarz-auf-durchsichtig als Vorlage: macOS färbt es passend zur
     // Menüleiste (hell/dunkel). Unter Windows/Linux das App-Symbol.
