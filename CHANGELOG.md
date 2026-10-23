@@ -15,6 +15,12 @@
 - Ein Screenshot per Tastenkürzel konnte grau werden oder den eben
   versteckten Editor zeigen (macOS). Jetzt kommen nur Nabshot-Fenster ins
   Bild, die gerade zu sehen sind.
+- Nach der Aufnahme öffnet sich der Editor auch, wenn gerade die Galerie
+  offen ist. Bis die neue Aufnahme da ist, zeigt er „Neue Aufnahme wird
+  geladen …“ statt des vorigen Bildes.
+- ⌘H blendet Editor und Einstellungen aus, das Dock-Symbol bleibt; ein
+  Klick darauf holt sie zurück. Der Editor blitzt beim nächsten Screenshot
+  nicht mehr auf (macOS).
 
 ## 0.2.0-beta.3
 

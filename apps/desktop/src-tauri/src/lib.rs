@@ -226,10 +226,22 @@ pub fn run() {
         .build(tauri::generate_context!())
         .inspect_err(|e| log::error!("Start fehlgeschlagen: {e}"))
         .expect("Nabshot konnte nicht gestartet werden")
-        .run(|_app, event| {
-            if let RunEvent::Exit = event {
-                log::info!("Nabshot beendet");
-                log::logger().flush();
+        .run(|app, event| {
+            // Nur macOS braucht `app` (Dock-Symbol).
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
+            match event {
+                RunEvent::Exit => {
+                    log::info!("Nabshot beendet");
+                    log::logger().flush();
+                }
+                // Klick aufs Dock-Symbol, z. B. nach ⌘H.
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen {
+                    has_visible_windows: false,
+                    ..
+                } => tray::reopen_from_dock(app),
+                _ => {}
             }
         });
 }

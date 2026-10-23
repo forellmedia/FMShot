@@ -402,6 +402,42 @@ fn open_editor(app: &AppHandle) {
     check("Ereignis open-editor", app.emit("open-editor", ()));
 }
 
+/// Von ⌘H versteckte Fenster – ein Klick aufs Dock-Symbol holt sie zurück.
+static HIDDEN_BY_HIDE: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+/// ⌘H: Editor und Einstellungen verstecken, das Dock-Symbol bleibt. Anders
+/// als das Ausblenden von macOS gilt Nabshot danach nicht als ausgeblendet –
+/// so holt das Auswahl-Overlay beim nächsten Screenshot nichts zurück.
+pub fn hide_windows_keep_dock(app: &AppHandle) {
+    hide_popover(app);
+    let mut hidden = HIDDEN_BY_HIDE.lock().unwrap_or_else(|e| e.into_inner());
+    for label in ["main", SETTINGS] {
+        if let Some(window) = app.get_webview_window(label)
+            && window.is_visible().unwrap_or(false)
+        {
+            check(label, window.hide());
+            if !hidden.contains(&label) {
+                hidden.push(label);
+            }
+        }
+    }
+    log::info!("Fenster ausgeblendet, Dock-Symbol bleibt: {hidden:?}");
+}
+
+/// Klick aufs Dock-Symbol ohne sichtbares Fenster: die mit ⌘H versteckten
+/// Fenster zurückholen, sonst den Editor.
+#[cfg(target_os = "macos")]
+pub fn reopen_from_dock(app: &AppHandle) {
+    let hidden = std::mem::take(&mut *HIDDEN_BY_HIDE.lock().unwrap_or_else(|e| e.into_inner()));
+    log::info!("Dock-Symbol angeklickt: {hidden:?} zurückholen");
+    if hidden.is_empty() || hidden.contains(&"main") {
+        show_main_window(app);
+    }
+    if hidden.contains(&SETTINGS) {
+        open_settings(app);
+    }
+}
+
 /// Fenster verstecken – Nabshot läuft im Tray weiter.
 pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {

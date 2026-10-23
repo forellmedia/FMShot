@@ -194,6 +194,22 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
     let settings = settings::get(app);
     let library = app.state::<CaptureState>().library.clone();
 
+    // Scroll-Aufnahmen will man fast immer gleich ansehen.
+    let after = if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {
+        AfterCapture::Editor
+    } else {
+        settings.after_capture
+    };
+    log::info!("Nach der Aufnahme {}: {after:?}", rec.id);
+    // Editor zuerst: Export und Suchindex können warten, das Bild nicht.
+    if after == AfterCapture::Editor {
+        emit(app, "open-capture", rec.id.clone());
+        let a = app.clone();
+        on_main(app, "Editor zeigen", move || {
+            crate::tray::show_main_window(&a)
+        });
+    }
+
     // Videos nicht: Sie sind gross und werden nur auf Wunsch zusammengesetzt.
     if settings.auto_export.enabled
         && !rec.is_video()
@@ -209,21 +225,8 @@ pub fn after_capture(app: &AppHandle, rec: &CaptureRecord, image: &RgbaImage, mo
         crate::storage::check(&check_app);
     });
 
-    // Scroll-Aufnahmen will man fast immer gleich ansehen.
-    let after = if matches!(mode, Mode::Scroll | Mode::ScrollAuto) {
-        AfterCapture::Editor
-    } else {
-        settings.after_capture
-    };
-    log::info!("Nach der Aufnahme {}: {after:?}", rec.id);
     match after {
-        AfterCapture::Editor => {
-            emit(app, "open-capture", rec.id.clone());
-            let a = app.clone();
-            on_main(app, "Editor zeigen", move || {
-                crate::tray::show_main_window(&a)
-            });
-        }
+        AfterCapture::Editor => {}
         AfterCapture::Clipboard => {
             let msg = t("capture.copied", &[]);
             on_main(app, "Hinweis", move || nabshot_overlay::show_toast(&msg));

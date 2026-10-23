@@ -7,6 +7,7 @@
   import { onMount, untrack } from "svelte";
   import type { WasmRenderer } from "$lib/wasm/nabshot_render";
   import { fileBytes, isTauri } from "$lib/api";
+  import { t } from "$lib/i18n";
   import { isTextField } from "$lib/textField";
   import { editor } from "./state.svelte";
   import {
@@ -260,6 +261,10 @@
     }
     wasm = r;
     scheduleRender();
+    // Platzhalter erst weg, wenn das neue Bild gezeichnet ist (nächstes Bild).
+    if (editor.loadingCapture === id) {
+      requestAnimationFrame(() => requestAnimationFrame(() => editor.loaded(id)));
+    }
   }
 
   // --- Grösse -----------------------------------------------------------------
@@ -1277,6 +1282,13 @@
   <canvas bind:this={baseCanvas}></canvas>
   <canvas bind:this={activeCanvas}></canvas>
   <canvas bind:this={aboveCanvas}></canvas>
+  {#if editor.loadingCapture}
+    <!-- Neue Aufnahme kommt gleich – statt des vorigen Bildes. -->
+    <div class="loading" role="status">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>{t("editor.loading_capture")}</span>
+    </div>
+  {/if}
 
   <svg class="overlay" width={width} height={height}>
     {#if artboard}
@@ -1382,6 +1394,38 @@
     background: var(--canvas-bg);
     touch-action: none;
     user-select: none;
+  }
+  .loading {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--canvas-bg);
+    color: var(--text-muted);
+    font-size: 13px;
+    pointer-events: none;
+  }
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 3px solid color-mix(in srgb, var(--text) 15%, transparent);
+    border-top-color: var(--active);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation-duration: 2.5s;
+    }
   }
   .board.video {
     background: #000;

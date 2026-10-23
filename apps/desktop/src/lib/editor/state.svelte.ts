@@ -44,6 +44,8 @@ const MAX_HISTORY = 200;
 /** Freier Rand neben der Zeichenfläche beim Verschieben (CSS-Pixel). */
 const PAN_MARGIN = 40;
 const SAVE_DELAY_MS = 400;
+/** Länger bleibt der Platzhalter für eine neue Aufnahme nie stehen. */
+const LOADING_MAX_MS = 15_000;
 
 /** Stil für neue Ebenen. Grössen in Bildschirmpunkten (× pixel_ratio = Pixel). */
 export type Style = {
@@ -128,6 +130,10 @@ export class Editor {
   query = $state("");
   /** Galerie im Vollbild offen. */
   galleryOpen = $state(false);
+  /** Neue Aufnahme wird geladen: Die Leinwand zeigt einen Platzhalter statt
+   *  des vorigen Bildes, bis die neue gezeichnet ist. */
+  loadingCapture = $state<string | null>(null);
+  private loadingTimer: ReturnType<typeof setTimeout> | null = null;
   /** Anzeige der globalen Kürzel je Aktion (vom Backend, je Plattform). */
   hotkeyLabels = $state<Record<string, string>>({});
   /** Offenes Kontextmenü einer Aufnahme (Leiste unten oder Leinwand). */
@@ -235,9 +241,13 @@ export class Editor {
     if (this.captures.length && !this.current) await this.open(this.captures[0].id);
     await on<string>("capture-saved", () => this.refreshCaptures());
     await on("library-changed", () => this.refreshCaptures());
+    // Nach der Aufnahme („Editor öffnen“) oder aus der Vorschau: immer der
+    // Editor, auch wenn gerade die Galerie offen ist.
     await on<string>("open-capture", async (id) => {
+      this.showLoading(id);
+      this.galleryOpen = false;
       await this.refreshCaptures();
-      await this.open(id);
+      await this.openFromGallery(id);
     });
     // Video gerade aufgenommen: sofort im Editor (spielt die Spuren direkt
     // ab), auf Wunsch danach fertig zusammensetzen und kopieren.
@@ -307,8 +317,27 @@ export class Editor {
       this.fit();
       this.revision++;
     } catch (e) {
+      this.loadingCapture = null;
       this.flash(String(e));
     }
+  }
+
+  /** Platzhalter für `id` zeigen; die Leinwand nimmt ihn weg, sobald das Bild
+   *  steht – spätestens nach ein paar Sekunden, falls etwas schiefgeht. */
+  showLoading(id: string) {
+    this.loadingCapture = id;
+    if (this.loadingTimer) clearTimeout(this.loadingTimer);
+    this.loadingTimer = setTimeout(() => {
+      if (this.loadingCapture === id) this.loadingCapture = null;
+    }, LOADING_MAX_MS);
+  }
+
+  /** Das Bild von `id` ist gezeichnet. */
+  loaded(id: string) {
+    if (this.loadingCapture !== id) return;
+    this.loadingCapture = null;
+    if (this.loadingTimer) clearTimeout(this.loadingTimer);
+    this.loadingTimer = null;
   }
 
   // --- Ansicht --------------------------------------------------------------

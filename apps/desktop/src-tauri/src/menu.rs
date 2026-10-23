@@ -1,5 +1,6 @@
-//! App-Menü (macOS): ⌘Q schliesst nur den Editor. Nabshot beendet sich nur
-//! über „Nabshot beenden“ im Menü.
+//! App-Menü (macOS): ⌘Q schliesst nur den Editor, ⌘H versteckt die Fenster
+//! und lässt das Dock-Symbol stehen. Nabshot beendet sich nur über „Nabshot
+//! beenden“ im Menü.
 
 use tauri::AppHandle;
 use tauri::menu::{Menu, MenuItem};
@@ -8,7 +9,9 @@ use crate::i18n::t;
 
 /// Ersetzt im Standard-Menü das vordefinierte „Beenden“ (⌘Q). Das schickt
 /// macOS direkt an `terminate:` – Tauri bekommt davon nichts mit und kann es
-/// nicht verhindern.
+/// nicht verhindern. Ebenso „Ausblenden“ (⌘H): Blendet macOS die App aus,
+/// holt das Auswahl-Overlay beim nächsten Screenshot alle Fenster zurück,
+/// und der Editor blitzt kurz auf.
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     if !cfg!(target_os = "macos") {
         return Ok(());
@@ -22,6 +25,15 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         let item = |id: &str, key: &str, accel: Option<&str>| {
             MenuItem::with_id(app, id, t(key, &[]), true, accel)
         };
+        // Standard-Menü von Tauri: Über, –, Dienste, –, Ausblenden, Andere
+        // ausblenden, –, Beenden.
+        const HIDE_INDEX: usize = 4;
+        if app_menu.items()?.len() > HIDE_INDEX {
+            app_menu.remove_at(HIDE_INDEX)?;
+            app_menu.insert(&item("hide_app", "menu.hide", Some("Cmd+H"))?, HIDE_INDEX)?;
+        } else {
+            log::warn!("App-Menü: „Ausblenden“ nicht gefunden");
+        }
         app_menu.append(&item("close_editor", "menu.close_editor", Some("Cmd+Q"))?)?;
         app_menu.append(&item("quit_app", "tray.quit", None)?)?;
     }
@@ -32,7 +44,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
 /// Einträge des App-Menüs – das Tray-Menü bekommt sie ebenfalls gemeldet.
 pub fn is_app_menu_item(id: &str) -> bool {
-    matches!(id, "close_editor" | "quit_app")
+    matches!(id, "close_editor" | "hide_app" | "quit_app")
 }
 
 pub fn on_event(app: &AppHandle, id: &str) {
@@ -40,6 +52,10 @@ pub fn on_event(app: &AppHandle, id: &str) {
         "close_editor" => {
             log::info!("App-Menü: Editor schliessen");
             crate::tray::hide_main_window(app)
+        }
+        "hide_app" => {
+            log::info!("App-Menü: Ausblenden");
+            crate::tray::hide_windows_keep_dock(app)
         }
         "quit_app" => {
             log::info!("App-Menü: Beenden");
