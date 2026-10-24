@@ -4,7 +4,7 @@
 
   import { onMount } from "svelte";
   import { api, on, type ContentSearchStatus, type Diagnostics, type HotkeyInfo, type Settings } from "$lib/api";
-  import type { DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
+  import type { DrawHide, DrawMode, VideoCodec, VideoEncoding, VideoQuality, VideoResolution } from "$lib/bindings";
   import { DEFAULT_FPS, FPS_CHOICES } from "$lib/fps";
   import { t, type MessageKey } from "$lib/i18n";
   import { currentPlatform, fileManager, formatShortcut } from "$lib/shortcuts";
@@ -164,6 +164,8 @@
     { id: "high", label: "settings.quality_high" },
   ];
 
+  // Wie lange Live-Zeichnungen stehen bleiben (ms), innerhalb DRAW_HOLD_MS.
+  const DRAW_HOLD_CHOICES = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 30000];
   const encoding = $derived<VideoEncoding>(
     settings?.video?.encoding ?? { resolution: "original", codec: "h264", quality: "standard" },
   );
@@ -478,6 +480,38 @@
           <p class="hint">
             {t((settings.video?.draw_mode ?? "sticky") === "once" ? "settings.draw_hint_once" : "settings.draw_hint_sticky", {
               shortcut: hotkeys.find((h) => h.action === "record_draw")?.label ?? "",
+            })}
+          </p>
+          <label class="row">
+            <span>{t("settings.draw_hide")}</span>
+            <select
+              value={settings.video?.draw_hide ?? "together"}
+              onchange={(e) => {
+                settings!.video = { ...settings!.video, draw_hide: e.currentTarget.value as DrawHide };
+                save();
+              }}
+            >
+              <option value="together">{t("settings.draw_hide_together")}</option>
+              <option value="each">{t("settings.draw_hide_each")}</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>{t("settings.draw_hold")}</span>
+            <select
+              value={String(settings.video?.draw_hold_ms ?? 3000)}
+              onchange={(e) => {
+                settings!.video = { ...settings!.video, draw_hold_ms: Number(e.currentTarget.value) };
+                save();
+              }}
+            >
+              {#each DRAW_HOLD_CHOICES as ms (ms)}
+                <option value={String(ms)}>{t("settings.seconds", { n: String(ms / 1000) })}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">
+            {t((settings.video?.draw_hide ?? "together") === "each" ? "settings.draw_hide_hint_each" : "settings.draw_hide_hint_together", {
+              n: String((settings.video?.draw_hold_ms ?? 3000) / 1000),
             })}
           </p>
         {:else}

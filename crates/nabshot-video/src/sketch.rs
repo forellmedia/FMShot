@@ -3,9 +3,11 @@
 //! wird ins Bildschirmvideo eingebrannt – jede Zeichnung wird eine Ebene mit
 //! Zeitbereich und bleibt im Editor änderbar.
 //!
-//! Was gerade zu sehen ist, bildet eine Gruppe: Sie verschwindet gemeinsam
-//! [`HOLD_MS`] nach der letzten Zeichnung oder sofort mit Esc. Danach
-//! beginnen die Nummern wieder bei 1.
+//! Wie lange Zeichnungen stehen bleiben, legt [`Hold`] fest: Entweder bilden
+//! alle sichtbaren eine Gruppe, die gemeinsam verschwindet, wenn seit der
+//! letzten Zeichnung die Zeit um ist, oder jede verschwindet für sich, wenn
+//! ihre eigene Zeit um ist. Esc entfernt sofort alles. Ist nichts mehr zu
+//! sehen, beginnen die Nummern wieder bei 1.
 //!
 //! Koordinaten in Pixeln der Aufnahme (wie das Dokument), Grössen der
 //! Werkzeuge in Punkten × `pixel_ratio` wie im Editor.
@@ -15,8 +17,24 @@ use nabshot_core::{
 };
 use nabshot_render::{RenderOptions, Renderer};
 
-/// So lange bleibt eine Gruppe nach der letzten Zeichnung stehen.
-pub const HOLD_MS: u64 = 3000;
+/// Wann Zeichnungen verschwinden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hold {
+    /// So lange bleibt eine Zeichnung (bzw. die Gruppe) stehen.
+    pub ms: u64,
+    /// `true` = jede Zeichnung für sich, `false` = alle gemeinsam nach der
+    /// letzten.
+    pub each: bool,
+}
+
+impl Default for Hold {
+    fn default() -> Self {
+        Self {
+            ms: 3000,
+            each: false,
+        }
+    }
+}
 /// Deckkraft des Textmarkers (auf durchsichtigem Grund wirkt „Multiplizieren“
 /// nicht, darum halbdurchsichtig).
 pub const HIGHLIGHT_OPACITY: f32 = 0.45;
@@ -90,6 +108,8 @@ pub struct SketchItem {
 struct Drawn {
     kind: LayerKind,
     start_ms: u32,
+    /// Wann diese Zeichnung verschwindet (Uhrzeit, nur bei [`Hold::each`]).
+    expires: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -105,10 +125,11 @@ pub struct LiveSketch {
     pixel_ratio: f32,
     pub tool: SketchTool,
     pub color: Color,
-    /// Sichtbare Gruppe.
+    hold: Hold,
+    /// Sichtbare Zeichnungen.
     visible: Vec<Drawn>,
     active: Option<Active>,
-    /// Wann die Gruppe verschwindet (Uhrzeit).
+    /// Wann die Gruppe verschwindet (Uhrzeit, nur gemeinsam).
     expires: Option<u64>,
     done: Vec<SketchItem>,
     renderer: Renderer,
@@ -116,10 +137,11 @@ pub struct LiveSketch {
 
 impl LiveSketch {
     /// `size` = aufgenommene Fläche in Pixeln, `pixel_ratio` = Pixel je Punkt.
-    pub fn new(size: (u32, u32), pixel_ratio: f32) -> Self {
+    pub fn new(size: (u32, u32), pixel_ratio: f32, hold: Hold) -> Self {
         Self {
             size,
             pixel_ratio: pixel_ratio.max(1.0),
+            hold,
             tool: SketchTool::Arrow,
             color: SKETCH_COLORS[0],
             visible: Vec::new(),
@@ -139,13 +161,18 @@ impl LiveSketch {
         self.visible.is_empty() && self.active.is_none()
     }
 
+    /// Nach der höchsten sichtbaren Nummer – verschwinden Zeichnungen
+    /// einzeln, gäbe Zählen sonst doppelte Nummern.
     fn next_step(&self) -> u32 {
-        let steps = self
-            .visible
+        self.visible
             .iter()
-            .filter(|d| matches!(d.kind, LayerKind::Step { .. }))
-            .count();
-        steps as u32 + 1
+            .filter_map(|d| match d.kind {
+                LayerKind::Step { number, .. } => Some(number),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
     }
 
     /// Maustaste gedrückt.
@@ -257,10 +284,13 @@ impl LiveSketch {
             self.visible.push(Drawn {
                 kind: active.kind,
                 start_ms: active.start_ms,
+                expires: clock.wall_ms + self.hold.ms,
             });
             drawn = true;
         }
-        self.expires = (!self.visible.is_empty()).then_some(clock.wall_ms + HOLD_MS);
+        if !self.hold.each {
+            self.expires = (!self.visible.is_empty()).then_some(clock.wall_ms + self.hold.ms);
+        }
         drawn
     }
 
@@ -279,8 +309,20 @@ impl LiveSketch {
         }
     }
 
-    /// Gruppe abgelaufen? Gibt zurück, ob sich etwas geändert hat.
+    /// Abgelaufenes entfernen. Gibt zurück, ob sich etwas geändert hat.
     pub fn tick(&mut self, clock: Clock) -> bool {
+        if self.hold.each {
+            // Jede für sich – auch während schon die nächste entsteht.
+            let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.visible)
+                .into_iter()
+                .partition(|d| clock.wall_ms >= d.expires);
+            self.visible = kept;
+            let changed = !gone.is_empty();
+            for d in gone {
+                self.push_done(d, clock.rec_ms);
+            }
+            return changed;
+        }
         match self.expires {
             Some(t) if clock.wall_ms >= t && self.active.is_none() => {
                 self.close_group(clock.rec_ms);
@@ -301,17 +343,20 @@ impl LiveSketch {
     }
 
     fn close_group(&mut self, end_ms: u32) {
-        for d in self.visible.drain(..) {
-            let opacity = layer_opacity(&d.kind);
-            self.done.push(SketchItem {
-                // Mindestens ein Bild lang zu sehen.
-                end_ms: end_ms.max(d.start_ms + 34),
-                start_ms: d.start_ms,
-                opacity,
-                kind: d.kind,
-            });
+        for d in std::mem::take(&mut self.visible) {
+            self.push_done(d, end_ms);
         }
         self.expires = None;
+    }
+
+    fn push_done(&mut self, d: Drawn, end_ms: u32) {
+        self.done.push(SketchItem {
+            // Mindestens ein Bild lang zu sehen.
+            end_ms: end_ms.max(d.start_ms + 34),
+            start_ms: d.start_ms,
+            opacity: layer_opacity(&d.kind),
+            kind: d.kind,
+        });
     }
 
     /// Fertige Zeichnungen bis jetzt (für den Zwischenstand, ADR 0012).
@@ -398,7 +443,7 @@ mod tests {
 
     #[test]
     fn gruppe_verschwindet_nach_der_letzten_zeichnung() {
-        let mut s = LiveSketch::new((400, 300), 2.0);
+        let mut s = LiveSketch::new((400, 300), 2.0, Hold::default());
         draw(&mut s, (10.0, 10.0), (100.0, 80.0), at(1000, 50_000));
         s.tool = SketchTool::Rectangle;
         draw(&mut s, (20.0, 20.0), (120.0, 90.0), at(2000, 51_000));
@@ -414,8 +459,66 @@ mod tests {
     }
 
     #[test]
+    fn einzeln_verschwindet_jede_nach_ihrer_eigenen_zeit() {
+        let mut s = LiveSketch::new(
+            (400, 300),
+            2.0,
+            Hold {
+                ms: 2000,
+                each: true,
+            },
+        );
+        draw(&mut s, (10.0, 10.0), (100.0, 80.0), at(1000, 50_000));
+        s.tool = SketchTool::Ellipse;
+        draw(&mut s, (20.0, 20.0), (120.0, 90.0), at(1500, 50_500));
+        assert!(!s.tick(at(2900, 51_900)));
+        // Die erste ist um, die zweite bleibt.
+        assert!(s.tick(at(3000, 52_000)));
+        assert_eq!(s.visible.len(), 1);
+        // Während gezeichnet wird, läuft die Zeit der anderen weiter.
+        s.press(Point::new(5.0, 5.0), at(3400, 52_400));
+        assert!(s.tick(at(3500, 52_500)));
+        assert!(!s.is_empty());
+        s.release(Point::new(80.0, 60.0), false, at(3600, 52_600));
+        let items = s.finish(9000);
+        assert_eq!(items.len(), 3);
+        assert_eq!((items[0].start_ms, items[0].end_ms), (1000, 3000));
+        assert_eq!((items[1].start_ms, items[1].end_ms), (1500, 3500));
+        assert_eq!((items[2].start_ms, items[2].end_ms), (3400, 9000));
+    }
+
+    #[test]
+    fn einzeln_keine_doppelten_nummern() {
+        let mut s = LiveSketch::new(
+            (400, 300),
+            1.0,
+            Hold {
+                ms: 1000,
+                each: true,
+            },
+        );
+        s.tool = SketchTool::Step;
+        let step = |s: &mut LiveSketch, x: f32, wall: u64| {
+            s.press(Point::new(x, 10.0), at(wall as u32, wall));
+            s.release(Point::new(x, 10.0), false, at(wall as u32, wall));
+            match s.visible.last().map(|d| &d.kind) {
+                Some(LayerKind::Step { number, .. }) => *number,
+                _ => 0,
+            }
+        };
+        assert_eq!(step(&mut s, 10.0, 0), 1);
+        assert_eq!(step(&mut s, 50.0, 500), 2);
+        // Nummer 1 ist weg, 2 noch da: weiter mit 3, nicht noch einmal 2.
+        assert!(s.tick(at(1000, 1000)));
+        assert_eq!(step(&mut s, 90.0, 1100), 3);
+        // Alles weg: wieder bei 1.
+        assert!(s.tick(at(5000, 5000)));
+        assert_eq!(step(&mut s, 10.0, 5100), 1);
+    }
+
+    #[test]
     fn esc_entfernt_sofort_und_klicks_zaehlen_nicht() {
-        let mut s = LiveSketch::new((400, 300), 1.0);
+        let mut s = LiveSketch::new((400, 300), 1.0, Hold::default());
         assert!(!s.clear(at(0, 0)));
         // Nur geklickt: kein Pfeil
         assert!(!draw(&mut s, (10.0, 10.0), (11.0, 10.0), at(500, 1000)));
@@ -430,7 +533,7 @@ mod tests {
 
     #[test]
     fn nummern_beginnen_nach_dem_verschwinden_wieder_bei_eins() {
-        let mut s = LiveSketch::new((400, 300), 1.0);
+        let mut s = LiveSketch::new((400, 300), 1.0, Hold::default());
         s.tool = SketchTool::Step;
         let number = |s: &LiveSketch| match s.visible.last().map(|d| &d.kind) {
             Some(LayerKind::Step { number, .. }) => *number,
@@ -453,7 +556,7 @@ mod tests {
 
     #[test]
     fn shift_rastet_ein_und_ende_der_aufnahme_schliesst_ab() {
-        let mut s = LiveSketch::new((400, 300), 1.0);
+        let mut s = LiveSketch::new((400, 300), 1.0, Hold::default());
         s.tool = SketchTool::Line;
         s.press(Point::new(0.0, 0.0), at(0, 0));
         s.release(Point::new(100.0, 8.0), true, at(0, 0));
@@ -471,7 +574,7 @@ mod tests {
 
     #[test]
     fn zeichnung_wird_sichtbar_gerendert() {
-        let mut s = LiveSketch::new((200, 100), 2.0);
+        let mut s = LiveSketch::new((200, 100), 2.0, Hold::default());
         assert!(s.render(0.5).is_none());
         draw(&mut s, (20.0, 50.0), (180.0, 50.0), at(0, 0));
         let img = s.render(0.5).unwrap();

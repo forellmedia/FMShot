@@ -24,9 +24,9 @@ use nabshot_overlay::{
     BubbleStyle, DrawEvent, DrawSurface, DrawTool, OverlayHandle, OverlayMode, OverlayResult,
     OwnClickWatch, RecordAction, RecordLabels, RecordUi, WebcamBubble, WindowTarget,
 };
-use nabshot_settings::{DrawMode, VideoSettings, VideoTarget};
+use nabshot_settings::{DRAW_HOLD_MS, DrawHide, DrawMode, VideoSettings, VideoTarget};
 use nabshot_video::SectionLog;
-use nabshot_video::sketch::{Clock, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
+use nabshot_video::sketch::{Clock, Hold, LiveSketch, SKETCH_COLORS, SketchItem, SketchTool};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
@@ -192,13 +192,15 @@ pub fn start(app: &AppHandle, target: Option<VideoTarget>) {
 fn log_start(target: &str, settings: &VideoSettings) {
     log::info!(
         "Video: Start angefordert – Ziel {target}, {} fps, Mikrofon {}, Systemton {}, \
-         Webcam {}, Countdown {}, Zeichnen {:?}, {:?}",
+         Webcam {}, Countdown {}, Zeichnen {:?} (ausblenden {:?} nach {} ms), {:?}",
         settings.fps,
         settings.microphone,
         settings.system_audio,
         settings.webcam,
         settings.countdown,
         settings.draw_mode,
+        settings.draw_hide,
+        settings.draw_hold_ms,
         settings.encoding
     );
     log::debug!(
@@ -683,7 +685,13 @@ fn run(
         (!camera_only).then(|| MouseLog::start(app, &recording, &choice, slot.input_log_path()));
     // Live zeichnen gibt es nur mit Bildschirm.
     let draw_once = settings.draw_mode == DrawMode::Once;
-    let sketch = (!camera_only).then(|| Sketch::open(app, &choice, &recording, draw_once));
+    let hold = Hold {
+        ms: settings
+            .draw_hold_ms
+            .clamp(*DRAW_HOLD_MS.start(), *DRAW_HOLD_MS.end()) as u64,
+        each: settings.draw_hide == DrawHide::Each,
+    };
+    let sketch = (!camera_only).then(|| Sketch::open(app, &choice, &recording, draw_once, hold));
 
     // Das aufgenommene Fenster: Der Rahmen folgt ihm.
     let window = match choice.target {
@@ -938,6 +946,7 @@ impl Sketch {
         choice: &Choice,
         recording: &Arc<dyn Recording>,
         once: bool,
+        hold: Hold,
     ) -> Arc<Self> {
         // Gezeichnet wird in Pixeln des Videos; auf dem Bildschirm in Punkten.
         let (_, _, w, h) = choice.area;
@@ -946,7 +955,7 @@ impl Sketch {
             (h as f32 * choice.ratio).round() as u32,
         );
         let sketch = Arc::new(Self {
-            state: Mutex::new(LiveSketch::new(size, choice.video_scale())),
+            state: Mutex::new(LiveSketch::new(size, choice.video_scale(), hold)),
             recording: recording.clone(),
             started: Instant::now(),
             render_scale: 1.0 / choice.video_scale().max(1.0),
@@ -1050,14 +1059,18 @@ impl Sketch {
         });
     }
 
-    /// Abgelaufene Zeichnungen entfernen (Aufnahme-Thread).
+    /// Abgelaufene Zeichnungen entfernen (Aufnahme-Thread). Verschwinden sie
+    /// einzeln, bleibt der Rest zu sehen – dann neu zeichnen.
     fn tick(&self, app: &AppHandle) {
-        let changed = self.lock().tick(self.clock());
-        if changed {
-            main_thread(app, "Zeichenfläche", || {
-                with_surface(|s| s.set_image(None))
-            });
+        let mut s = self.lock();
+        if !s.tick(self.clock()) {
+            return;
         }
+        let image = s.render(self.render_scale).map(Arc::new);
+        drop(s);
+        main_thread(app, "Zeichenfläche", move || {
+            with_surface(|s| s.set_image(image))
+        });
     }
 
     /// Fertige Zeichnungen bis jetzt (Zwischenstand).

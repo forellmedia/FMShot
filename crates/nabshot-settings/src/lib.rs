@@ -77,6 +77,21 @@ pub enum DrawMode {
     Once,
 }
 
+/// Live zeichnen: Wie Zeichnungen wieder verschwinden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum DrawHide {
+    /// Alle sichtbaren gemeinsam, wenn seit der letzten die Zeit um ist.
+    #[default]
+    Together,
+    /// Jede für sich, wenn ihre eigene Zeit um ist.
+    Each,
+}
+
+/// Erlaubte Zeit, die Zeichnungen stehen bleiben (ms).
+pub const DRAW_HOLD_MS: std::ops::RangeInclusive<u32> = 1000..=30_000;
+
 /// Einstellungen der Video-Aufnahme (ADR 0011).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -104,6 +119,9 @@ pub struct VideoSettings {
     /// Auflösung, Codec und Qualität des fertigen Videos.
     pub encoding: VideoEncoding,
     pub draw_mode: DrawMode,
+    pub draw_hide: DrawHide,
+    /// So lange bleiben Zeichnungen stehen ([`DRAW_HOLD_MS`]).
+    pub draw_hold_ms: u32,
 }
 
 /// Einstellungen für Videos nur mit der Webcam.
@@ -167,6 +185,8 @@ impl Default for VideoSettings {
             camera: CameraSettings::default(),
             encoding: VideoEncoding::default(),
             draw_mode: DrawMode::default(),
+            draw_hide: DrawHide::default(),
+            draw_hold_ms: 3000,
         }
     }
 }

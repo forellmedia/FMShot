@@ -347,6 +347,13 @@ export type Document_Serialize = {
 	video?: VideoDoc_Serialize | null,
 };
 
+/**  Live zeichnen: Wie Zeichnungen wieder verschwinden. */
+export type DrawHide = 
+/**  Alle sichtbaren gemeinsam, wenn seit der letzten die Zeit um ist. */
+"together" | 
+/**  Jede für sich, wenn ihre eigene Zeit um ist. */
+"each";
+
 /**  Live zeichnen während der Aufnahme: Wann es wieder aufhört. */
 export type DrawMode = 
 /**  Bleibt an, bis es ausgeschaltet wird (Kürzel, Knopf, Esc, Rechtsklick). */
@@ -842,6 +849,9 @@ export type VideoSettings = {
 	/**  Auflösung, Codec und Qualität des fertigen Videos. */
 	encoding?: VideoEncoding,
 	draw_mode?: DrawMode,
+	draw_hide?: DrawHide,
+	/**  So lange bleiben Zeichnungen stehen ([`DRAW_HOLD_MS`]). */
+	draw_hold_ms?: number,
 };
 
 /**  Was bei einer Video-Aufnahme aufgenommen wird. */
