@@ -143,8 +143,32 @@ pub fn open(
     windows: Vec<WindowTarget>,
     on_done: DoneCallback,
 ) -> Result<OverlayHandle, OverlayError> {
+    open_with(mode, windows, false, on_done)
+}
+
+/// Wie [`open`], aber für Aufnahmen mit eingefrorenem Bild: Bis
+/// [`OverlayHandle::set_frozen`] das Bild eines Monitors liefert, lässt das
+/// Overlay dort Maus und Tastatur zur App darunter durch. Sonst merkte die
+/// App, dass die Maus sie verlässt, und schlösse Hover-Menüs, bevor das Bild
+/// aufgenommen ist (macOS; anderswo wie [`open`]).
+pub fn open_awaiting_frozen(
+    mode: OverlayMode,
+    on_done: DoneCallback,
+) -> Result<OverlayHandle, OverlayError> {
+    open_with(mode, Vec::new(), true, on_done)
+}
+
+fn open_with(
+    mode: OverlayMode,
+    windows: Vec<WindowTarget>,
+    await_frozen: bool,
+    on_done: DoneCallback,
+) -> Result<OverlayHandle, OverlayError> {
     let started = Instant::now();
-    log::info!("Overlay öffnen: {mode:?}, {} Fenster", windows.len());
+    log::info!(
+        "Overlay öffnen: {mode:?}, {} Fenster (wartet auf Bild: {await_frozen})",
+        windows.len()
+    );
     let on_done: DoneCallback = Box::new(move |result| {
         let ms = started.elapsed().as_millis();
         match &result {
@@ -170,12 +194,16 @@ pub fn open(
         on_done(result)
     });
     #[cfg(target_os = "macos")]
-    let result = macos::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
+    let result =
+        macos::open(mode, windows, await_frozen, on_done).map(|inner| OverlayHandle { inner });
     #[cfg(target_os = "windows")]
-    let result = windows::open(mode, windows, on_done).map(|inner| OverlayHandle { inner });
+    let result = {
+        let _ = await_frozen;
+        windows::open(mode, windows, on_done).map(|inner| OverlayHandle { inner })
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let result = {
-        let _ = (mode, windows, on_done);
+        let _ = (mode, windows, await_frozen, on_done);
         Err(OverlayError::NotImplemented)
     };
     logged("Overlay", started, result)

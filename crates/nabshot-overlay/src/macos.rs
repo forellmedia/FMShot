@@ -57,6 +57,9 @@ const MIN_DRAG_POINTS: f64 = 3.0;
 const MAGNIFIER_SIZE: f64 = 128.0;
 const MAGNIFIER_ZOOM: f64 = 8.0;
 const DIM_ALPHA: f64 = 0.35;
+/// So lange wartet das Overlay höchstens auf das eingefrorene Bild, bevor
+/// es Maus und Tastatur trotzdem annimmt.
+const ARM_TIMEOUT_SECONDS: f64 = 1.0;
 
 /// Lokaler Ereignis-Monitor: sieht nur Ereignisse an Fenster dieser App,
 /// also genau die Klicks in Nabshot selbst.
@@ -92,7 +95,10 @@ impl Handle {
         if let Some(session) = self.session.upgrade() {
             let s = session.borrow();
             match s.screens.iter().find(|st| st.display_id == display_id) {
-                Some(st) => st.set_frozen(image),
+                Some(st) => {
+                    st.set_frozen(image);
+                    st.arm();
+                }
                 // Nach dem Schliessen sind die Monitore leer – dann normal.
                 None if s.on_done.is_some() => {
                     log::warn!("Overlay: Monitor {display_id} für das eingefrorene Bild unbekannt")
@@ -120,6 +126,7 @@ impl Handle {
 pub(crate) fn open(
     mode: OverlayMode,
     windows: Vec<WindowTarget>,
+    await_frozen: bool,
     on_done: DoneCallback,
 ) -> Result<Handle, OverlayError> {
     let mtm = MainThreadMarker::new().ok_or(OverlayError::NotMainThread)?;
@@ -163,27 +170,53 @@ pub(crate) fn open(
     }
 
     // Erst alles zeigen, dann das Panel unter der Maus zum Schlüsselfenster
-    // machen – dort landen Tastendrücke (Esc).
-    let mouse = NSEvent::mouseLocation();
+    // machen – dort landen Tastendrücke (Esc). Wartet das Overlay auf das
+    // eingefrorene Bild, bleibt es bis dahin für Maus und Tastatur
+    // durchlässig: Sonst verliesse die Maus die App darunter, und die
+    // schlösse z. B. ein Hover-Menü, bevor es im Bild ist.
     {
         let s = session.borrow();
         for st in &s.screens {
+            st.panel.setIgnoresMouseEvents(await_frozen);
             st.panel.orderFrontRegardless();
         }
-        if let Some(st) = s
-            .screens
-            .iter()
-            .find(|st| contains(st.panel.frame(), mouse))
-        {
-            st.panel.makeKeyWindow();
-            st.panel.makeFirstResponder(Some(&st.view));
-            st.pointer_moved(&s, st.view.convert_from_screen(mouse));
+        if !await_frozen {
+            for st in &s.screens {
+                st.arm();
+            }
         }
     }
-    NSCursor::crosshairCursor().set();
+    if await_frozen {
+        arm_later(Rc::downgrade(&session), mtm);
+    }
     Ok(Handle {
         session: Rc::downgrade(&session),
     })
+}
+
+/// Notbremse: Kommt das eingefrorene Bild eines Monitors nicht (z. B.
+/// gerade angesteckt), wird das Overlay dort trotzdem bedienbar.
+fn arm_later(session: Weak<RefCell<Session>>, mtm: MainThreadMarker) {
+    let bound = MainThreadBound::new(session, mtm);
+    let _ = DispatchQueue::main().after(
+        dispatch2::DispatchTime::NOW.time((ARM_TIMEOUT_SECONDS * 1e9) as i64),
+        move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let Some(session) = bound.into_inner(mtm).upgrade() else {
+                return;
+            };
+            let s = session.borrow();
+            for st in s.screens.iter().filter(|st| st.panel.ignoresMouseEvents()) {
+                log::warn!(
+                    "Overlay: kein eingefrorenes Bild für Monitor {} – trotzdem bedienbar",
+                    st.display_id
+                );
+                st.arm();
+            }
+        },
+    );
 }
 
 struct Session {
@@ -495,6 +528,25 @@ impl ScreenState {
             ));
         });
         *self.frozen.borrow_mut() = true;
+    }
+
+    /// Nimmt ab jetzt Maus und Tastatur an; ist die Maus auf diesem Monitor,
+    /// wird sein Panel zum Schlüsselfenster.
+    fn arm(&self) {
+        self.panel.setIgnoresMouseEvents(false);
+        let mouse = NSEvent::mouseLocation();
+        if !contains(self.panel.frame(), mouse) {
+            return;
+        }
+        self.panel.makeKeyWindow();
+        self.panel.makeFirstResponder(Some(&self.view));
+        let ivars = self.view.ivars();
+        // Kommt das Bild während eines Ereignisses, ist die Sitzung belegt –
+        // das Fadenkreuz folgt dann mit der nächsten Mausbewegung.
+        if let Ok(s) = ivars.session.try_borrow() {
+            self.pointer_moved(&s, self.view.convert_from_screen(mouse));
+        }
+        NSCursor::crosshairCursor().set();
     }
 
     /// Mausbewegung ohne gedrückte Taste: Fadenkreuz, Lupe, Fenster-Hervorhebung.

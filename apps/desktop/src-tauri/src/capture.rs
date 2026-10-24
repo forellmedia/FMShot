@@ -216,9 +216,8 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
     };
     let opened = app.run_on_main_thread(move || {
         let (app_done, pending_done) = (app_main.clone(), pending_main.clone());
-        let result = nabshot_overlay::open(
+        let result = nabshot_overlay::open_awaiting_frozen(
             overlay_mode,
-            Vec::new(),
             Box::new(move |result| {
                 OVERLAY.with(|o| o.borrow_mut().take());
                 let chosen = match result {
