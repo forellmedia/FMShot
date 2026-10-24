@@ -12,6 +12,7 @@
   "menu.close_editor": "Close Editor",
   "menu.hide": "Hide Nabshot",
   "error.capture": "Capture failed: {error}",
+  "error.display_missing": "The screen with the selection could not be captured. Please try again.",
   "editor.tools": "Tools",
   "editor.loading_capture": "Loading new capture …",
   "editor.undo": "Undo",

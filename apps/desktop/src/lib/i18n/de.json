@@ -12,6 +12,7 @@
   "menu.close_editor": "Editor schliessen",
   "menu.hide": "Nabshot ausblenden",
   "error.capture": "Aufnahme fehlgeschlagen: {error}",
+  "error.display_missing": "Der Bildschirm mit der Auswahl liess sich nicht aufnehmen. Bitte noch einmal versuchen.",
   "editor.tools": "Werkzeuge",
   "editor.loading_capture": "Neue Aufnahme wird geladen …",
   "editor.undo": "Rückgängig",

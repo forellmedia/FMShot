@@ -3,8 +3,8 @@
 //! `SCShareableContent` abzufragen kostet spürbar Zeit. Wir halten deshalb
 //! einen Schnappschuss im Cache und erneuern ihn nach jeder Aufnahme im
 //! Hintergrund. Für Monitore und die eigene App ist ein leicht veralteter
-//! Schnappschuss unkritisch; schlägt eine Aufnahme damit fehl, wird frisch
-//! abgefragt.
+//! Schnappschuss unkritisch; haben sich die Monitore geändert oder schlägt
+//! eine Aufnahme damit fehl, wird frisch abgefragt.
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -19,14 +19,14 @@ use objc2_core_foundation::{
     CFArray, CFDictionary, CFNumber, CFRetained, CFString, CGPoint, CGRect, CGSize,
 };
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayCopyDisplayMode, CGDisplayMode,
-    CGError, CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGImage,
-    CGImageAlphaInfo, CGImageByteOrderInfo, CGMainDisplayID, CGMouseButton,
-    CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess,
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGDisplayBounds, CGDisplayCopyDisplayMode,
+    CGDisplayMirrorsDisplay, CGDisplayMode, CGError, CGEvent, CGEventSource, CGEventSourceStateID,
+    CGEventTapLocation, CGGetActiveDisplayList, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
+    CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess,
     CGRectMakeWithDictionaryRepresentation, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
     CGScrollEventUnit, CGWarpMouseCursorPosition, CGWindowListCopyWindowInfo, CGWindowListCreate,
-    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
-    kCGWindowNumber, kCGWindowOwnerPID,
+    CGWindowListOption, kCGColorSpaceSRGB, kCGNullDirectDisplay, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -65,9 +65,21 @@ impl MacCapturer {
     }
 
     /// Schnappschuss aus dem Cache oder frisch.
+    ///
+    /// Haben sich die Monitore seither geändert (angesteckt, abgesteckt,
+    /// umgestellt), ist der Cache unbrauchbar: Ein neuer Monitor fehlte ohne
+    /// Fehler, ein abgesteckter stünde noch als Ziel da. Der Vergleich mit
+    /// Core Graphics ist synchron und kostet nichts.
     fn content(&self) -> Result<Content> {
         if let Some(c) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-            return Ok(c);
+            let known = display_layout(&c.0);
+            let live = active_display_layout();
+            if live.is_empty() || known == live {
+                return Ok(c);
+            }
+            log::info!(
+                "Monitore geändert (Schnappschuss {known:?}, jetzt {live:?}) – Bildschirminhalt frisch abfragen"
+            );
         }
         self.fresh_content()
     }
@@ -408,6 +420,45 @@ fn fetch_shareable_content() -> Result<Retained<SCShareableContent>> {
             "ScreenCaptureKit antwortet nicht".into(),
         )),
     }
+}
+
+/// Monitor-ID mit Lage und Grösse in Punkten (globale Koordinaten).
+type DisplayLayout = Vec<(u32, [i64; 4])>;
+
+fn rounded(r: CGRect) -> [i64; 4] {
+    [r.origin.x, r.origin.y, r.size.width, r.size.height].map(|v| v.round() as i64)
+}
+
+/// Monitore im Schnappschuss, sortiert.
+fn display_layout(content: &SCShareableContent) -> DisplayLayout {
+    let mut layout: DisplayLayout = unsafe { content.displays() }
+        .iter()
+        .map(|d| unsafe { (d.displayID(), rounded(d.frame())) })
+        .collect();
+    layout.sort_unstable();
+    layout
+}
+
+/// Monitore, die jetzt Bild zeigen (Core Graphics, synchron und schnell),
+/// sortiert. Gespiegelte Monitore zählen wie bei ScreenCaptureKit nur einmal.
+fn active_display_layout() -> DisplayLayout {
+    const MAX: usize = 32;
+    let mut ids = [0u32; MAX];
+    let mut count = 0u32;
+    // SAFETY: Puffer für MAX Einträge, Core Graphics schreibt höchstens so viele.
+    let err = unsafe { CGGetActiveDisplayList(MAX as u32, ids.as_mut_ptr(), &mut count) };
+    if err != CGError::Success {
+        log::debug!("Aktive Monitore abfragen fehlgeschlagen: CGError {}", err.0);
+        return Vec::new();
+    }
+    let mut layout: DisplayLayout = ids[..count as usize]
+        .iter()
+        .copied()
+        .filter(|&id| CGDisplayMirrorsDisplay(id) == kCGNullDirectDisplay)
+        .map(|id| (id, rounded(CGDisplayBounds(id))))
+        .collect();
+    layout.sort_unstable();
+    layout
 }
 
 /// Nabshot selbst – wird aus Monitor-Aufnahmen ausgeblendet (Overlay!).
@@ -753,5 +804,20 @@ fn error_text(error: *mut NSError) -> String {
     match unsafe { Retained::retain(error) } {
         Some(e) => e.localizedDescription().to_string(),
         None => "unbekannter Fehler".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Braucht Bildschirm und Freigabe: `cargo test -p nabshot-capture -- --ignored`.
+    /// Melden ScreenCaptureKit und Core Graphics die Monitore verschieden,
+    /// würde [`MacCapturer::content`] bei jeder Aufnahme frisch abfragen.
+    #[test]
+    #[ignore]
+    fn snapshot_layout_matches_core_graphics() {
+        let content = fetch_shareable_content().expect("Bildschirminhalt");
+        assert_eq!(display_layout(&content), active_display_layout());
     }
 }

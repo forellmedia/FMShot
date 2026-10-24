@@ -235,7 +235,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .selection = Some(chosen);
-                        try_finish_region(&app_done, &pending_done, mode, started);
+                        try_finish_region(&app_done, &pending_done, mode, own, started);
                     }
                     Err(other) => {
                         log::info!("Auswahl beendet ohne Bereich: {other:?}");
@@ -309,7 +309,7 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
                     log::warn!("Eingefrorenes Bild ans Overlay: {e}");
                 }
                 pending.lock().unwrap_or_else(|e| e.into_inner()).frames = Some(frames);
-                try_finish_region(&app, &pending, mode, started);
+                try_finish_region(&app, &pending, mode, own, started);
             }
             Err(e) => {
                 if let Err(e) = app.run_on_main_thread(|| {
@@ -329,8 +329,14 @@ fn start_region(app: &AppHandle, started: Instant, mode: Mode, own: OwnWindows) 
 }
 
 /// Schliesst ab, sobald Bild und Auswahl beide da sind.
-fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode, started: Instant) {
-    let (frames, sel) = {
+fn try_finish_region(
+    app: &AppHandle,
+    pending: &Arc<Mutex<Pending>>,
+    mode: Mode,
+    own: OwnWindows,
+    started: Instant,
+) {
+    let (frames, chosen) = {
         let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
         if p.finished || p.frames.is_none() || p.selection.is_none() {
             return;
@@ -338,16 +344,63 @@ fn try_finish_region(app: &AppHandle, pending: &Arc<Mutex<Pending>>, mode: Mode,
         p.finished = true;
         (p.frames.take().unwrap_or_default(), p.selection.take())
     };
-    release(app);
-    let sel = match sel {
-        Some(Chosen::One(sel)) => sel,
-        Some(Chosen::Span(span)) => {
-            finish_span(app, mode, &frames, &span, started);
+    let Some(chosen) = chosen else {
+        release(app);
+        return;
+    };
+    let missing = missing_displays(&frames, &chosen);
+    if missing.is_empty() {
+        release(app);
+        finish_region(app, mode, &frames, chosen, started);
+        return;
+    }
+    // Kein eingefrorenes Bild für den Monitor der Auswahl (z. B. gerade
+    // angesteckt): jetzt aufnehmen statt die Auswahl zu verwerfen. Im
+    // Hintergrund – der Aufruf kann aus dem Haupt-Thread kommen.
+    log::warn!("Kein Bild für Monitor(e) {missing:?} der Auswahl – neu aufnehmen");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<CaptureState>();
+        let result = state.capturer.capture_all(own);
+        release(&app);
+        let frames = match result {
+            Ok(frames) => frames,
+            Err(e) => {
+                show_error(&app, &e.to_string());
+                return;
+            }
+        };
+        let missing = missing_displays(&frames, &chosen);
+        if !missing.is_empty() {
+            log::error!("Auch neu aufgenommen kein Bild für Monitor(e) {missing:?}");
+            show_error(&app, &t("error.display_missing", &[]));
             return;
         }
-        None => return,
+        finish_region(&app, mode, &frames, chosen, started);
+    });
+}
+
+/// Monitore der Auswahl, für die kein Bild da ist.
+fn missing_displays(frames: &[Frame], chosen: &Chosen) -> Vec<u32> {
+    let ids: Vec<u32> = match chosen {
+        Chosen::One(sel) => vec![sel.display_id],
+        Chosen::Span(span) => span.parts.iter().map(|p| p.display_id).collect(),
     };
-    let Some(frame) = frames.into_iter().find(|f| f.display_id == sel.display_id) else {
+    ids.into_iter()
+        .filter(|id| !frames.iter().any(|f| f.display_id == *id))
+        .collect()
+}
+
+/// Ausschnitt aus den Bildern schneiden und weitergeben.
+fn finish_region(app: &AppHandle, mode: Mode, frames: &[Frame], chosen: Chosen, started: Instant) {
+    let sel = match chosen {
+        Chosen::One(sel) => sel,
+        Chosen::Span(span) => {
+            finish_span(app, mode, frames, &span, started);
+            return;
+        }
+    };
+    let Some(frame) = frames.iter().find(|f| f.display_id == sel.display_id) else {
         log::warn!("Kein Bild für Monitor {} der Auswahl", sel.display_id);
         return;
     };
